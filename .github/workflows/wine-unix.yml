@@ -6,8 +6,12 @@ name: Stage 2 - Wine unix side
 on:
   push:
     branches: [main]
-    paths: ["engine/wine/**", ".github/workflows/wine-unix.yml"]
+    paths: ["engine/wine/build-unix.sh", "engine/wine/PIN", ".github/workflows/wine-unix.yml"]
   workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
 
 concurrency:
   group: wine-unix-${{ github.ref }}
@@ -99,3 +103,9 @@ jobs:
             engine/wine/madeira/build/*/obj/*.err
             engine/wine/obj-wineserver/*.err
           if-no-files-found: ignore
+
+      - name: Rebuild the IPA with these libraries
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run build-ipa.yml -R "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME"

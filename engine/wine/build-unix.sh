@@ -58,6 +58,16 @@ step_configure() {
             --without-gphoto --without-pcsclite --without-inotify --without-dbus --without-ffmpeg \
             > configure.log 2>&1 || { tail -60 configure.log; return 1; }
     fi
+    # Madeira's tree was configured with GnuTLS present: bcrypt, secur32 and
+    # crypt32 compile their GnuTLS backends only then. On iOS the library is
+    # linked statically and Madeira's ios_gnutls_shim.h routes this dlopen to it.
+    if ! grep -q 'MYIOSDECK gnutls' include/config.h; then
+        printf '
+/* MYIOSDECK gnutls */
+#define HAVE_GNUTLS_CIPHER_INIT 1
+#define SONAME_LIBGNUTLS "libgnutls.30.dylib"
+' >> include/config.h
+    fi
     grep -c '#define' include/config.h
     make -j"$JOBS" tools/all tools/winebuild/all tools/widl/all tools/wrc/all > make-tools.log 2>&1 ||
         { tail -40 make-tools.log; return 1; }
