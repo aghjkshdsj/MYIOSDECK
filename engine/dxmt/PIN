@@ -1,0 +1,7 @@
+# Stage 3: DXMT (Direct3D 9/10/11 -> Metal) iOS port from Madeira.
+MADEIRA_REPO=https://github.com/willfaust/Madeira.git
+MADEIRA_SHA=65e6fe8f0da45b28b610c71fda9791e89d1060a6
+DXMT_SHA=db546ee466ad50ec6463edb5fa183de11db43761
+# DXMT's shader converter (airconv) links LLVM 15 (dxmt/configure.sh pins 15.0.7).
+LLVM_VERSION=15.0.7
+LLVM_URL=https://github.com/llvm/llvm-project/releases/download/llvmorg-15.0.7/llvm-project-15.0.7.src.tar.xz
