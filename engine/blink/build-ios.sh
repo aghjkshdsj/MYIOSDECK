@@ -28,13 +28,16 @@ fi
 cd "$SRC"
 CC=clang ./configure --disable-jit --disable-fork --disable-overlays --disable-vfs \
     --disable-strace --disable-metal --disable-sockets --disable-rom
-grep -E '^#define|^//' config.h | head -60
+# The probe ran on macOS; drop what iOS lacks (no <sys/random.h>, no clock_settime).
+sed -i '' -e 's|^#define HAVE_SYS_GETENTROPY|// #define HAVE_SYS_GETENTROPY|'           -e 's|^#define HAVE_GETENTROPY|// #define HAVE_GETENTROPY|'           -e 's|^#define HAVE_CLOCK_SETTIME|// #define HAVE_CLOCK_SETTIME|' config.h
+grep -E '^#define' config.h
 
 SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
 CLANG="$(xcrun --sdk iphoneos -f clang)"
 CFLAGS=(-arch arm64 -isysroot "$SDK" -miphoneos-version-min=17.0 -O2 -g0
         -fno-stack-protector -fomit-frame-pointer -fno-strict-aliasing -fwrapv
         -D_DARWIN_C_SOURCE -DNDEBUG -iquote "$SRC" -I"$SRC"
+        '-DBLINK_COMMITS=\"0\"' '-DBLINK_UNAME_V=\"ios\"'
         -include "$HERE/ios_overrides.h" -Wno-unused-command-line-argument)
 rm -rf "$OBJ" && mkdir -p "$OBJ" "$OUT"
 

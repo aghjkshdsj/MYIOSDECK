@@ -1,0 +1,7 @@
+# Madeira (github.com/willfaust/Madeira, GPL-3.0-or-later): its iOS ports of
+# Wine's unix side (shims, *_ios.c replacements) and its Wine fork (submodule).
+# MYIOSDECK builds them reproducibly in CI. Bump the SHAs to update.
+MADEIRA_REPO=https://github.com/willfaust/Madeira.git
+MADEIRA_SHA=65e6fe8f0da45b28b610c71fda9791e89d1060a6
+WINE_SHA=257f271cfffed9f22f7987cac53bc00095d092fe
+FREETYPE_TAG=VER-2-13-3

@@ -16,3 +16,6 @@ App/Generated/*
 !App/Generated/.gitkeep
 engine/blink/src/
 engine/blink/build-ios/
+engine/wine/madeira/
+engine/wine/obj-wineserver/
+engine/wine/out/
