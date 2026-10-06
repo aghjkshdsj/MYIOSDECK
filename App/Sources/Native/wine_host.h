@@ -1,0 +1,32 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Stage 2 host side for Wine (Madeira's iOS port): hands Wine a slice of
+// MYIOSDECK's JIT pool and starts wineserver + the Windows process in-process.
+
+#ifndef MYIOSDECK_WINE_HOST_H
+#define MYIOSDECK_WINE_HOST_H
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/// True when this build links Wine's unix side and bundles the DLLs.
+bool mid_wine_linked(void);
+
+/// Boot Wine with `prefix` (created from the bundled template on first use)
+/// and run `exe` (a path inside the prefix, e.g. "C:\\windows\\system32\\cmd.exe",
+/// or a bare name looked up in system32). Requires the JIT pool. Wine can only
+/// be started once per app run. Returns false and fills err on failure.
+bool mid_wine_boot(const char *prefix, const char *exe, const char *args, char *err, size_t errlen);
+
+/// 1 while the Windows process runs.
+int mid_wine_running(void);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif

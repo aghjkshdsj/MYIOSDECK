@@ -5,7 +5,8 @@
 <p align="center"><b>Steam PC games on iPhone.</b> FEX x86-64 → ARM64 JIT, Wine ARM64EC, Direct3D on Metal, with a Steam Deck–style front end.</p>
 
 > [!NOTE]
-> Early research project. Stage 1 (JIT + FEX translation + benchmarks) is in the app now.
+> Early research project. Stage 1 (JIT + FEX translation, a no-JIT interpreter, benchmarks) is in
+> the app and verified on an iPhone 15 Pro Max with iOS 27.0.1. Stage 2 (Wine) is being built in CI.
 > Steam games need stages 2–4 (Wine, Direct3D on Metal, Steam); see the [roadmap](docs/ROADMAP.md).
 
 ## What it is
@@ -38,9 +39,16 @@ Full guide and troubleshooting: [docs/INSTALL.md](docs/INSTALL.md).
 
 ## Performance
 
+Measured on an iPhone 15 Pro Max (A17 Pro), iOS 27.0.1, build 2, Fast preset: x86-64 code through
+FEX ran at **~80–100% of native ARM64 speed** (integer 103%, memory 100%, SIMD 100%, float 81%,
+branch-heavy 53%), with every checksum matching native.
+
+
 - FEXCore is tuned from the kernel's own CPU feature list (LSE, LRCPC2, FlagM2, AFP, …), not a hardcoded guess.
 - Presets match the SteamOS ARM Port's: **Compat**, **Fast** (default), **Fastest** (TSO off).
 - The Performance tab runs the same C kernels natively and as x86-64 through FEX and reports FEX's efficiency on *your* phone.
+- Without JIT, MYIOSDECK can still run x86-64 programs in an interpreter (Blink) after asking first;
+  see [docs/NO_JIT.md](docs/NO_JIT.md). Results are logged as a shareable report.
 - The Metal stage measures frame time and GPU time at 30/40/60/120 Hz with even ProMotion pacing.
 
 ## App Store
