@@ -25,6 +25,9 @@ bool mid_wine_boot(const char *prefix, const char *exe, const char *args, char *
 /// 1 while the Windows process runs.
 int mid_wine_running(void);
 
+/// 1 and the NTSTATUS when the program ended with an error (0xC...).
+int wine_crash_exit_status(uint32_t *status);
+
 /// Route this process's stdout/stderr (where Wine and its loader print) into
 /// the MYIOSDECK log, line by line. Idempotent.
 void mid_capture_stdio(void);

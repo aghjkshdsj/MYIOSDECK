@@ -4,7 +4,7 @@ import Foundation
 /// Stage 2: runs Windows x86-64 programs through Wine ARM64EC + FEX (xtajit64)
 /// in-process, using a slice of the JIT pool. One Wine session per app run.
 final class WineController: ObservableObject, @unchecked Sendable {
-    enum State: Equatable { case idle, booting(String), running(String), failed(String) }
+    enum State: Equatable { case idle, booting(String), running(String), finished(String, String), failed(String) }
 
     struct Program: Identifiable {
         let id: String      // file name in the DLL farm (C:\windows\system32)
@@ -48,6 +48,19 @@ final class WineController: ObservableObject, @unchecked Sendable {
                 self.state = ok ? .running(program.title) : .failed(msg)
                 if !ok { dlog("[wine] boot failed: \(msg)") }
             }
+            if ok { self.watch(program.title) }
         }
+    }
+
+    /// Poll until the Windows program exits, then report how it ended.
+    private func watch(_ title: String) {
+        let started = Date()
+        while mid_wine_running() != 0 { usleep(250_000) }
+        var status: UInt32 = 0
+        let crashed = wine_crash_exit_status(&status) != 0
+        let secs = String(format: "%.1f s", Date().timeIntervalSince(started))
+        let how = crashed ? String(format: "ended with error 0x%08X after %@", status, secs) : "exited normally after \(secs)"
+        dlog("[wine] \(title) \(how)")
+        DispatchQueue.main.async { self.state = .finished(title, how) }
     }
 }

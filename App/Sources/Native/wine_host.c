@@ -126,6 +126,7 @@ bool mid_wine_boot(const char *prefix, const char *exe, const char *args, char *
 
 bool mid_wine_linked(void) { return false; }
 int mid_wine_running(void) { return 0; }
+int wine_crash_exit_status(uint32_t *status) { (void)status; return 0; }
 bool mid_wine_boot(const char *prefix, const char *exe, const char *args, char *err, size_t errlen) {
     (void)prefix; (void)exe; (void)args;
     snprintf(err, errlen, "This build does not include Wine yet (stage 2 in progress)");

@@ -37,7 +37,8 @@ final class Settings: ObservableObject {
     @Published var benchInterpreter: Bool { didSet { d.set(benchInterpreter, forKey: "benchInterpreter") } }
 
     init() {
-        d.register(defaults: ["jitPoolMB": 512, "fexPreset": FEXPreset.fast.rawValue, "multiblock": true,
+        // Wine copies every loaded DLL's code into the pool: give it room by default.
+        d.register(defaults: ["jitPoolMB": mid_wine_linked() ? 1024 : 512, "fexPreset": FEXPreset.fast.rawValue, "multiblock": true,
                               "maxInst": 5000, "showHUD": true, "frameCap": 120, "verboseFEXLog": false,
                               "benchInterpreter": true])
         jitPoolMB = d.integer(forKey: "jitPoolMB")

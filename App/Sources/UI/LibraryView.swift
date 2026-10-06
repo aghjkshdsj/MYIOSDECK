@@ -84,6 +84,7 @@ struct LibraryView: View {
                         .font(.caption).foregroundStyle(Deck.dim)
                 case .booting(let t): HStack { ProgressView(); Text("Starting Wine for \(t)…").foregroundStyle(Deck.dim) }
                 case .running(let t): StatusRow(label: "Running \(t)", detail: "Watch the Logs tab for its output.", level: .good)
+                case .finished(let t, let how): StatusRow(label: "\(t) finished", detail: "\(how). Its output is in the Logs tab. Restart MYIOSDECK to run another Windows program.", level: how.contains("error") ? .warn : .good)
                 case .failed(let why): StatusRow(label: "Wine failed", detail: why, level: .bad)
                 }
             }
