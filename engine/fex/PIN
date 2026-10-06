@@ -1,0 +1,5 @@
+# FEX fork with the iOS host port (Madeira, GPL-3.0-or-later for the iOS changes).
+# Bump SHA to update; CI caches the build by this value.
+REPO=https://github.com/willfaust/FEX.git
+BRANCH=ios-port-2607
+SHA=3bec2ac498bf78156ab47c0c194b0e8cb2849756

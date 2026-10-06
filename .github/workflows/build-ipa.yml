@@ -1,0 +1,124 @@
+name: Build IPA
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guests:
+    name: x86-64 guest programs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build hello + bench (static-PIE x86-64)
+        run: bash engine/guest/build.sh "$RUNNER_TEMP/guests"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: guests
+          path: ${{ runner.temp }}/guests
+
+  ios:
+    name: iOS app + FEXCore
+    needs: guests
+    runs-on: macos-26
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          brew install xcodegen ninja || true
+          cmake --version | head -1
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: guests
+          path: App/Generated
+
+      - name: Cache FEXCore build
+        uses: actions/cache@v4
+        with:
+          path: |
+            engine/fex/src
+            engine/fex/build-ios
+          key: fex-ios-${{ hashFiles('engine/fex/PIN', 'engine/fex/build-ios.sh') }}-${{ runner.os }}
+
+      - name: Build FEXCore for iOS
+        id: fex
+        continue-on-error: true
+        run: bash engine/fex/build-ios.sh
+
+      - name: Fall back to a UI-only build
+        if: steps.fex.outcome != 'success'
+        run: |
+          echo "::warning::FEXCore did not build; producing a UI-only IPA (see the 'Build FEXCore for iOS' log)."
+          git checkout -- Config/Engine.xcconfig
+          rm -f App/Generated/engine_version.h
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build app
+        run: |
+          mkdir -p build
+          xcodebuild -project MYIOSDECK.xcodeproj -scheme MYIOSDECK -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build/dd \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} \
+            CODE_SIGNING_ALLOWED=NO build > build/xcodebuild.log 2>&1 || true
+          grep -E '(error:|\*\* BUILD)' build/xcodebuild.log | head -100 || true
+          test -d build/dd/Build/Products/Release-iphoneos/MYIOSDECK.app
+
+      - name: Package IPA
+        id: pkg
+        run: |
+          APP=build/dd/Build/Products/Release-iphoneos/MYIOSDECK.app
+          rm -rf Payload && mkdir Payload && cp -R "$APP" Payload/
+          # Ad-hoc signature carrying our entitlements, so the sideloader knows to
+          # request get-task-allow and the increased memory limit when it re-signs.
+          codesign --force --sign - --entitlements App/MYIOSDECK.entitlements --timestamp=none Payload/MYIOSDECK.app
+          codesign -d --entitlements - Payload/MYIOSDECK.app || true
+          if [ "${{ steps.fex.outcome }}" = success ]; then FLAVOR=fex; else FLAVOR=uionly; fi
+          NAME="MYIOSDECK-0.1.0-build${{ github.run_number }}-${FLAVOR}.ipa"
+          zip -qry "$NAME" Payload
+          ls -la "$NAME"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "flavor=$FLAVOR" >> "$GITHUB_OUTPUT"
+          {
+            echo "## MYIOSDECK build ${{ github.run_number }}"
+            echo "- IPA: \`$NAME\`"
+            echo "- FEXCore: ${{ steps.fex.outcome }}"
+            echo "- Size: $(du -h "$NAME" | cut -f1)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pkg.outputs.name }}
+          path: ${{ steps.pkg.outputs.name }}
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-logs
+          path: build/xcodebuild.log
+          if-no-files-found: ignore
+
+      - name: Publish release
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="build-${{ github.run_number }}"
+          gh release create "$TAG" "${{ steps.pkg.outputs.name }}" \
+            --target "${{ github.sha }}" --prerelease \
+            --title "MYIOSDECK 0.1.0 build ${{ github.run_number }} (${{ steps.pkg.outputs.flavor }})" \
+            --notes "Sideload with iloader, then enable JIT from inside MYIOSDECK (StikDebug + LocalDevVPN). Commit ${{ github.sha }}. FEXCore: ${{ steps.fex.outcome }}."

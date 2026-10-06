@@ -1,0 +1,71 @@
+# XcodeGen spec: `xcodegen generate` writes MYIOSDECK.xcodeproj (not committed).
+name: MYIOSDECK
+options:
+  bundleIdPrefix: com.myiosdeck
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+  developmentLanguage: en
+
+configFiles:
+  Debug: Config/Engine.xcconfig
+  Release: Config/Engine.xcconfig
+
+settings:
+  base:
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.0"
+    CLANG_CXX_LANGUAGE_STANDARD: gnu++20
+    CLANG_ENABLE_MODULES: YES
+    ENABLE_BITCODE: NO
+    DEAD_CODE_STRIPPING: YES
+  configs:
+    Release:
+      GCC_OPTIMIZATION_LEVEL: "3"
+      SWIFT_OPTIMIZATION_LEVEL: "-O"
+      SWIFT_COMPILATION_MODE: wholemodule
+
+targets:
+  MYIOSDECK:
+    type: application
+    platform: iOS
+    sources:
+      - path: App/Sources
+        excludes:
+          - "Native/bench.c"
+      - path: App/Sources/Native/bench.c
+        # Same math as the x86-64 guest (no FMA contraction) so checksums compare exactly.
+        compilerFlags: ["-O2", "-ffp-contract=off"]
+      - path: App/Resources
+        buildPhase: resources
+      - path: App/Assets.xcassets
+      - path: App/Info.plist
+        buildPhase: none
+      - path: App/MYIOSDECK.entitlements
+        buildPhase: none
+    settings:
+      base:
+        PRODUCT_NAME: MYIOSDECK
+        PRODUCT_BUNDLE_IDENTIFIER: com.myiosdeck.app
+        INFOPLIST_FILE: App/Info.plist
+        CODE_SIGN_ENTITLEMENTS: App/MYIOSDECK.entitlements
+        SWIFT_OBJC_BRIDGING_HEADER: App/Sources/MYIOSDECK-Bridging-Header.h
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTS_MACCATALYST: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        HEADER_SEARCH_PATHS:
+          - "$(inherited)"
+          - "$(SRCROOT)/App/Generated"
+          - "$(SRCROOT)/engine/guest"
+          - "$(MYIOSDECK_FEX_HEADERS)"
+        OTHER_LDFLAGS:
+          - "$(inherited)"
+          - "$(MYIOSDECK_FEX_LIBS)"
+          - "-lc++"
+        # Signing happens at sideload time (iloader / SideStore / AltStore).
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: ""
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGNING_ALLOWED: NO
+        DEVELOPMENT_TEAM: ""

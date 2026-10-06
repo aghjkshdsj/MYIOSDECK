@@ -1,0 +1,4 @@
+// Default: UI-only build without FEXCore. CI overwrites this file
+// (engine/fex/build-ios.sh) with the real header paths and libraries.
+MYIOSDECK_FEX_HEADERS =
+MYIOSDECK_FEX_LIBS =
