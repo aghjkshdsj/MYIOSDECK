@@ -29,6 +29,9 @@
 #define MYIOSDECK_FEX_SHA "none"
 #endif
 
+extern "C" const char *mid_run_result_output(const mid_run_result *r) { return r->output; }
+extern "C" const char *mid_run_result_error(const mid_run_result *r) { return r->error; }
+
 #if MYIOSDECK_WITH_FEX
 
 // Xcode defines DEBUG=1 in Debug builds, which collides with LogMan::DEBUG.
@@ -198,6 +201,7 @@ fextl::unique_ptr<FEXCore::Context::Context> g_ctx;
 StageOneSyscalls g_syscalls;
 NoSignals g_signals;
 std::mutex g_lock; // init/shutdown/run are mutually exclusive
+bool g_config_live = false;
 FEXCore::Core::CPUState::gdt_segment g_gdt[1] {};
 
 void FexLog(LogMan::DebugLevels level, const char *msg) {
@@ -392,7 +396,9 @@ bool mid_engine_init(const mid_engine_config *cfg, char *err, size_t errlen) {
 
     const size_t before = mid_jit_pool_used();
     try {
+        if (g_config_live) FEXCore::Config::Shutdown(); // preset change: start from a clean config
         FEXCore::Config::Initialize();
+        g_config_live = true;
         ApplyConfig(*cfg);
         g_ctx = FEXCore::Context::Context::CreateNewContext(DetectHostFeatures());
         if (!g_ctx) { snprintf(err, errlen, "CreateNewContext returned null"); return false; }

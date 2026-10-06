@@ -41,6 +41,10 @@ typedef struct {
     char error[256];
 } mid_run_result;
 
+/// Swift does not import C arrays this large, so read them through these.
+const char *mid_run_result_output(const mid_run_result *r);
+const char *mid_run_result_error(const mid_run_result *r);
+
 /// True when this build links FEXCore (false in the no-engine fallback build).
 bool mid_engine_linked(void);
 /// FEX fork commit this build was made from (from the CI), or "none".

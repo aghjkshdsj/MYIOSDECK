@@ -13,6 +13,9 @@ HERE="$ROOT/engine/fex"
 # shellcheck disable=SC1091
 source "$HERE/PIN"
 SRC="$HERE/src"
+# Code generation target for FEX itself. apple-a17 = iPhone 15 Pro / Pro Max (A17 Pro).
+# Use apple-a15 (or "generic") for older iPhones.
+TUNE_CPU="${MYIOSDECK_CPU:-apple-a17}"
 B="$HERE/build-ios"
 
 if [ ! -d "$SRC/.git" ] || [ "$(git -C "$SRC" rev-parse HEAD 2>/dev/null)" != "$SHA" ]; then
@@ -35,7 +38,7 @@ if [ ! -f "$B/CMakeCache.txt" ]; then
         -DCMAKE_C_COMPILER="$(xcrun -f clang)" -DCMAKE_CXX_COMPILER="$(xcrun -f clang++)" \
         -DBUILD_TESTING=OFF -DBUILD_THUNKS=OFF -DBUILD_FEXCONFIG=OFF -DBUILD_FEX_LINUX_TESTS=OFF \
         -DENABLE_FEX_ALLOCATOR=OFF -DENABLE_ASSERTIONS=OFF -DENABLE_CLANG_THUNKS=ON -DENABLE_CCACHE=OFF \
-        -DENABLE_OFFLINE_TELEMETRY=OFF
+        -DENABLE_OFFLINE_TELEMETRY=OFF -DTUNE_CPU="$TUNE_CPU"         -DOVERRIDE_VERSION="madeira-ios-${SHA:0:10}"
 fi
 cmake --build "$B" --target FEXCore FEXCore_Base JemallocLibs cephes_128bit softfloat_3e fmt xxhash
 

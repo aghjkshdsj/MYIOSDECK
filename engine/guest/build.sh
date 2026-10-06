@@ -12,7 +12,7 @@ mkdir -p "$OUT"
 CFLAGS=(-O2 -march=x86-64-v2 -fPIE -static-pie -nostdlib -ffreestanding -fno-builtin
         -fno-strict-aliasing -fno-stack-protector -fno-asynchronous-unwind-tables
         -fno-tree-loop-distribute-patterns -Wl,--no-dynamic-linker -Wl,--build-id=none
-        -Wl,-z,norelro -Wl,-z,noexecstack -I"$HERE")
+        -Wl,-z,norelro -Wl,-z,noexecstack -Wl,-z,max-page-size=0x4000 -Wl,-z,separate-code -I"$HERE")
 
 for prog in hello bench; do
     gcc "${CFLAGS[@]}" -o "$OUT/$prog.elf" "$HERE/$prog.c"

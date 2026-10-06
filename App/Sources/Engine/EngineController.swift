@@ -119,12 +119,8 @@ final class EngineController: ObservableObject, @unchecked Sendable {
             mid_engine_run_elf(elf, len, Int32(args.count), buf.baseAddress, result)
         }
         let r = result.pointee
-        let output = withUnsafeBytes(of: r.output) { raw in
-            String(decoding: raw.prefix(Int(r.output_len)), as: UTF8.self)
-        }
-        let error = withUnsafeBytes(of: r.error) { raw in
-            String(decoding: raw.prefix(while: { $0 != 0 }), as: UTF8.self)
-        }
+        let output = String(cString: mid_run_result_output(result))
+        let error = String(cString: mid_run_result_error(result))
         let run = GuestRun(ok: ok, exitCode: r.exit_code, seconds: r.seconds, syscalls: r.syscalls,
                            poolUsedKB: Int((r.pool_used_after - r.pool_used_before) >> 10),
                            output: output, error: error)
