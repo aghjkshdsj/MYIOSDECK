@@ -1,0 +1,3 @@
+// Default: no Wine. engine/wine/stage-app.sh overwrites this in CI.
+MYIOSDECK_WINE_HEADERS =
+MYIOSDECK_WINE_LIBS =

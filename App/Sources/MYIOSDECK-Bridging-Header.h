@@ -4,3 +4,4 @@
 #import "Native/fex_engine.h"
 #import "Native/bench.h"
 #import "Native/interp_engine.h"
+#import "Native/wine_host.h"

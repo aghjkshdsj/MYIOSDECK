@@ -7,6 +7,7 @@ struct MYIOSDECKApp: App {
     @StateObject private var jit = JITController()
     @StateObject private var engine = EngineController()
     @StateObject private var device = DeviceInfo()
+    @StateObject private var wine = WineController()
     @StateObject private var logs = LogStore.shared
     @Environment(\.scenePhase) private var phase
 
@@ -24,6 +25,7 @@ struct MYIOSDECKApp: App {
                 .environmentObject(jit)
                 .environmentObject(engine)
                 .environmentObject(device)
+                .environmentObject(wine)
                 .environmentObject(logs)
                 .preferredColorScheme(.dark)
                 .onOpenURL { url in dlog("[app] opened by \(url.absoluteString)") }

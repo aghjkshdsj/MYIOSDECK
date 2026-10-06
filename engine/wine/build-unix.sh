@@ -136,9 +136,12 @@ build_wineserver() {
 step_collect() {
     mkdir -p "$OUT"
     for l in libntdll_unix libwin32u_unix libwineserver; do
-        [ -f "$M/app/Madeira/$l.a" ] && cp "$M/app/Madeira/$l.a" "$OUT/"
+        if [ -f "$M/app/Madeira/$l.a" ]; then cp "$M/app/Madeira/$l.a" "$OUT/"; fi
     done
-    cp "$M"/app/Madeira/lib{gmp,gnutls,hogweed,nettle}.a "$OUT/" 2>/dev/null || true
+    for l in libgmp libgnutls libhogweed libnettle libavformat libavcodec libswresample libavutil; do
+        if [ -f "$M/app/Madeira/$l.a" ]; then cp "$M/app/Madeira/$l.a" "$OUT/"; fi
+    done
+    git -C "$M" rev-parse HEAD > "$OUT/MADEIRA_SHA"
     ls -la "$OUT"
 }
 

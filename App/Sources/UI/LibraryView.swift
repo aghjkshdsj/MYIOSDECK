@@ -6,6 +6,8 @@ import SwiftUI
 struct LibraryView: View {
     @EnvironmentObject private var engine: EngineController
     @EnvironmentObject private var settings: Settings
+    @EnvironmentObject private var wine: WineController
+    @EnvironmentObject private var jit: JITController
     @State private var noJITAction: (() -> Void)?
 
     private struct Stage: Identifiable {
@@ -37,6 +39,7 @@ struct LibraryView: View {
                               noJIT: { engine.runBenchmarks(fex: false, interpreter: true, presetName: preset) })
                     }
                 }
+                windowsCard
                 DeckCard(title: "Steam library", icon: "gamecontroller.fill") {
                     Text("Steam sign-in and your owned games arrive with stage 4. Steam games run through Wine (stage 2) and need Direct3D on Metal (stage 3) first.")
                         .font(.subheadline).foregroundStyle(Deck.dim)
@@ -52,6 +55,39 @@ struct LibraryView: View {
             .frame(maxWidth: .infinity)
         }
         .jitGate(pending: $noJITAction)
+    }
+
+    private var windowsCard: some View {
+        DeckCard(title: "Windows programs (Wine, stage 2)", icon: "macwindow") {
+            if !wine.linked {
+                Text("Wine is being built for iOS in CI (Stage 2). Once it links, Windows x64 programs run here through Wine ARM64EC + FEX.")
+                    .font(.subheadline).foregroundStyle(Deck.dim)
+            } else {
+                ForEach(WineController.programs) { p in
+                    HStack(spacing: 12) {
+                        RoundedRectangle(cornerRadius: 8).fill(Deck.accent.opacity(0.25)).frame(width: 52, height: 52)
+                            .overlay(Image(systemName: "macwindow").foregroundStyle(Deck.accent))
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(p.title).font(.body.weight(.semibold))
+                            Text(p.detail).font(.caption).foregroundStyle(Deck.dim)
+                        }
+                        Spacer()
+                        Button("Play") { wine.run(p) }
+                            .buttonStyle(DeckButtonStyle())
+                            .frame(width: 90)
+                            .disabled(!jit.isReady)
+                    }
+                }
+                switch wine.state {
+                case .idle:
+                    Text(jit.isReady ? "Output appears in the Logs tab ([stdio] lines)." : "Wine needs JIT: enable it on Home first.")
+                        .font(.caption).foregroundStyle(Deck.dim)
+                case .booting(let t): HStack { ProgressView(); Text("Starting Wine for \(t)…").foregroundStyle(Deck.dim) }
+                case .running(let t): StatusRow(label: "Running \(t)", detail: "Watch the Logs tab for its output.", level: .good)
+                case .failed(let why): StatusRow(label: "Wine failed", detail: why, level: .bad)
+                }
+            }
+        }
     }
 
     private func gated(jit: @escaping () -> Void, noJIT: @escaping () -> Void) {

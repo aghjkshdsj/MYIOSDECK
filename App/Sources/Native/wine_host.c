@@ -8,9 +8,46 @@
 
 #include "jit_core.h"
 
+#include <pthread.h>
+
 #if __has_include("wine_version.h")
 #include "wine_version.h"
 #endif
+
+static void *stdio_reader(void *arg) {
+    int fd = (int)(intptr_t)arg;
+    char buf[4096], line[1024];
+    size_t used = 0;
+    for (;;) {
+        ssize_t n = read(fd, buf, sizeof buf);
+        if (n <= 0) break;
+        for (ssize_t i = 0; i < n; i++) {
+            if (buf[i] == '\n' || used == sizeof line - 1) {
+                line[used] = 0;
+                if (used) mid_log("[stdio] %s", line);
+                used = 0;
+            } else {
+                line[used++] = buf[i];
+            }
+        }
+    }
+    return NULL;
+}
+
+void mid_capture_stdio(void) {
+    static int done;
+    if (done) return;
+    int p[2];
+    if (pipe(p) != 0) return;
+    setvbuf(stdout, NULL, _IOLBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
+    dup2(p[1], 1);
+    dup2(p[1], 2);
+    close(p[1]);
+    pthread_t t;
+    if (pthread_create(&t, NULL, stdio_reader, (void *)(intptr_t)p[0]) == 0) pthread_detach(t);
+    done = 1;
+}
 
 /* Madeira's Wine bridge publishes this to xtajit64.dll (FEX inside Wine) so its
  * own FEXCore copy writes code through the pool's RW alias. */
@@ -57,6 +94,7 @@ bool mid_wine_boot(const char *prefix, const char *exe, const char *args, char *
     setenv("WINE_IOS_JIT_SIZE", buf, 1);
     setenv("MADEIRA_EXE", exe, 1);
     if (args && *args) setenv("MADEIRA_ARGS", args, 1); else unsetenv("MADEIRA_ARGS");
+    mid_capture_stdio();
     mid_log("[wine] JIT slice for Wine: RX=%p size=%zu MB", rx, left >> 20);
 
     if (wineserver_start(prefix) != 0) {

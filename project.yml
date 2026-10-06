@@ -37,6 +37,37 @@ targets:
       - path: App/Sources/Native/bench.c
         # Same math as the x86-64 guest (no FMA contraction) so checksums compare exactly.
         compilerFlags: ["-O2", "-ffp-contract=off"]
+      # Stage 2 (Wine): Madeira's app-side sources and the prebuilt Windows side,
+      # present only when engine/wine/stage-app.sh staged them.
+      - path: engine/wine/madeira/app/Madeira/WineProcessBridge.m
+        optional: true
+      - path: engine/wine/madeira/app/Madeira/WineServerBridge.m
+        optional: true
+      - path: engine/wine/madeira/app/Madeira/IOSDisplayShim.m
+        optional: true
+      - path: engine/wine/madeira/app/Madeira/PadOutput.m
+        optional: true
+      - path: engine/wine/madeira/app/Madeira/PrefixExtractor.c
+        optional: true
+      - path: engine/wine/madeira/app/Madeira/wine_stubs.c
+        optional: true
+      - path: engine/wine/madeira/app/Madeira/Winios/Winios.m
+        optional: true
+      - path: engine/wine/madeira/app/Madeira/Winios/WiniosGamepad.c
+        optional: true
+      - path: engine/wine/madeira/app/Madeira/Winios/WiniosCursor.c
+        optional: true
+      - path: engine/wine/madeira/app/Madeira/arm64ec-windows
+        type: folder
+        buildPhase: resources
+        optional: true
+      - path: engine/wine/madeira/app/Madeira/nls
+        type: folder
+        buildPhase: resources
+        optional: true
+      - path: engine/wine/madeira/app/Madeira/prefix-template.tar.gz
+        buildPhase: resources
+        optional: true
       - path: App/Resources
         buildPhase: resources
       - path: App/Assets.xcassets
@@ -59,10 +90,12 @@ targets:
           - "$(SRCROOT)/App/Generated"
           - "$(SRCROOT)/engine/guest"
           - "$(MYIOSDECK_FEX_HEADERS)"
+          - "$(MYIOSDECK_WINE_HEADERS)"
         OTHER_LDFLAGS:
           - "$(inherited)"
           - "$(MYIOSDECK_FEX_LIBS)"
           - "$(MYIOSDECK_BLINK_LIBS)"
+          - "$(MYIOSDECK_WINE_LIBS)"
           - "-lc++"
         # Signing happens at sideload time (iloader / SideStore / AltStore).
         CODE_SIGN_STYLE: Manual

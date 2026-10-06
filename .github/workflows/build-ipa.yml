@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: build-${{ github.ref }}
@@ -84,6 +85,24 @@ jobs:
           git checkout -- Config/Blink.xcconfig
           rm -f App/Generated/blink_version.h
 
+      - name: Stage Wine (stage 2) from the latest Wine unix build
+        id: wine
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RUN=$(gh run list -R "$GITHUB_REPOSITORY" --workflow wine-unix.yml --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+          if [ -z "$RUN" ]; then echo "No successful Wine unix build yet"; exit 1; fi
+          gh run download "$RUN" -R "$GITHUB_REPOSITORY" -n wine-unix-libs -D engine/wine/out
+          bash engine/wine/stage-app.sh
+
+      - name: Build without Wine
+        if: steps.wine.outcome != 'success'
+        run: |
+          echo "::notice::No Wine in this IPA yet (stage 2 builds in the 'Stage 2 - Wine unix side' workflow)."
+          git checkout -- Config/Wine.xcconfig
+          rm -rf engine/wine/madeira App/Generated/wine_version.h
+
       - name: Generate Xcode project
         run: xcodegen generate
 
@@ -109,6 +128,7 @@ jobs:
           FLAVOR=""
           [ "${{ steps.fex.outcome }}" = success ] && FLAVOR="fex"
           [ "${{ steps.blink.outcome }}" = success ] && FLAVOR="${FLAVOR:+$FLAVOR-}interp"
+          [ "${{ steps.wine.outcome }}" = success ] && FLAVOR="${FLAVOR:+$FLAVOR-}wine"
           [ -n "$FLAVOR" ] || FLAVOR=uionly
           NAME="MYIOSDECK-0.1.0-build${{ github.run_number }}-${FLAVOR}.ipa"
           zip -qry "$NAME" Payload
@@ -120,6 +140,7 @@ jobs:
             echo "- IPA: \`$NAME\`"
             echo "- FEXCore (JIT): ${{ steps.fex.outcome }}"
             echo "- Blink (no-JIT interpreter): ${{ steps.blink.outcome }}"
+            echo "- Wine (stage 2): ${{ steps.wine.outcome }}"
             echo "- Size: $(du -h "$NAME" | cut -f1)"
           } >> "$GITHUB_STEP_SUMMARY"
 

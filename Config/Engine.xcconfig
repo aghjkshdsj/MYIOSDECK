@@ -3,3 +3,4 @@
 // gives a UI-only build.
 #include "FEX.xcconfig"
 #include "Blink.xcconfig"
+#include "Wine.xcconfig"
