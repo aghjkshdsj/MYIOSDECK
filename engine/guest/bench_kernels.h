@@ -114,15 +114,15 @@ typedef struct {
     const char *name;
     const char *what;
     bk_kernel_fn fn;
-    bk_u32 scale; /* tuned so each kernel runs ~0.3-1 s natively on an A17 Pro */
+    bk_u32 scale; /* tuned so each kernel runs ~200 ms natively on an A17 Pro (build 2 log) */
 } bk_kernel;
 
 static const bk_kernel bk_kernels[] = {
     { "integer", "64-bit ALU, multiplies, rotates", bk_integer, 60 },
-    { "float", "scalar double precision (Mandelbrot)", bk_float, 40 },
-    { "memory", "1 MB copy + checksum", bk_memory, 40 },
-    { "branch", "branches + byte stores (sieve)", bk_branch, 12 },
-    { "simd", "float32 matrix multiply", bk_simd, 60 },
+    { "float", "scalar double precision (Mandelbrot)", bk_float, 320 },
+    { "memory", "1 MB copy + checksum", bk_memory, 1000 },
+    { "branch", "branches + byte stores (sieve)", bk_branch, 120 },
+    { "simd", "float32 matrix multiply", bk_simd, 3000 },
 };
 
 #define BK_KERNEL_COUNT (sizeof(bk_kernels) / sizeof(bk_kernels[0]))

@@ -58,12 +58,30 @@ jobs:
         continue-on-error: true
         run: bash engine/fex/build-ios.sh
 
-      - name: Fall back to a UI-only build
+      - name: Build without FEXCore
         if: steps.fex.outcome != 'success'
         run: |
-          echo "::warning::FEXCore did not build; producing a UI-only IPA (see the 'Build FEXCore for iOS' log)."
-          git checkout -- Config/Engine.xcconfig
+          echo "::warning::FEXCore did not build; this IPA has no JIT engine (see the 'Build FEXCore for iOS' log)."
+          git checkout -- Config/FEX.xcconfig
           rm -f App/Generated/engine_version.h
+
+      - name: Cache Blink build
+        uses: actions/cache@v4
+        with:
+          path: engine/blink/src
+          key: blink-src-${{ hashFiles('engine/blink/PIN') }}
+
+      - name: Build Blink interpreter for iOS (no-JIT path)
+        id: blink
+        continue-on-error: true
+        run: bash engine/blink/build-ios.sh
+
+      - name: Build without the interpreter
+        if: steps.blink.outcome != 'success'
+        run: |
+          echo "::warning::Blink did not build; this IPA has no no-JIT interpreter (see the 'Build Blink' log)."
+          git checkout -- Config/Blink.xcconfig
+          rm -f App/Generated/blink_version.h
 
       - name: Generate Xcode project
         run: xcodegen generate
@@ -87,7 +105,10 @@ jobs:
           # request get-task-allow and the increased memory limit when it re-signs.
           codesign --force --sign - --entitlements App/MYIOSDECK.entitlements --timestamp=none Payload/MYIOSDECK.app
           codesign -d --entitlements - Payload/MYIOSDECK.app || true
-          if [ "${{ steps.fex.outcome }}" = success ]; then FLAVOR=fex; else FLAVOR=uionly; fi
+          FLAVOR=""
+          [ "${{ steps.fex.outcome }}" = success ] && FLAVOR="fex"
+          [ "${{ steps.blink.outcome }}" = success ] && FLAVOR="${FLAVOR:+$FLAVOR-}interp"
+          [ -n "$FLAVOR" ] || FLAVOR=uionly
           NAME="MYIOSDECK-0.1.0-build${{ github.run_number }}-${FLAVOR}.ipa"
           zip -qry "$NAME" Payload
           ls -la "$NAME"
@@ -96,7 +117,8 @@ jobs:
           {
             echo "## MYIOSDECK build ${{ github.run_number }}"
             echo "- IPA: \`$NAME\`"
-            echo "- FEXCore: ${{ steps.fex.outcome }}"
+            echo "- FEXCore (JIT): ${{ steps.fex.outcome }}"
+            echo "- Blink (no-JIT interpreter): ${{ steps.blink.outcome }}"
             echo "- Size: $(du -h "$NAME" | cut -f1)"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -121,4 +143,4 @@ jobs:
           gh release create "$TAG" "${{ steps.pkg.outputs.name }}" \
             --target "${{ github.sha }}" --prerelease \
             --title "MYIOSDECK 0.1.0 build ${{ github.run_number }} (${{ steps.pkg.outputs.flavor }})" \
-            --notes "Sideload with iloader, then enable JIT from inside MYIOSDECK (StikDebug + LocalDevVPN). Commit ${{ github.sha }}. FEXCore: ${{ steps.fex.outcome }}."
+            --notes "Sideload with iloader, then enable JIT from inside MYIOSDECK (StikDebug + LocalDevVPN). Commit ${{ github.sha }}. FEXCore: ${{ steps.fex.outcome }}. Interpreter: ${{ steps.blink.outcome }}."

@@ -29,6 +29,9 @@
 #define MYIOSDECK_FEX_SHA "none"
 #endif
 
+static bool g_verbose = false;
+extern "C" void mid_engine_set_verbose(bool verbose) { g_verbose = verbose; }
+
 extern "C" const char *mid_run_result_output(const mid_run_result *r) { return r->output; }
 extern "C" const char *mid_run_result_error(const mid_run_result *r) { return r->error; }
 
@@ -204,8 +207,21 @@ std::mutex g_lock; // init/shutdown/run are mutually exclusive
 bool g_config_live = false;
 FEXCore::Core::CPUState::gdt_segment g_gdt[1] {};
 
+// Trace lines the Madeira fork emits at error level on every thread start, and
+// the expected failure to guard the last page of a code buffer that lives in the
+// debugger-owned pool (its protection cannot be changed; nothing depends on it).
+bool IsRoutineTrace(const char *msg) {
+    static const char *const kPrefixes[] = {"[TI-IC]", "[lookup-cache]", "[ir-topo]", "[cpuid] ml980",
+                                            "Failed to mprotect last page of code buffer"};
+    for (const char *p : kPrefixes)
+        if (strncmp(msg, p, strlen(p)) == 0) return true;
+    return false;
+}
+
 void FexLog(LogMan::DebugLevels level, const char *msg) {
-    if (level != LogMan::DEBUG) mid_log("[FEXCore:%s] %s", LogMan::DebugLevelStr(level), msg);
+    if (level == LogMan::DEBUG && !g_verbose) return;
+    if (!g_verbose && IsRoutineTrace(msg)) return;
+    mid_log("[FEXCore:%s] %s", LogMan::DebugLevelStr(level), msg);
 }
 void FexThrow(const char *msg) { mid_log("[FEXCore:THROW] %s", msg); }
 

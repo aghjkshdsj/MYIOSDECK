@@ -75,7 +75,8 @@ struct DeckButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.body.weight(.bold))
-            .padding(.horizontal, 18).padding(.vertical, 12)
+            .lineLimit(1).minimumScaleFactor(0.6)
+            .padding(.horizontal, 12).padding(.vertical, 12)
             .frame(maxWidth: .infinity)
             .foregroundStyle(prominent ? Color.white : Deck.text)
             .background(prominent ? Deck.accent : Deck.panelHi, in: RoundedRectangle(cornerRadius: 10, style: .continuous))

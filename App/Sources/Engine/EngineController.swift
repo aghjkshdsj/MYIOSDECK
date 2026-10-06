@@ -1,22 +1,39 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
+import UIKit
+
+/// How x86-64 code is executed.
+enum RunMode: String {
+    case jit = "FEX JIT"            // translated to ARM64 once, runs at near-native speed
+    case interpreter = "Interpreter" // Blink, no executable memory needed (no JIT)
+}
 
 struct BenchResult: Identifiable {
     let id = UUID()
     let name: String
     let what: String
     let nativeNs: UInt64
-    let guestNs: UInt64?
-    let checksumsMatch: Bool?
+    var fexNs: UInt64?
+    var fexMatch: Bool?
+    /// The interpreter runs a smaller workload; native time at that same size.
+    var interpScale: UInt32?
+    var nativeAtInterpScaleNs: UInt64?
+    var interpNs: UInt64?
+    var interpMatch: Bool?
 
-    /// Guest speed as a share of native speed (100% = as fast as native ARM64).
-    var efficiency: Double? {
-        guard let g = guestNs, g > 0 else { return nil }
-        return Double(nativeNs) / Double(g) * 100
+    /// Share of native speed (100% = as fast as native ARM64).
+    var fexEfficiency: Double? {
+        guard let f = fexNs, f > 0 else { return nil }
+        return Double(nativeNs) / Double(f) * 100
+    }
+    var interpEfficiency: Double? {
+        guard let i = interpNs, i > 0, let n = nativeAtInterpScaleNs else { return nil }
+        return Double(n) / Double(i) * 100
     }
 }
 
 struct GuestRun {
+    let mode: RunMode
     let ok: Bool
     let exitCode: Int64
     let seconds: Double
@@ -26,8 +43,8 @@ struct GuestRun {
     let error: String
 }
 
-/// Owns FEXCore: start/stop with the chosen preset, run the built-in x86-64
-/// programs, and the native-vs-FEX benchmarks.
+/// Owns the x86-64 engines: FEXCore (JIT) and Blink (interpreter). Runs the
+/// built-in programs and the benchmarks, and writes shareable reports.
 final class EngineController: ObservableObject, @unchecked Sendable {
     enum State: Equatable { case notStarted, starting, ready, failed(String) }
 
@@ -35,13 +52,20 @@ final class EngineController: ObservableObject, @unchecked Sendable {
     @Published private(set) var lastRun: GuestRun?
     @Published private(set) var bench: [BenchResult] = []
     @Published private(set) var busy: String?
+    @Published private(set) var lastReportURL: URL?
 
     let linked = mid_engine_linked()
+    let interpreterLinked = mid_interp_linked()
     let fexVersion = String(cString: mid_engine_version())
+    let interpVersion = String(cString: mid_interp_version())
+
+    /// The interpreter runs this fraction of each kernel's normal workload.
+    static let interpreterScaleDivisor: UInt32 = 20
 
     private let queue = DispatchQueue(label: "myiosdeck.engine", qos: .userInitiated)
 
     func start(settings: Settings) {
+        mid_engine_set_verbose(settings.verboseFEXLog)
         guard linked else {
             state = .failed("This build has no FEXCore (UI-only build).")
             return
@@ -58,49 +82,111 @@ final class EngineController: ObservableObject, @unchecked Sendable {
         }
     }
 
-    func runHello() {
+    func runHello(mode: RunMode) {
         let (ptr, len) = guest { mid_guest_hello($0) }
         guard let ptr else { return }
-        work("Running x86-64 hello") {
-            let r = self.run(ptr, len, ["hello"])
+        work("Running x86-64 hello (\(mode.rawValue))") {
+            let r = self.run(ptr, len, ["hello"], mode: mode)
             DispatchQueue.main.async { self.lastRun = r }
         }
     }
 
-    func runBenchmarks(includeGuest: Bool) {
+    /// - fex: run each kernel through FEX (needs JIT)
+    /// - interpreter: also run each kernel in the interpreter at a reduced size
+    func runBenchmarks(fex: Bool, interpreter: Bool, presetName: String) {
         let (ptr, len) = guest { mid_guest_bench($0) }
         work("Benchmarking") {
             var results: [BenchResult] = []
             for i in 0..<Int(mid_bench_count()) {
                 let name = String(cString: mid_bench_name(Int32(i)))
                 let what = String(cString: mid_bench_what(Int32(i)))
+                let fullScale = mid_bench_default_scale(Int32(i))
                 self.setBusy("Native ARM64: \(name)")
                 var nativeSum: UInt64 = 0
                 let nativeNs = mid_bench_native(Int32(i), 0, &nativeSum)
-                dlog("[bench] native \(name): \(nativeNs / 1_000_000) ms sum=\(nativeSum)")
+                var r = BenchResult(name: name, what: what, nativeNs: nativeNs)
 
-                var guestNs: UInt64?
-                var match: Bool?
-                if includeGuest, let ptr, self.state == .ready {
-                    self.setBusy("x86-64 via FEX: \(name)")
-                    let r = self.run(ptr, len, ["bench", name])
-                    if let line = r.output.split(separator: "\n").first(where: { $0.hasPrefix("RESULT") }) {
-                        let fields = Self.parseFields(String(line))
-                        guestNs = fields["ns"].flatMap { UInt64($0) }
-                        match = fields["sum"].flatMap { UInt64($0) }.map { $0 == nativeSum }
-                    } else {
-                        dlog("[bench] guest \(name) failed: \(r.error) exit=\(r.exitCode) output=\(r.output)")
-                    }
-                    if let g = guestNs { dlog("[bench] fex \(name): \(g / 1_000_000) ms match=\(match ?? false)") }
+                if fex, let ptr, self.state == .ready {
+                    self.setBusy("x86-64 via FEX JIT: \(name)")
+                    let run = self.run(ptr, len, ["bench", name], mode: .jit)
+                    (r.fexNs, r.fexMatch) = Self.parseResult(run, expectedSum: nativeSum)
                 }
-                results.append(BenchResult(name: name, what: what, nativeNs: nativeNs, guestNs: guestNs, checksumsMatch: match))
+                if interpreter, let ptr, self.interpreterLinked {
+                    let scale = max(1, fullScale / Self.interpreterScaleDivisor)
+                    var smallSum: UInt64 = 0
+                    r.interpScale = scale
+                    r.nativeAtInterpScaleNs = mid_bench_native(Int32(i), scale, &smallSum)
+                    self.setBusy("x86-64 via interpreter (no JIT): \(name)")
+                    let run = self.run(ptr, len, ["bench", name, String(scale)], mode: .interpreter)
+                    (r.interpNs, r.interpMatch) = Self.parseResult(run, expectedSum: smallSum)
+                }
+                results.append(r)
                 let snapshot = results
                 DispatchQueue.main.async { self.bench = snapshot }
             }
+            self.writeReport(results, presetName: presetName)
         }
     }
 
+    // MARK: - report
+
+    private func writeReport(_ results: [BenchResult], presetName: String) {
+        let date = ISO8601DateFormatter().string(from: Date())
+        let info = Bundle.main.infoDictionary
+        let d = Self.interpreterScaleDivisor
+        var lines: [String] = []
+        lines.append("==== MYIOSDECK BENCHMARK REPORT ====")
+        lines.append("date: \(date)")
+        lines.append("device: \(DeviceInfo.describeDevice()) | iOS \(UIDevice.current.systemVersion)")
+        lines.append("app: \(info?["CFBundleShortVersionString"] ?? "?") build \(info?["CFBundleVersion"] ?? "?")")
+        lines.append("jit: \(mid_jit_pool_ready() ? "on (\(mid_jit_pool_size() >> 20) MB pool)" : "OFF")" +
+                     " | fex: \(fexVersion.prefix(10)) preset \(presetName) | interpreter: blink \(interpVersion.prefix(10))")
+        lines.append("thermal: \(ProcessInfo.processInfo.thermalState.rawValue) | low power: \(ProcessInfo.processInfo.isLowPowerModeEnabled)")
+        lines.append(Self.row(["kernel", "native", "fex", "fex%", "native/\(d)", "interp/\(d)", "interp%"]))
+        for r in results {
+            lines.append(Self.row([r.name, Self.ms(r.nativeNs), r.fexNs.map(Self.ms) ?? "-",
+                                   r.fexEfficiency.map { String(format: "%.0f%%", $0) } ?? "-",
+                                   r.nativeAtInterpScaleNs.map(Self.ms) ?? "-", r.interpNs.map(Self.ms) ?? "-",
+                                   r.interpEfficiency.map { String(format: "%.1f%%", $0) } ?? "-"]))
+            if r.fexMatch == false || r.interpMatch == false {
+                lines.append("  ! checksum mismatch (fex=\(String(describing: r.fexMatch)) interp=\(String(describing: r.interpMatch)))")
+            }
+        }
+        if let a = Self.average(results.compactMap(\.fexEfficiency)) {
+            lines.append(String(format: "average FEX JIT: %.0f%% of native", a))
+        }
+        if let a = Self.average(results.compactMap(\.interpEfficiency)) {
+            lines.append(String(format: "average interpreter (no JIT): %.1f%% of native, about %.0fx slower", a, 100 / max(a, 0.001)))
+        }
+        lines.append("==== END REPORT ====")
+        lines.forEach { dlog("[report] \($0)") }
+
+        let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("benchmarks")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("benchmark-\(date.replacingOccurrences(of: ":", with: "-")).txt")
+        try? (lines.joined(separator: "\n") + "\n").write(to: url, atomically: true, encoding: .utf8)
+        DispatchQueue.main.async { self.lastReportURL = url }
+    }
+
+    private static func row(_ cols: [String]) -> String {
+        let widths = [8, 10, 10, 6, 11, 11, 8]
+        return zip(cols, widths).map { c, w in c.count >= w ? c : c + String(repeating: " ", count: w - c.count) }
+            .joined(separator: " ")
+    }
+
     // MARK: - plumbing
+
+    private static func parseResult(_ run: GuestRun, expectedSum: UInt64) -> (UInt64?, Bool?) {
+        guard let line = run.output.split(separator: "\n").first(where: { $0.hasPrefix("RESULT") }) else {
+            dlog("[bench] \(run.mode.rawValue) run failed: \(run.error) exit=\(run.exitCode) output=\(run.output.prefix(300))")
+            return (nil, nil)
+        }
+        let f = parseFields(String(line))
+        let ns = f["ns"].flatMap { UInt64($0) }
+        let match = f["sum"].flatMap { UInt64($0) }.map { $0 == expectedSum }
+        return (ns, match)
+    }
 
     private func guest(_ get: (UnsafeMutablePointer<Int>) -> UnsafePointer<UInt8>?) -> (UnsafePointer<UInt8>?, Int) {
         var len = 0
@@ -109,22 +195,27 @@ final class EngineController: ObservableObject, @unchecked Sendable {
         return (len > 0 ? p : nil, len)
     }
 
-    private func run(_ elf: UnsafePointer<UInt8>, _ len: Int, _ args: [String]) -> GuestRun {
+    private func run(_ elf: UnsafePointer<UInt8>, _ len: Int, _ args: [String], mode: RunMode) -> GuestRun {
         let cArgs = args.map { strdup($0) }
         defer { cArgs.forEach { free($0) } }
         var argv = cArgs.map { UnsafePointer<CChar>($0) }
         let result = UnsafeMutablePointer<mid_run_result>.allocate(capacity: 1)
         defer { result.deallocate() }
-        let ok = argv.withUnsafeMutableBufferPointer { buf in
-            mid_engine_run_elf(elf, len, Int32(args.count), buf.baseAddress, result)
+        let ok = argv.withUnsafeMutableBufferPointer { buf -> Bool in
+            switch mode {
+            case .jit: return mid_engine_run_elf(elf, len, Int32(args.count), buf.baseAddress, result)
+            case .interpreter: return mid_interp_run_elf(elf, len, Int32(args.count), buf.baseAddress, result)
+            }
         }
         let r = result.pointee
-        let output = String(cString: mid_run_result_output(result))
-        let error = String(cString: mid_run_result_error(result))
-        let run = GuestRun(ok: ok, exitCode: r.exit_code, seconds: r.seconds, syscalls: r.syscalls,
-                           poolUsedKB: Int((r.pool_used_after - r.pool_used_before) >> 10),
-                           output: output, error: error)
-        dlog("[engine] \(args.joined(separator: " ")): ok=\(ok) exit=\(run.exitCode) \(String(format: "%.3f", run.seconds)) s, \(run.syscalls) syscalls, +\(run.poolUsedKB) KB JIT code")
+        let run = GuestRun(mode: mode, ok: ok, exitCode: r.exit_code, seconds: r.seconds, syscalls: r.syscalls,
+                           poolUsedKB: Int(r.pool_used_after &- r.pool_used_before) >> 10,
+                           output: String(cString: mid_run_result_output(result)),
+                           error: String(cString: mid_run_result_error(result)))
+        dlog("[engine] \(mode.rawValue) \(args.joined(separator: " ")): ok=\(ok) exit=\(run.exitCode) " +
+             String(format: "%.3f s", run.seconds) +
+             (mode == .jit ? ", \(run.syscalls) syscalls, +\(run.poolUsedKB) KB JIT code" : "") +
+             (run.error.isEmpty ? "" : " error=\(run.error)"))
         return run
     }
 
@@ -138,6 +229,9 @@ final class EngineController: ObservableObject, @unchecked Sendable {
     }
 
     private func setBusy(_ s: String) { DispatchQueue.main.async { self.busy = s } }
+
+    static func ms(_ ns: UInt64) -> String { String(format: "%.1f ms", Double(ns) / 1e6) }
+    static func average(_ v: [Double]) -> Double? { v.isEmpty ? nil : v.reduce(0, +) / Double(v.count) }
 
     static func parseFields(_ line: String) -> [String: String] {
         var out: [String: String] = [:]

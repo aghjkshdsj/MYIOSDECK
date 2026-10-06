@@ -1,0 +1,4 @@
+# Blink: x86-64 Linux emulator by Justine Tunney (ISC). Used as MYIOSDECK's
+# no-JIT interpreter. Bump SHA to update; CI caches the build by this value.
+REPO=https://github.com/jart/blink.git
+SHA=f006a4fc6f9b8de9272504fdff0dbbe5ce5dc580

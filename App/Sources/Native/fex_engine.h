@@ -45,6 +45,10 @@ typedef struct {
 const char *mid_run_result_output(const mid_run_result *r);
 const char *mid_run_result_error(const mid_run_result *r);
 
+/// Off (default): drop FEXCore's per-thread trace lines ([TI-IC], [lookup-cache], …)
+/// that the Madeira fork logs at error level. On: log everything.
+void mid_engine_set_verbose(bool verbose);
+
 /// True when this build links FEXCore (false in the no-engine fallback build).
 bool mid_engine_linked(void);
 /// FEX fork commit this build was made from (from the CI), or "none".

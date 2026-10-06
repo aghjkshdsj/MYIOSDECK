@@ -1,4 +1,5 @@
-// Default: UI-only build without FEXCore. CI overwrites this file
-// (engine/fex/build-ios.sh) with the real header paths and libraries.
-MYIOSDECK_FEX_HEADERS =
-MYIOSDECK_FEX_LIBS =
+// Engine libraries for the app target. CI overwrites FEX.xcconfig and
+// Blink.xcconfig when it builds them; the committed copies are empty, which
+// gives a UI-only build.
+#include "FEX.xcconfig"
+#include "Blink.xcconfig"

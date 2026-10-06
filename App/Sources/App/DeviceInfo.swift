@@ -33,10 +33,33 @@ final class DeviceInfo: ObservableObject {
     }
 
     var machine: String { Self.string(info.machine) }
+    /// iOS has no CPU brand string, so name the chip from the model identifier.
     var cpuBrand: String {
         let b = Self.string(info.cpu_brand)
-        return b.isEmpty ? machine : b
+        if !b.isEmpty { return b }
+        return Self.models[machine]?.chip ?? machine
     }
+    var modelName: String { Self.models[machine]?.name ?? machine }
+
+    /// "iPhone 15 Pro Max (iPhone16,2, Apple A17 Pro)" for reports.
+    static func describeDevice() -> String {
+        var s = mid_sysinfo()
+        mid_sysinfo_read(&s)
+        let id = string(s.machine)
+        guard let m = models[id] else { return id }
+        return "\(m.name) (\(id), \(m.chip))"
+    }
+
+    static let models: [String: (name: String, chip: String)] = [
+        "iPhone14,2": ("iPhone 13 Pro", "Apple A15"), "iPhone14,3": ("iPhone 13 Pro Max", "Apple A15"),
+        "iPhone14,7": ("iPhone 14", "Apple A15"), "iPhone14,8": ("iPhone 14 Plus", "Apple A15"),
+        "iPhone15,2": ("iPhone 14 Pro", "Apple A16"), "iPhone15,3": ("iPhone 14 Pro Max", "Apple A16"),
+        "iPhone15,4": ("iPhone 15", "Apple A16"), "iPhone15,5": ("iPhone 15 Plus", "Apple A16"),
+        "iPhone16,1": ("iPhone 15 Pro", "Apple A17 Pro"), "iPhone16,2": ("iPhone 15 Pro Max", "Apple A17 Pro"),
+        "iPhone17,1": ("iPhone 16 Pro", "Apple A18 Pro"), "iPhone17,2": ("iPhone 16 Pro Max", "Apple A18 Pro"),
+        "iPhone17,3": ("iPhone 16", "Apple A18"), "iPhone17,4": ("iPhone 16 Plus", "Apple A18"),
+        "iPhone17,5": ("iPhone 16e", "Apple A18"),
+    ]
     var memoryGB: Double { Double(info.memsize) / 1_073_741_824 }
     var cores: String { "\(info.ncpu) cores (\(info.perf_cores) performance + \(info.eff_cores) efficiency)" }
     var hasIncreasedMemoryLimit: Bool { mid_available_memory() > 4_000_000_000 }

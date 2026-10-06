@@ -7,6 +7,7 @@ struct HomeView: View {
     @EnvironmentObject private var jit: JITController
     @EnvironmentObject private var engine: EngineController
     @EnvironmentObject private var device: DeviceInfo
+    @State private var noJITAction: (() -> Void)?
 
     var body: some View {
         ScrollView {
@@ -19,6 +20,15 @@ struct HomeView: View {
             .padding(16)
             .frame(maxWidth: 820)
             .frame(maxWidth: .infinity)
+        }
+        .jitGate(pending: $noJITAction)
+    }
+
+    private func runTest() {
+        if engine.state == .ready {
+            engine.runHello(mode: .jit)
+        } else {
+            noJITAction = { engine.runHello(mode: .interpreter) }
         }
     }
 
@@ -33,14 +43,14 @@ struct HomeView: View {
                     }
                     .buttonStyle(DeckButtonStyle())
                     .disabled(jit.state == .waitingForDebugger || jit.state == .preparing)
-                } else if engine.state == .ready {
-                    Button("Run x86-64 test") { engine.runHello() }.buttonStyle(DeckButtonStyle())
-                        .disabled(engine.busy != nil)
-                    Button("Benchmark") { tab = .performance }.buttonStyle(DeckButtonStyle(prominent: false))
-                } else {
+                } else if engine.state != .ready {
                     Button("Start engine") { engine.start(settings: settings) }.buttonStyle(DeckButtonStyle())
                         .disabled(engine.state == .starting)
                 }
+                Button("Run x86-64 test", action: runTest)
+                    .buttonStyle(DeckButtonStyle(prominent: engine.state == .ready))
+                    .disabled(engine.busy != nil)
+                Button("Benchmark") { tab = .performance }.buttonStyle(DeckButtonStyle(prominent: false))
             }
             if let busy = engine.busy {
                 HStack { ProgressView(); Text(busy).foregroundStyle(Deck.dim) }
@@ -64,7 +74,7 @@ struct HomeView: View {
             return "FEX is translating x86-64 to ARM64 on your \(device.cpuBrand). Wine and Steam come next (see Library)."
         }
         if jit.isReady { return "Starting FEXCore…" }
-        return "Turn on JIT through StikDebug to start the x86 → ARM64 engine."
+        return "Turn on JIT through StikDebug for full speed, or run the x86-64 test without JIT in the interpreter."
     }
 
     private var jitButtonTitle: String {
@@ -135,11 +145,13 @@ struct HomeView: View {
     }
 
     private func lastRunCard(_ run: GuestRun) -> some View {
-        DeckCard(title: "Last x86-64 program", icon: "terminal.fill") {
+        DeckCard(title: "Last x86-64 program · \(run.mode.rawValue)", icon: "terminal.fill") {
             Text(run.output.isEmpty ? run.error : run.output)
                 .font(.system(.footnote, design: .monospaced))
                 .textSelection(.enabled)
-            Text("exit \(run.exitCode) · \(String(format: "%.1f", run.seconds * 1000)) ms incl. translation · \(run.syscalls) syscalls · \(run.poolUsedKB) KB of ARM64 code generated")
+            Text(run.mode == .jit
+                 ? "exit \(run.exitCode) · \(String(format: "%.1f", run.seconds * 1000)) ms incl. translation · \(run.syscalls) syscalls · \(run.poolUsedKB) KB of ARM64 code generated"
+                 : "exit \(run.exitCode) · \(String(format: "%.1f", run.seconds * 1000)) ms interpreted (no JIT)")
                 .font(.caption).foregroundStyle(Deck.dim)
         }
     }

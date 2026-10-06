@@ -1,0 +1,3 @@
+// Default: no FEXCore. engine/fex/build-ios.sh overwrites this in CI.
+MYIOSDECK_FEX_HEADERS =
+MYIOSDECK_FEX_LIBS =

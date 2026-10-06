@@ -30,15 +30,23 @@ final class Settings: ObservableObject {
     @Published var maxInst: Int { didSet { d.set(maxInst, forKey: "maxInst") } }
     @Published var showHUD: Bool { didSet { d.set(showHUD, forKey: "showHUD") } }
     @Published var frameCap: Int { didSet { d.set(frameCap, forKey: "frameCap") } }
+    @Published var verboseFEXLog: Bool {
+        didSet { d.set(verboseFEXLog, forKey: "verboseFEXLog"); mid_engine_set_verbose(verboseFEXLog) }
+    }
+    /// Performance tab: also measure the no-JIT interpreter when JIT is on.
+    @Published var benchInterpreter: Bool { didSet { d.set(benchInterpreter, forKey: "benchInterpreter") } }
 
     init() {
         d.register(defaults: ["jitPoolMB": 512, "fexPreset": FEXPreset.fast.rawValue, "multiblock": true,
-                              "maxInst": 5000, "showHUD": true, "frameCap": 120])
+                              "maxInst": 5000, "showHUD": true, "frameCap": 120, "verboseFEXLog": false,
+                              "benchInterpreter": true])
         jitPoolMB = d.integer(forKey: "jitPoolMB")
         fexPreset = FEXPreset(rawValue: d.integer(forKey: "fexPreset")) ?? .fast
         multiblock = d.bool(forKey: "multiblock")
         maxInst = d.integer(forKey: "maxInst")
         showHUD = d.bool(forKey: "showHUD")
         frameCap = d.integer(forKey: "frameCap")
+        verboseFEXLog = d.bool(forKey: "verboseFEXLog")
+        benchInterpreter = d.bool(forKey: "benchInterpreter")
     }
 }

@@ -62,6 +62,7 @@ targets:
         OTHER_LDFLAGS:
           - "$(inherited)"
           - "$(MYIOSDECK_FEX_LIBS)"
+          - "$(MYIOSDECK_BLINK_LIBS)"
           - "-lc++"
         # Signing happens at sideload time (iloader / SideStore / AltStore).
         CODE_SIGN_STYLE: Manual

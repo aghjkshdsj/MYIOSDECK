@@ -22,6 +22,7 @@ struct SettingsView: View {
                         .disabled(!jit.isReady || engine.state == .starting)
                     Text("Each restart uses a little of the JIT pool; restart MYIOSDECK if it runs low.")
                         .font(.caption).foregroundStyle(Deck.dim)
+                    Toggle("Verbose FEX log", isOn: $settings.verboseFEXLog).tint(Deck.accent)
                 }
 
                 DeckCard(title: "JIT", icon: "bolt.fill") {
@@ -52,7 +53,8 @@ struct SettingsView: View {
                     let info = Bundle.main.infoDictionary
                     Text("MYIOSDECK \(info?["CFBundleShortVersionString"] as? String ?? "?") (build \(info?["CFBundleVersion"] as? String ?? "?"))")
                     Text("FEX: \(engine.fexVersion)").font(.footnote.monospaced()).foregroundStyle(Deck.dim)
-                    Text("GPL-3.0-or-later. Built on FEX-Emu, Madeira's iOS ports of FEX, Wine and DXMT, StikDebug's JIT protocol, and the DroidDeck design.")
+                    Text("Interpreter (Blink): \(engine.interpVersion)").font(.footnote.monospaced()).foregroundStyle(Deck.dim)
+                    Text("GPL-3.0-or-later. Built on FEX-Emu, Madeira's iOS ports of FEX, Wine and DXMT, Blink (no-JIT interpreter), StikDebug's JIT protocol, and the DroidDeck design.")
                         .font(.footnote).foregroundStyle(Deck.dim)
                 }
             }

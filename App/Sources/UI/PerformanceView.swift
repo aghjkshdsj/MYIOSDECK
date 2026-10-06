@@ -8,6 +8,7 @@ struct PerformanceView: View {
     @State private var gpuLoad: Double = 48
     @State private var stats = FrameStats()
     @State private var stageOn = false
+    @State private var noJITAction: (() -> Void)?
 
     var body: some View {
         ScrollView {
@@ -20,30 +21,46 @@ struct PerformanceView: View {
             .frame(maxWidth: 900)
             .frame(maxWidth: .infinity)
         }
+        .jitGate(pending: $noJITAction)
+    }
+
+    private func runBench() {
+        let preset = settings.fexPreset.title
+        if engine.state == .ready {
+            engine.runBenchmarks(fex: true, interpreter: settings.benchInterpreter, presetName: preset)
+        } else {
+            noJITAction = { engine.runBenchmarks(fex: false, interpreter: true, presetName: preset) }
+        }
     }
 
     // MARK: CPU
 
     private var cpuCard: some View {
-        DeckCard(title: "CPU: native ARM64 vs x86-64 through FEX", icon: "cpu") {
-            Text("The same C kernels compiled twice: once for ARM64 (native) and once for x86-64, run through FEX. Efficiency = native time ÷ FEX time.")
+        DeckCard(title: "CPU: native ARM64 vs x86-64", icon: "cpu") {
+            Text("The same C kernels compiled twice: once for ARM64 (native) and once for x86-64. The x86-64 build runs through FEX (JIT) and, optionally, the no-JIT interpreter. % = share of native speed.")
                 .font(.footnote).foregroundStyle(Deck.dim)
+            Toggle("Also measure without JIT (interpreter, 1/\(EngineController.interpreterScaleDivisor) workload)",
+                   isOn: $settings.benchInterpreter)
+                .tint(Deck.accent).font(.subheadline)
+                .disabled(!engine.interpreterLinked)
             HStack(spacing: 10) {
-                Button("Run native + FEX") { engine.runBenchmarks(includeGuest: true) }
+                Button("Run benchmark", action: runBench)
                     .buttonStyle(DeckButtonStyle())
-                    .disabled(engine.busy != nil || engine.state != .ready)
-                Button("Native only") { engine.runBenchmarks(includeGuest: false) }
-                    .buttonStyle(DeckButtonStyle(prominent: false))
                     .disabled(engine.busy != nil)
+                if let url = engine.lastReportURL {
+                    ShareLink(item: url) { Label("Share report", systemImage: "square.and.arrow.up") }
+                        .buttonStyle(DeckButtonStyle(prominent: false))
+                }
             }
             if engine.state != .ready {
-                Text("Enable JIT on Home to include FEX results.").font(.caption).foregroundStyle(Deck.warn)
+                Text("JIT is off: FEX results need JIT. You can still measure the interpreter.")
+                    .font(.caption).foregroundStyle(Deck.warn)
             }
             if let busy = engine.busy { HStack { ProgressView(); Text(busy).foregroundStyle(Deck.dim) } }
             if !engine.bench.isEmpty {
-                Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 8) {
+                Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
                     GridRow {
-                        Text("Kernel"); Text("Native"); Text("FEX"); Text("Efficiency")
+                        Text("Kernel"); Text("Native"); Text("FEX JIT"); Text("No JIT")
                     }
                     .font(.caption.weight(.bold)).foregroundStyle(Deck.dim)
                     ForEach(engine.bench) { r in
@@ -53,37 +70,41 @@ struct PerformanceView: View {
                                 Text(r.what).font(.caption2).foregroundStyle(Deck.dim)
                             }
                             Text(ms(r.nativeNs)).monospacedDigit()
-                            Text(r.guestNs.map(ms) ?? "–").monospacedDigit()
-                            efficiencyLabel(r)
+                            pct(r.fexEfficiency, time: r.fexNs, match: r.fexMatch, digits: 0)
+                            pct(r.interpEfficiency, time: r.interpNs, match: r.interpMatch, digits: 1)
                         }
                     }
                 }
-                if let avg = averageEfficiency {
-                    Text("Average: FEX runs x86-64 code at \(Int(avg.rounded()))% of native speed with the \(settings.fexPreset.title) preset.")
+                if let avg = EngineController.average(engine.bench.compactMap(\.fexEfficiency)) {
+                    Text("FEX JIT: \(Int(avg.rounded()))% of native speed (\(settings.fexPreset.title) preset).")
                         .font(.subheadline.weight(.semibold)).foregroundStyle(Deck.accent)
                 }
+                if let avg = EngineController.average(engine.bench.compactMap(\.interpEfficiency)) {
+                    Text(String(format: "No JIT (interpreter): %.1f%% of native, about %.0f× slower.", avg, 100 / max(avg, 0.001)))
+                        .font(.subheadline.weight(.semibold)).foregroundStyle(Deck.warn)
+                }
+                Text("The full report is in the Logs tab and in Files › MYIOSDECK › benchmarks.")
+                    .font(.caption).foregroundStyle(Deck.dim)
             }
         }
     }
 
-    private func efficiencyLabel(_ r: BenchResult) -> some View {
-        HStack(spacing: 4) {
-            if let e = r.efficiency {
-                Text("\(Int(e.rounded()))%").monospacedDigit()
-                    .foregroundStyle(e >= 70 ? Deck.good : e >= 40 ? Deck.warn : Deck.bad)
+    private func pct(_ e: Double?, time: UInt64?, match: Bool?, digits: Int) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            if let e {
+                HStack(spacing: 3) {
+                    Text(String(format: "%.\(digits)f%%", e)).monospacedDigit()
+                        .foregroundStyle(e >= 70 ? Deck.good : e >= 20 ? Deck.warn : Deck.bad)
+                    if match == false {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Deck.warn)
+                            .accessibilityLabel("Checksum differs")
+                    }
+                }
+                if let time { Text(ms(time)).font(.caption2).foregroundStyle(Deck.dim).monospacedDigit() }
             } else {
-                Text("–")
-            }
-            if r.checksumsMatch == false {
-                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Deck.warn)
-                    .accessibilityLabel("Checksum differs")
+                Text("–").foregroundStyle(Deck.dim)
             }
         }
-    }
-
-    private var averageEfficiency: Double? {
-        let e = engine.bench.compactMap(\.efficiency)
-        return e.isEmpty ? nil : e.reduce(0, +) / Double(e.count)
     }
 
     private func ms(_ ns: UInt64) -> String { String(format: "%.0f ms", Double(ns) / 1e6) }
