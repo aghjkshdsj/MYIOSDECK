@@ -75,6 +75,15 @@ step_ntdll() {
     # dwrite's unix side wants generated headers from the PE tree; the native
     # tree generates the same headers (include/all), so use that instead.
     sed -i '' 's#wine/build-arm64ec/include#wine/build-macos/include#g' "$M/build/ntdll-unix/build.sh"
+    # ri_page_wait_time_mach is newer than the CI's iOS SDK; it only feeds a
+    # diagnostic [xp] log line, so report 0 there.
+    python3 - "$M/build/ntdll-unix/server_ios.c" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s = s.replace("XP_MS( ru.ri_page_wait_time_mach - pru.ri_page_wait_time_mach )", "0.0")
+open(p, "w").write(s)
+PY
     bash "$M/build/ntdll-unix/build.sh"
     test -s "$M/app/Madeira/libntdll_unix.a"
 }

@@ -40,5 +40,22 @@ cat > "$ROOT/App/Generated/wine_version.h" <<H
 #define MYIOSDECK_WITH_WINE 1
 #define MYIOSDECK_MADEIRA_SHA "${MADEIRA_SHA}"
 H
+# Add the sources and resources to the XcodeGen spec (CI working copy only).
+python3 - "$ROOT/project.yml" <<'PY'
+import sys
+p = sys.argv[1]
+base = "engine/wine/madeira/app/Madeira/"
+srcs = ["WineProcessBridge.m", "WineServerBridge.m", "IOSDisplayShim.m", "PadOutput.m",
+        "PrefixExtractor.c", "wine_stubs.c", "Winios/Winios.m", "Winios/WiniosGamepad.c",
+        "Winios/WiniosCursor.c"]
+lines = [f"      - path: {base}{f}" for f in srcs]
+for d in ["arm64ec-windows", "nls"]:
+    lines += [f"      - path: {base}{d}", "        type: folder", "        buildPhase: resources"]
+lines += [f"      - path: {base}prefix-template.tar.gz", "        buildPhase: resources"]
+s = open(p).read()
+assert "# @WINE_SOURCES@" in s
+s = s.replace("      # @WINE_SOURCES@", "\n".join(lines))
+open(p, "w").write(s)
+PY
 cat "$ROOT/Config/Wine.xcconfig"
 du -sh "$A/arm64ec-windows" "$A/nls"
