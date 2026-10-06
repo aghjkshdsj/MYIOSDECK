@@ -10,6 +10,7 @@
 #include <os/log.h>
 #include <os/proc.h>
 #include <pthread.h>
+#include <setjmp.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdatomic.h>
@@ -320,6 +321,18 @@ void *mid_jit_pool_alloc(size_t size) {
     return (uint8_t *)g_rx + off;
 }
 
+/* The self-test runs code from the pool for the first time. If iOS refuses to
+ * execute it (memory the debugger could not authorize, e.g. far above the low
+ * gap), that is a fault, not a crash we want: catch it and report -2. */
+static sigjmp_buf g_selftest_jmp;
+static volatile sig_atomic_t g_selftest_armed;
+
+static void selftest_fault(int sig) {
+    if (g_selftest_armed) siglongjmp(g_selftest_jmp, sig);
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
 int64_t mid_jit_selftest(void) {
     if (!g_rx) return -1;
     static const uint32_t code[] = {
@@ -328,8 +341,29 @@ int64_t mid_jit_selftest(void) {
     };
     memcpy(g_rw, code, sizeof code);
     sys_icache_invalidate(g_rx, sizeof code);
-    int64_t (*fn)(void) = (int64_t (*)(void))g_rx;
-    return fn();
+
+    struct sigaction sa, old_bus, old_segv, old_ill;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = selftest_fault;
+    sigaction(SIGBUS, &sa, &old_bus);
+    sigaction(SIGSEGV, &sa, &old_segv);
+    sigaction(SIGILL, &sa, &old_ill);
+    int64_t result;
+    int sig = sigsetjmp(g_selftest_jmp, 1);
+    if (sig == 0) {
+        g_selftest_armed = 1;
+        int64_t (*fn)(void) = (int64_t (*)(void))g_rx;
+        result = fn();
+    } else {
+        mid_log("[jit] self-test: executing from the pool at %p raised signal %d: iOS did not "
+                "authorize this memory for execution", g_rx, sig);
+        result = -2;
+    }
+    g_selftest_armed = 0;
+    sigaction(SIGBUS, &old_bus, NULL);
+    sigaction(SIGSEGV, &old_segv, NULL);
+    sigaction(SIGILL, &old_ill, NULL);
+    return result;
 }
 
 // ---------------------------------------------------------------- memory --

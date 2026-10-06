@@ -123,7 +123,9 @@ final class JITController: ObservableObject, @unchecked Sendable {
                 self.state = .ready(poolMB: Int(mid_jit_pool_size() >> 20))
                 onReady()
             } else {
-                self.state = .failed("JIT pool was created but code did not execute (self-test \(result)).")
+                self.state = .failed(result == -2
+                    ? "JIT memory was created at \(String(format: "%p", Int(bitPattern: mid_jit_pool_rx_base()))) but iOS refused to run code from it. Set Settings › JIT pool to 512 MB and enable JIT again."
+                    : "JIT pool was created but code did not execute (self-test \(result)).")
             }
         }
     }
