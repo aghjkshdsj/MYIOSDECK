@@ -100,7 +100,7 @@ jobs:
         if: steps.wine.outcome != 'success'
         run: |
           echo "::notice::No Wine in this IPA yet (stage 2 builds in the 'Stage 2 - Wine unix side' workflow)."
-          git checkout -- Config/Wine.xcconfig
+          git checkout -- Config/Wine.xcconfig project.yml
           rm -rf engine/wine/madeira App/Generated/wine_version.h
 
       - name: Generate Xcode project

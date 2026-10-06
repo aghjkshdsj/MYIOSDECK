@@ -37,37 +37,9 @@ targets:
       - path: App/Sources/Native/bench.c
         # Same math as the x86-64 guest (no FMA contraction) so checksums compare exactly.
         compilerFlags: ["-O2", "-ffp-contract=off"]
-      # Stage 2 (Wine): Madeira's app-side sources and the prebuilt Windows side,
-      # present only when engine/wine/stage-app.sh staged them.
-      - path: engine/wine/madeira/app/Madeira/WineProcessBridge.m
-        optional: true
-      - path: engine/wine/madeira/app/Madeira/WineServerBridge.m
-        optional: true
-      - path: engine/wine/madeira/app/Madeira/IOSDisplayShim.m
-        optional: true
-      - path: engine/wine/madeira/app/Madeira/PadOutput.m
-        optional: true
-      - path: engine/wine/madeira/app/Madeira/PrefixExtractor.c
-        optional: true
-      - path: engine/wine/madeira/app/Madeira/wine_stubs.c
-        optional: true
-      - path: engine/wine/madeira/app/Madeira/Winios/Winios.m
-        optional: true
-      - path: engine/wine/madeira/app/Madeira/Winios/WiniosGamepad.c
-        optional: true
-      - path: engine/wine/madeira/app/Madeira/Winios/WiniosCursor.c
-        optional: true
-      - path: engine/wine/madeira/app/Madeira/arm64ec-windows
-        type: folder
-        buildPhase: resources
-        optional: true
-      - path: engine/wine/madeira/app/Madeira/nls
-        type: folder
-        buildPhase: resources
-        optional: true
-      - path: engine/wine/madeira/app/Madeira/prefix-template.tar.gz
-        buildPhase: resources
-        optional: true
+      # Stage 2 (Wine): engine/wine/stage-app.sh inserts Madeira's app-side sources
+      # and the Windows side (DLL farm, NLS, prefix) here when it staged them.
+      # @WINE_SOURCES@
       - path: App/Resources
         buildPhase: resources
       - path: App/Assets.xcassets
