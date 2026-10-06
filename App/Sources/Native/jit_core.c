@@ -233,6 +233,13 @@ bool mid_jit_pool_create(size_t size, char *err, size_t errlen) {
     vm_address_t plugs[16];
     vm_size_t plug_sizes[16];
     int nplugs = 0;
+    /* Like Madeira: keep the pool low, next to the images, even if that means a
+     * smaller pool than asked for (its log: 608/592/448 MB pools by launch). */
+    if (g_ph_base && g_ph_size < size && g_ph_size >= (256ul << 20)) {
+        mid_log("[jit] only %zu MB free above the exe window; using that instead of %zu MB",
+                (size_t)(g_ph_size >> 20), size >> 20);
+        size = g_ph_size;
+    }
     if (g_ph_base && g_ph_size >= size) {
         nplugs = plug_low_holes(g_ph_base, size, plugs, plug_sizes, 16);
         vm_deallocate(mach_task_self(), g_ph_base, g_ph_size);

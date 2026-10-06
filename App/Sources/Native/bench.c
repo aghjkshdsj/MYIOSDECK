@@ -11,6 +11,10 @@
 #include "guest_hello.h"
 #define HAVE_GUESTS 1
 #endif
+#if __has_include("guest_bench_sse2.h")
+#include "guest_bench_sse2.h"
+#define HAVE_SSE2_GUEST 1
+#endif
 
 int mid_bench_count(void) { return (int)BK_KERNEL_COUNT; }
 const char *mid_bench_name(int i) { return bk_kernels[i].name; }
@@ -39,7 +43,19 @@ const uint8_t *mid_guest_bench(size_t *len) {
     *len = guest_bench_elf_len;
     return guest_bench_elf;
 }
+#ifdef HAVE_SSE2_GUEST
+const uint8_t *mid_guest_bench_sse2(size_t *len) {
+    *len = guest_bench_sse2_elf_len;
+    return guest_bench_sse2_elf;
+}
 #else
+const uint8_t *mid_guest_bench_sse2(size_t *len) { return mid_guest_bench(len); }
+#endif
+#else
+const uint8_t *mid_guest_bench_sse2(size_t *len) {
+    *len = 0;
+    return 0;
+}
 const uint8_t *mid_guest_hello(size_t *len) {
     *len = 0;
     return 0;

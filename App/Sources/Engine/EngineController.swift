@@ -95,6 +95,7 @@ final class EngineController: ObservableObject, @unchecked Sendable {
     /// - interpreter: also run each kernel in the interpreter at a reduced size
     func runBenchmarks(fex: Bool, interpreter: Bool, presetName: String) {
         let (ptr, len) = guest { mid_guest_bench($0) }
+        let (iptr, ilen) = guest { mid_guest_bench_sse2($0) }
         work("Benchmarking") {
             var results: [BenchResult] = []
             for i in 0..<Int(mid_bench_count()) {
@@ -111,13 +112,13 @@ final class EngineController: ObservableObject, @unchecked Sendable {
                     let run = self.run(ptr, len, ["bench", name], mode: .jit)
                     (r.fexNs, r.fexMatch) = Self.parseResult(run, expectedSum: nativeSum)
                 }
-                if interpreter, let ptr, self.interpreterLinked {
+                if interpreter, let iptr, self.interpreterLinked {
                     let scale = max(1, fullScale / Self.interpreterScaleDivisor)
                     var smallSum: UInt64 = 0
                     r.interpScale = scale
                     r.nativeAtInterpScaleNs = mid_bench_native(Int32(i), scale, &smallSum)
                     self.setBusy("x86-64 via interpreter (no JIT): \(name)")
-                    let run = self.run(ptr, len, ["bench", name, String(scale)], mode: .interpreter)
+                    let run = self.run(iptr, ilen, ["bench", name, String(scale)], mode: .interpreter)
                     (r.interpNs, r.interpMatch) = Self.parseResult(run, expectedSum: smallSum)
                 }
                 results.append(r)
@@ -140,7 +141,8 @@ final class EngineController: ObservableObject, @unchecked Sendable {
         lines.append("device: \(DeviceInfo.describeDevice()) | iOS \(UIDevice.current.systemVersion)")
         lines.append("app: \(info?["CFBundleShortVersionString"] ?? "?") build \(info?["CFBundleVersion"] ?? "?")")
         lines.append("jit: \(mid_jit_pool_ready() ? "on (\(mid_jit_pool_size() >> 20) MB pool)" : "OFF")" +
-                     " | fex: \(fexVersion.prefix(10)) preset \(presetName) | interpreter: blink \(interpVersion.prefix(10))")
+                     " | fex: \(fexVersion.prefix(10)) preset \(presetName) (x86-64-v2 build)" +
+                     " | interpreter: blink \(interpVersion.prefix(10)) (SSE2 build)")
         lines.append("thermal: \(ProcessInfo.processInfo.thermalState.rawValue) | low power: \(ProcessInfo.processInfo.isLowPowerModeEnabled)")
         lines.append(Self.row(["kernel", "native", "fex", "fex%", "native/\(d)", "interp/\(d)", "interp%"]))
         for r in results {

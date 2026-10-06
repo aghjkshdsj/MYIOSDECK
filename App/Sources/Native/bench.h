@@ -22,6 +22,8 @@ uint64_t mid_bench_native(int i, unsigned scale, uint64_t *sum);
 /// Embedded x86-64 guest programs (built by CI from engine/guest).
 const uint8_t *mid_guest_hello(size_t *len);
 const uint8_t *mid_guest_bench(size_t *len);
+/// The same benchmark built for baseline x86-64 (SSE2): what the interpreter runs.
+const uint8_t *mid_guest_bench_sse2(size_t *len);
 
 #ifdef __cplusplus
 }
