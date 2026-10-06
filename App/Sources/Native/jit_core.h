@@ -65,6 +65,10 @@ void *mid_jit_pool_alloc(size_t size);
 /// Executes `mov x0,#42; ret` from the pool. Returns 42 when JIT really works.
 int64_t mid_jit_selftest(void);
 
+/// The executable window for non-relocatable x64 images ([0x140000000, +128 MB)),
+/// reserved at image load. False if something else held it first.
+bool mid_exe_window(uint64_t *base, uint64_t *size);
+
 // --- Memory ---------------------------------------------------------------------
 
 /// os_proc_available_memory(): bytes this process can still allocate before jetsam.

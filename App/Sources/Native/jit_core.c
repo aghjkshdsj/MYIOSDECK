@@ -150,6 +150,72 @@ static void try_no_footprint(void *addr, size_t size) {
     mid_log("[jit] pool stays on jetsam footprint (ownership refused); keep the pool moderate");
 }
 
+// ----------------------------------------------------------- address space --
+/* Same layout as Madeira (JITAllocator.c, ml1040): claim, at image load and
+ * before any runtime allocation can fragment it,
+ *   - [0x140000000, +128 MB): where non-relocatable x64 .exe images must load
+ *     (handed to Wine via WINE_IOS_EXE_WINDOW), and
+ *   - the largest run directly above it, as a placeholder for the JIT pool.
+ * Both are PROT_NONE reservations and cost no memory. The debugger allocates
+ * the pool first-fit with no address hint, so the placeholder is released just
+ * before asking and lower holes that could win are plugged meanwhile; a low
+ * pool keeps translated code within branch reach of the images. */
+static const vm_address_t kExeWin = 0x140000000ul, kExeWinSize = 0x8000000ul;
+static vm_address_t g_win_base, g_ph_base;
+static vm_size_t g_ph_size;
+
+__attribute__((constructor(101), used)) static void mid_early_va_claim(void) {
+    vm_address_t a = kExeWin;
+    if (vm_allocate(mach_task_self(), &a, kExeWinSize, VM_FLAGS_FIXED) == KERN_SUCCESS && a == kExeWin) {
+        vm_protect(mach_task_self(), a, kExeWinSize, 0, VM_PROT_NONE);
+        g_win_base = a;
+    }
+    for (vm_size_t sz = 1280ul << 20; sz >= (256ul << 20); sz -= (16ul << 20)) {
+        a = kExeWin + kExeWinSize;
+        if (vm_allocate(mach_task_self(), &a, sz, VM_FLAGS_FIXED) == KERN_SUCCESS && a == kExeWin + kExeWinSize) {
+            vm_protect(mach_task_self(), a, sz, 0, VM_PROT_NONE);
+            g_ph_base = a;
+            g_ph_size = sz;
+            break;
+        }
+    }
+}
+
+bool mid_exe_window(uint64_t *base, uint64_t *size) {
+    if (!g_win_base) return false;
+    *base = g_win_base;
+    *size = kExeWinSize;
+    return true;
+}
+
+/* Plug free gaps below `limit` that are at least `need` bytes, so a first-fit
+ * allocation cannot land there. Returns how many plugs were placed. */
+static int plug_low_holes(vm_address_t limit, vm_size_t need, vm_address_t *plugs, vm_size_t *sizes, int max) {
+    int n = 0;
+    vm_address_t addr = 0x100000000ul, prev_end = 0x100000000ul;
+    while (addr < limit && n < max) {
+        vm_address_t ra = addr;
+        vm_size_t rs = 0;
+        natural_t depth = 0;
+        vm_region_submap_info_data_64_t info;
+        mach_msg_type_number_t cnt = VM_REGION_SUBMAP_INFO_COUNT_64;
+        if (vm_region_recurse_64(mach_task_self(), &ra, &rs, &depth, (vm_region_recurse_info_t)&info, &cnt) != KERN_SUCCESS)
+            break;
+        vm_address_t gap_end = ra < limit ? ra : limit;
+        if (gap_end > prev_end && gap_end - prev_end >= need) {
+            vm_address_t p = prev_end;
+            if (vm_allocate(mach_task_self(), &p, gap_end - prev_end, VM_FLAGS_FIXED) == KERN_SUCCESS) {
+                plugs[n] = p;
+                sizes[n] = gap_end - prev_end;
+                n++;
+            }
+        }
+        prev_end = ra + rs;
+        addr = ra + rs;
+    }
+    return n;
+}
+
 bool mid_jit_pool_create(size_t size, char *err, size_t errlen) {
     pthread_mutex_lock(&g_pool_lock);
     if (g_rx) {
@@ -164,8 +230,18 @@ bool mid_jit_pool_create(size_t size, char *err, size_t errlen) {
     }
     mid_jit_arm_trap_fallback();
 
+    vm_address_t plugs[16];
+    vm_size_t plug_sizes[16];
+    int nplugs = 0;
+    if (g_ph_base && g_ph_size >= size) {
+        nplugs = plug_low_holes(g_ph_base, size, plugs, plug_sizes, 16);
+        vm_deallocate(mach_task_self(), g_ph_base, g_ph_size);
+        mid_log("[jit] released pool placeholder %p+%zu MB, plugged %d lower holes", (void *)g_ph_base,
+                (size_t)(g_ph_size >> 20), nplugs);
+    }
     mid_log("[jit] asking the debugger for %zu MB of RX memory", size >> 20);
     void *rx = mid_jit26_prepare_region(NULL, size);
+    for (int i = 0; i < nplugs; i++) vm_deallocate(mach_task_self(), plugs[i], plug_sizes[i]);
     if (!rx) {
         set_err(err, errlen,
                 "The debugger did not answer the prepare request. Use StikDebug's \"Enable JIT\" from "

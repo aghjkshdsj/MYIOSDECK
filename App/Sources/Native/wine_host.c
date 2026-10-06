@@ -92,6 +92,13 @@ bool mid_wine_boot(const char *prefix, const char *exe, const char *args, char *
     setenv("WINE_IOS_JIT_RW", buf, 1);
     snprintf(buf, sizeof buf, "%llx", (unsigned long long)left);
     setenv("WINE_IOS_JIT_SIZE", buf, 1);
+    uint64_t wb, ws;
+    if (mid_exe_window(&wb, &ws)) {
+        snprintf(buf, sizeof buf, "%llx:%llx", (unsigned long long)wb, (unsigned long long)ws);
+        setenv("WINE_IOS_EXE_WINDOW", buf, 1);
+    } else {
+        mid_log("[wine] WARNING: 0x140000000 window not held; fixed-base .exe images will be displaced");
+    }
     setenv("MADEIRA_EXE", exe, 1);
     if (args && *args) setenv("MADEIRA_ARGS", args, 1); else unsetenv("MADEIRA_ARGS");
     mid_capture_stdio();
