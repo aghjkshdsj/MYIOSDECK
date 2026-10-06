@@ -18,7 +18,8 @@ M="$HERE/madeira"          # Madeira checkout; its scripts expect this layout
 W="$M/wine"
 OUT="$HERE/out"
 JOBS="$(sysctl -n hw.ncpu)"
-export PATH="$(brew --prefix bison)/bin:$(brew --prefix flex)/bin:$(brew --prefix llvm)/bin:$PATH"
+TC="$M/toolchains/$LLVM_MINGW/bin"
+export PATH="$TC:$(brew --prefix bison)/bin:$(brew --prefix flex)/bin:$(brew --prefix llvm)/bin:$PATH"
 
 step_fetch() {
     if [ ! -d "$M/.git" ] || [ "$(git -C "$M" rev-parse HEAD)" != "$MADEIRA_SHA" ]; then
@@ -32,6 +33,14 @@ step_fetch() {
         git -C "$M" submodule update --init --depth 1 wine
     fi
     git -C "$W" rev-parse HEAD
+    if [ ! -x "$TC/aarch64-w64-mingw32-clang" ]; then
+        mkdir -p "$M/toolchains"
+        curl -fsSL -o "$M/toolchains/llvm-mingw.tar.xz" "$LLVM_MINGW_URL"
+        echo "$LLVM_MINGW_SHA256  $M/toolchains/llvm-mingw.tar.xz" | shasum -a 256 -c -
+        tar -C "$M/toolchains" -xf "$M/toolchains/llvm-mingw.tar.xz"
+        rm "$M/toolchains/llvm-mingw.tar.xz"
+    fi
+    "$TC/aarch64-w64-mingw32-clang" --version | head -1
     if [ ! -d "$M/research/freetype" ]; then
         git clone -q --depth 1 --branch "$FREETYPE_TAG" https://github.com/freetype/freetype.git "$M/research/freetype"
     fi
@@ -41,7 +50,9 @@ step_configure() {
     mkdir -p "$W/build-macos"
     cd "$W/build-macos"
     if [ ! -f config.status ]; then
-        ../configure --without-x --without-mingw --disable-tests --without-freetype --without-gnutls \
+        # Native (host) tree: config.h, generated headers and host tools. The PE
+        # cross compiler only has to be present for configure on aarch64.
+        ../configure --without-x --disable-tests --without-freetype --without-gnutls \
             --without-gstreamer --without-sdl --without-cups --without-sane --without-pcap --without-krb5 \
             --without-opencl --without-vulkan --without-usb --without-v4l2 --without-netapi --without-capi \
             --without-gphoto --without-pcsclite --without-inotify --without-dbus --without-ffmpeg \
