@@ -8,6 +8,7 @@
 
 #include "jit_core.h"
 
+#include <fcntl.h>
 #include <pthread.h>
 
 #if __has_include("wine_version.h")
@@ -52,6 +53,60 @@ void mid_capture_stdio(void) {
 /* Madeira's Wine bridge publishes this to xtajit64.dll (FEX inside Wine) so its
  * own FEXCore copy writes code through the pool's RW alias. */
 int64_t fex_get_jit_write_offset(void) { return mid_jit_pool_write_offset(); }
+
+/* Madeira's bridge points Wine's stdout/stderr (and wineserver's log) at
+ * Documents/madeira-log.txt. Follow that file and copy its lines into the
+ * MYIOSDECK log so one log has everything. */
+static void *wine_log_follower(void *arg) {
+    char *path = arg;
+    int fd = -1;
+    for (int i = 0; i < 200 && fd < 0; i++) {
+        fd = open(path, O_RDONLY);
+        if (fd < 0) usleep(50000);
+    }
+    if (fd < 0) {
+        mid_log("[wine] no Wine log at %s", path);
+        free(path);
+        return NULL;
+    }
+    char buf[8192], line[1024];
+    size_t used = 0;
+    unsigned idle = 0;
+    for (;;) {
+        ssize_t n = read(fd, buf, sizeof buf);
+        if (n <= 0) {
+            usleep(100000);
+            if (++idle > 600 && !mid_wine_running()) break; /* 60 s quiet after exit */
+            continue;
+        }
+        idle = 0;
+        for (ssize_t i = 0; i < n; i++) {
+            if (buf[i] == '\n' || used == sizeof line - 1) {
+                line[used] = 0;
+                if (used) mid_log("[winelog] %s", line);
+                used = 0;
+            } else {
+                line[used++] = buf[i];
+            }
+        }
+    }
+    close(fd);
+    free(path);
+    return NULL;
+}
+
+static void follow_wine_log(const char *prefix) {
+    /* The prefix lives in Documents; the log sits next to it. */
+    char *path = malloc(1024);
+    snprintf(path, 1024, "%s", prefix);
+    char *slash = strrchr(path, '/');
+    if (!slash) { free(path); return; }
+    snprintf(slash, 1024 - (size_t)(slash - path), "/madeira-log.txt");
+    unlink(path); /* start fresh for this session */
+    pthread_t t;
+    if (pthread_create(&t, NULL, wine_log_follower, path) == 0) pthread_detach(t);
+    else free(path);
+}
 
 #if MYIOSDECK_WITH_WINE
 
@@ -102,6 +157,7 @@ bool mid_wine_boot(const char *prefix, const char *exe, const char *args, char *
     setenv("MADEIRA_EXE", exe, 1);
     if (args && *args) setenv("MADEIRA_ARGS", args, 1); else unsetenv("MADEIRA_ARGS");
     mid_capture_stdio();
+    follow_wine_log(prefix);
     mid_log("[wine] JIT slice for Wine: RX=%p size=%zu MB", rx, left >> 20);
 
     if (wineserver_start(prefix) != 0) {
