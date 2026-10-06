@@ -59,7 +59,8 @@ step_configure() {
             > configure.log 2>&1 || { tail -60 configure.log; return 1; }
     fi
     grep -c '#define' include/config.h
-    make -j"$JOBS" tools/all > make-tools.log 2>&1 || { tail -40 make-tools.log; return 1; }
+    make -j"$JOBS" tools/all tools/winebuild/all tools/widl/all tools/wrc/all > make-tools.log 2>&1 ||
+        { tail -40 make-tools.log; return 1; }
     make -j"$JOBS" include/all > make-include.log 2>&1 || { tail -40 make-include.log; return 1; }
     ls tools/winebuild/winebuild tools/widl/widl
 }
