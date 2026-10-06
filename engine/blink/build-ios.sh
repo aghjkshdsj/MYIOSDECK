@@ -43,10 +43,21 @@ for f in "$SRC"/blink/*.c; do
     case "$(basename "$f")" in blink.c|blinkenlights.c|oneoff.c) continue ;; esac
     echo "$f"
 done > "$OUT/sources.txt"
-export CLANG OBJ
-# Parallel compile; every failure is printed so one log shows all of them.
+# Parallel compile in batches of 8 (works with macOS's bash 3.2); every failure
+# is printed so one log shows all of them.
 FAIL=0
-xargs -P 8 -I{} sh -c 'n=$(basename "{}" .c); "$CLANG" @"$1" -c "{}" -o "$OBJ/$n.o" 2>"$OBJ/$n.err" || { echo "FAILED {}"; cat "$OBJ/$n.err"; exit 1; }' _ "$OUT/cflags.rsp" < "$OUT/sources.txt" || FAIL=1
+i=0
+while read -r f; do
+    (
+        n="$(basename "$f" .c)"
+        "$CLANG" @"$OUT/cflags.rsp" -c "$f" -o "$OBJ/$n.o" 2> "$OBJ/$n.err" ||
+            { echo "FAILED $f"; cat "$OBJ/$n.err"; touch "$OBJ/$n.failed"; }
+    ) &
+    i=$((i + 1))
+    [ $((i % 8)) -ne 0 ] || wait
+done < "$OUT/sources.txt"
+wait
+if ls "$OBJ"/*.failed > /dev/null 2>&1; then FAIL=1; fi
 "$CLANG" @"$OUT/cflags.rsp" -I"$ROOT/App/Sources/Native" -DMYIOSDECK_BLINK_SHA="\"$SHA\"" -c "$HERE/myiosdeck_driver.c" -o "$OBJ/myiosdeck_driver.o" || FAIL=1
 [ "$FAIL" = 0 ] || { echo "Blink: some files failed to compile"; exit 1; }
 
