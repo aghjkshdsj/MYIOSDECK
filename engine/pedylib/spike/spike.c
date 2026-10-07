@@ -43,6 +43,16 @@ EXPORT int spike_import(int x) {
 // Indirect call through a function pointer from the host.
 EXPORT int spike_callback(int (*cb)(int), int x) { return cb(x) + 1; }
 
+// The TEB through x18, the way Windows code reaches it (Wine: `register TEB *x18`). iOS does
+// not preserve x18, so pe2dylib.py rewrites each of these into a trampoline that loads the
+// TEB from the thread's TSD slot. One function per instruction form the rewrite handles.
+#define NAKED __attribute__((naked))
+EXPORT NAKED void *spike_teb_self(void) { __asm__("ldr x0, [x18, #0x30]\n\tret"); }   // TEB->Self
+EXPORT NAKED void *spike_teb_mov(void) { __asm__("mov x0, x18\n\tret"); }
+EXPORT NAKED void *spike_teb_add(void) { __asm__("add x0, x18, #0x68\n\tret"); }      // &LastErrorValue
+EXPORT NAKED void *spike_teb_index(unsigned long long i) { __asm__("ldr x0, [x18, x0, lsl #3]\n\tret"); }
+EXPORT NAKED void spike_teb_store(unsigned v) { __asm__("str w0, [x18, #0x68]\n\tret"); }
+
 EXPORT int spike_kernel_count(void) { return (int)BK_KERNEL_COUNT; }
 
 // Indirect call through the relocated .rdata table.

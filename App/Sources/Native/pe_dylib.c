@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // No-JIT Windows code, milestone A spike. See pe_dylib.h and docs/NO_JIT_WINDOWS.md.
 //
-// engine/pedylib/pe2dylib.py lays a PE image out as mapped (every section at its RVA,
-// sections 16 KB aligned) across two segments of a dylib, which the IPA step signs:
-// headers + code in __TEXT (signed, r-x), every data section in __DATA (rw,
-// copy-on-write) directly behind it. dyld maps it like any library. Here:
-//   1. check that layout (code pages below the split, data pages above it). Pages dyld
-//      mapped cannot be replaced: iOS fails mmap(MAP_FIXED) over them with EPERM
-//      (build 42), so data must be writable from the start;
-//   2. base relocations are applied (only data pages may need them);
+// engine/pedylib/pe2dylib.py lays a PE image out as mapped (every section at its RVA)
+// across two segments of a dylib, which the IPA step signs: x18 trampolines, then
+// headers + code in __TEXT (signed, r-x); the rest of the image in __DATA (rw,
+// copy-on-write) directly behind it, then the TEB slot offset word. dyld maps it like
+// any library. Here:
+//   1. check that layout (every code page below the split). Pages dyld mapped cannot
+//      be replaced: iOS fails mmap(MAP_FIXED) over them with EPERM (build 42), so
+//      everything written below must lie in __DATA;
+//   2. base relocations are applied;
 //   3. imports are resolved against the app (myiosdeck.dll);
 //   4. for ARM64EC, the dispatch pointers in the CHPE metadata are filled the way
 //      Wine's ntdll does before its emulator is up (arm64x_check_call_early & co.);
@@ -20,6 +21,7 @@
 #include <dlfcn.h>
 #include <errno.h>
 #include <mach/mach_time.h>
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -62,7 +64,7 @@ static uint32_t sec_span(const uint8_t *s) {
     return v > r ? v : r;
 }
 
-// Page kinds over the image: 0 = headers/unused, 1 = code, 2 = data, 3 = both (unloadable).
+// Page kinds over the image: 0 = headers/unused, 1 = code, 2 = data, 3 = both.
 static uint8_t *page_kinds(const pe_image *pe, size_t *npages) {
     size_t n = (pe->size + PE_PAGE - 1) / PE_PAGE;
     uint8_t *k = calloc(n, 1);
@@ -112,6 +114,40 @@ static void mid_ec_enter_x64(void) {
     abort();
 }
 
+// --- TEB ------------------------------------------------------------------------------------
+// Windows code finds its TEB in x18, which iOS does not preserve. pe2dylib.py rewrote every
+// x18 use into a trampoline that loads the TEB from the thread's TSD array
+// (TPIDRRO_EL0 & ~7) at the byte offset in the dylib's myiosdeck_teb_offset word. On
+// Darwin a pthread key IS its TSD slot index, so the offset is key * 8. The spike gives each
+// thread that calls in a zeroed fake TEB with Self (+0x30) set; Wine will own this later.
+
+static pthread_key_t g_teb_key;
+static pthread_once_t g_teb_once = PTHREAD_ONCE_INIT;
+static void teb_key_init(void) { pthread_key_create(&g_teb_key, NULL); }
+
+static uint64_t teb_tsd_offset(void) {
+    pthread_once(&g_teb_once, teb_key_init);
+    return (uint64_t)g_teb_key * 8;
+}
+
+static uint8_t *teb_current(void) {
+    pthread_once(&g_teb_once, teb_key_init);
+    uint8_t *teb = pthread_getspecific(g_teb_key);
+    if (!teb) {
+        teb = calloc(1, 0x2000);
+        memcpy(teb + 0x30, &teb, 8); // NT_TIB.Self
+        pthread_setspecific(g_teb_key, teb);
+    }
+    return teb;
+}
+
+// What a rewritten x18 site computes: *(TPIDRRO_EL0 & ~7 + offset).
+static void *teb_via_tsd(uint64_t offset) {
+    uint64_t tsd;
+    __asm__ volatile("mrs %0, TPIDRRO_EL0" : "=r"(tsd));
+    return *(void **)((tsd & ~7ull) + offset);
+}
+
 // --- loader -------------------------------------------------------------------------------
 
 #define FAIL(...) do { snprintf(err, errlen, __VA_ARGS__); goto fail; } while (0)
@@ -148,14 +184,18 @@ static bool pe_load(const char *path, pe_image *pe, char *err, size_t errlen) {
     size_t split = (size_t)(data - img) / PE_PAGE, code_pages = 0, data_pages = 0;
     if ((size_t)(data - img) % PE_PAGE) FAIL("__DATA payload at +0x%zx is not page aligned", (size_t)(data - img));
     for (size_t p = 0; p < npages; p++) {
-        if (kinds[p] == 3) FAIL("page +0x%zx holds code and data (rebuild with 16 KB section alignment)", p * PE_PAGE);
-        if (kinds[p] == 1 && p >= split) FAIL("code page +0x%zx is in __DATA (not executable)", p * PE_PAGE);
-        if (kinds[p] == 2 && p < split) FAIL("data page +0x%zx is in __TEXT (not writable)", p * PE_PAGE);
-        code_pages += kinds[p] == 1;
-        data_pages += kinds[p] == 2;
+        if ((kinds[p] & 1) && p >= split) FAIL("code page +0x%zx is in __DATA (not executable)", p * PE_PAGE);
+        code_pages += (kinds[p] & 1) != 0;
+        data_pages += p >= split;
     }
     mid_log("[pe-dylib] %zu code pages signed RX in __TEXT, %zu data pages RW in __DATA from +0x%zx", code_pages,
             data_pages, split * PE_PAGE);
+    uint8_t *tramps = dlsym(h, "myiosdeck_x18_tramps");
+    uint64_t *teb_off = dlsym(h, "myiosdeck_teb_offset");
+    if (!tramps || !teb_off) FAIL("no x18 trampoline / TEB offset symbols in the dylib");
+    *teb_off = teb_tsd_offset();
+    mid_log("[pe-dylib] x18: %zu KB of build-time trampolines; TEB at TSD offset 0x%llx", (size_t)(img - tramps) >> 10,
+            (unsigned long long)*teb_off);
 
     // 2. Base relocations.
     int64_t delta = (int64_t)((uintptr_t)img - pe->image_base);
@@ -170,7 +210,7 @@ static bool pe_load(const char *path, pe_image *pe, char *err, size_t errlen) {
             uint32_t t = e >> 12, rva = page + (e & 0xFFF);
             if (!t) continue;
             if (t != 10) FAIL("relocation type %u at +0x%x", t, rva);
-            if (rva / PE_PAGE >= npages || kinds[rva / PE_PAGE] != 2) FAIL("relocation in a code page at +0x%x", rva);
+            if (rva / PE_PAGE >= npages || rva / PE_PAGE < split) FAIL("relocation in __TEXT at +0x%x", rva);
             uint64_t v = rd64(img + rva) + (uint64_t)delta;
             memcpy(img + rva, &v, 8);
             nrel++;
@@ -194,7 +234,7 @@ static bool pe_load(const char *path, pe_image *pe, char *err, size_t errlen) {
             for (size_t k = 0; k < sizeof g_host_exports / sizeof g_host_exports[0]; k++)
                 if (!strcmp(g_host_exports[k].name, name)) fn = g_host_exports[k].fn;
             if (!fn) FAIL("unresolved import %s!%s", dll, name);
-            if (kinds[(iat + 8 * i) / PE_PAGE] != 2) FAIL("IAT in a code page");
+            if ((iat + 8 * i) / PE_PAGE < split) FAIL("IAT in __TEXT");
             memcpy(img + iat + 8 * i, &fn, 8);
             nimp++;
         }
@@ -216,7 +256,7 @@ static bool pe_load(const char *path, pe_image *pe, char *err, size_t errlen) {
         for (size_t k = 0; k < sizeof slots / sizeof slots[0]; k++) {
             uint32_t rva = rd32(meta + 4 * slots[k].idx);
             if (!rva) continue;
-            if (kinds[rva / PE_PAGE] != 2) FAIL("EC pointer %s in a code page", slots[k].what);
+            if (rva / PE_PAGE < split) FAIL("EC pointer %s in __TEXT", slots[k].what);
             void *fn = slots[k].idx == 7 ? (void *)mid_ec_check_call
                      : (slots[k].idx == 8 || slots[k].idx == 9) ? (void *)mid_ec_check_icall
                      : (void *)mid_ec_enter_x64;
@@ -229,13 +269,17 @@ static bool pe_load(const char *path, pe_image *pe, char *err, size_t errlen) {
         mid_log("[pe-dylib] note: x64/ARM64EC machine but no CHPE metadata");
     }
 
-    // 5. Read-only sections back to read-only.
+    // 5. __DATA pages that hold no writable section go back to read-only.
     for (uint32_t i = 0; i < pe->nsec; i++) {
         const uint8_t *s = pe->sec + 40 * i;
-        if (sec_is_code(s) || (rd32(s + 36) & SCN_MEM_WRITE) || !sec_span(s)) continue;
-        size_t len = (sec_span(s) + PE_PAGE - 1) & ~(size_t)(PE_PAGE - 1);
-        mprotect(img + sec_va(s), len, PROT_READ);
+        if (!(rd32(s + 36) & SCN_MEM_WRITE) || !sec_span(s)) continue;
+        for (size_t p = sec_va(s) / PE_PAGE; p <= (sec_va(s) + sec_span(s) - 1) / PE_PAGE && p < npages; p++)
+            kinds[p] |= 4;
     }
+    size_t ro = 0;
+    for (size_t p = split; p < npages; p++)
+        if (kinds[p] && !(kinds[p] & 4) && !mprotect(img + p * PE_PAGE, PE_PAGE, PROT_READ)) ro++;
+    mid_log("[pe-dylib] %zu read-only data pages protected", ro);
     free(kinds);
     return true;
 fail:
@@ -280,6 +324,80 @@ static uint64_t now_ns(void) {
     return mach_absolute_time() * tb.numer / tb.denom;
 }
 
+#define PCHECK(what, got, want)                                                                        \
+    do {                                                                                               \
+        const void *g_ = (got), *w_ = (want);                                                          \
+        mid_log("[pe-dylib] %s = %p (want %p) %s", what, g_, w_, g_ == w_ ? "ok" : "WRONG");           \
+        ok &= g_ == w_;                                                                                \
+    } while (0)
+
+// The spike's x18 functions, each rewritten at build time into a TEB trampoline.
+static bool check_x18(const pe_image *pe) {
+    void *(*self)(void) = pe_export(pe, "spike_teb_self");
+    void *(*mov)(void) = pe_export(pe, "spike_teb_mov");
+    void *(*add)(void) = pe_export(pe, "spike_teb_add");
+    void *(*index)(unsigned long long) = pe_export(pe, "spike_teb_index");
+    void (*store)(unsigned) = pe_export(pe, "spike_teb_store");
+    if (!self || !mov || !add || !index || !store) {
+        mid_log("[pe-dylib] x18: spike_teb_* exports missing");
+        return false;
+    }
+    uint8_t *teb = teb_current();
+    bool ok = true;
+    PCHECK("TSD slot sanity (no DLL code)", teb_via_tsd(teb_tsd_offset()), teb);
+    PCHECK("x18 ldr [x18,#0x30] (TEB->Self)", self(), teb);
+    PCHECK("x18 mov x0, x18", mov(), teb);
+    PCHECK("x18 add x0, x18, #0x68", add(), teb + 0x68);
+    PCHECK("x18 ldr [x18, x0, lsl #3] (index 6 = Self)", index(6), teb);
+    store(0x1234);
+    uint32_t v;
+    memcpy(&v, teb + 0x68, 4);
+    mid_log("[pe-dylib] x18 str w0, [x18,#0x68] wrote 0x%x (want 0x1234) %s", v, v == 0x1234 ? "ok" : "WRONG");
+    ok &= v == 0x1234;
+    return ok;
+}
+
+// Wine's real ntdll.dll (ARM64EC, Madeira's build), its x18 uses rewritten at build time.
+// Only self-contained functions: nothing here needs ntdll's own initialisation.
+static bool run_ntdll(const pe_image *pe, const char *name, char *line, size_t linelen) {
+    uint32_t (*crc)(uint32_t, const void *, int) = pe_export(pe, "RtlComputeCrc32");
+    void (*seterr)(uint32_t) = pe_export(pe, "RtlSetLastWin32Error");
+    uint32_t (*geterr)(void) = pe_export(pe, "RtlGetLastWin32Error");
+    size_t (*cmp)(const void *, const void *, size_t) = pe_export(pe, "RtlCompareMemory");
+    void *(*curteb)(void) = pe_export(pe, "NtCurrentTeb");
+    if (!crc || !seterr || !geterr || !cmp) {
+        mid_log("[pe-dylib] %s: missing exports", name);
+        snprintf(line, linelen, "%s: missing exports", name);
+        return false;
+    }
+    uint8_t *teb = teb_current();
+    bool ok = true;
+    PCHECK("TSD slot sanity (no DLL code)", teb_via_tsd(teb_tsd_offset()), teb);
+    mid_log("[pe-dylib] calling RtlComputeCrc32(0, \"123456789\", 9)");
+    uint32_t c = crc(0, "123456789", 9);
+    mid_log("[pe-dylib] RtlComputeCrc32 = 0x%08x (want 0xcbf43926) %s", c, c == 0xcbf43926u ? "ok" : "WRONG");
+    ok &= c == 0xcbf43926u;
+    mid_log("[pe-dylib] calling RtlCompareMemory");
+    size_t same = cmp("Windows on iPhone", "Windows on iPad", 17);
+    mid_log("[pe-dylib] RtlCompareMemory = %zu (want 13) %s", same, same == 13 ? "ok" : "WRONG");
+    ok &= same == 13;
+    mid_log("[pe-dylib] calling RtlSetLastWin32Error(1234): writes TEB->LastErrorValue through x18");
+    seterr(1234);
+    uint32_t v;
+    memcpy(&v, teb + 0x68, 4);
+    mid_log("[pe-dylib] TEB->LastErrorValue = %u (want 1234) %s", v, v == 1234 ? "ok" : "WRONG");
+    ok &= v == 1234;
+    v = 5678;
+    memcpy(teb + 0x68, &v, 4);
+    uint32_t g = geterr();
+    mid_log("[pe-dylib] RtlGetLastWin32Error() = %u (want 5678) %s", g, g == 5678 ? "ok" : "WRONG");
+    ok &= g == 5678;
+    if (curteb) PCHECK("NtCurrentTeb()", curteb(), teb);
+    mid_log("[pe-dylib] %s: %s", name, ok ? "PASSED (Wine's ntdll ran from a signed dylib)" : "FAILED");
+    snprintf(line, linelen, "%s: %s", name, ok ? "passed (Wine ntdll)" : "failed (see log)");
+    return ok;
+}
+
 static bool run_one(const char *path, const char *name, char *line, size_t linelen) {
     char err[256] = "";
     pe_image pe;
@@ -289,6 +407,7 @@ static bool run_one(const char *path, const char *name, char *line, size_t linel
         snprintf(line, linelen, "%s: load failed: %s", name, err);
         return false;
     }
+    if (strstr(name, "ntdll")) return run_ntdll(&pe, name, line, linelen);
     int (*add)(int, int) = pe_export(&pe, "spike_add");
     int (*counter)(void) = pe_export(&pe, "spike_counter");
     int (*words)(void) = pe_export(&pe, "spike_words_len");
@@ -317,6 +436,7 @@ static bool run_one(const char *path, const char *name, char *line, size_t linel
     CHECK("spike_import(21): import via IAT", imp(21), 42);
     if (g_host_log_calls != logs + 1) { mid_log("[pe-dylib] host_log was not called"); fails++; }
     CHECK("spike_callback(cb, 10): indirect call", cb(host_callback, 10), 31);
+    fails += !check_x18(&pe);
 
     // Benchmark kernels: inside the DLL vs. the app's native build (same source, same flags).
     int n = kcount() < mid_bench_count() ? kcount() : mid_bench_count();
@@ -360,10 +480,12 @@ bool mid_pe_dylib_spike(const char *dir, char *summary, size_t summary_len) {
         if (l > 6 && !strcmp(e->d_name + l - 6, ".dylib")) snprintf(names[count++], sizeof names[0], "%s", e->d_name);
     }
     closedir(d);
-    // aarch64 before arm64ec: the plain ARM64 image needs less of the loader.
+    // Spike aarch64, then spike arm64ec (needs more of the loader), then Wine's ntdll last.
     for (int i = 0; i + 1 < count; i++)
         for (int j = i + 1; j < count; j++)
-            if (strcmp(names[i], names[j]) > 0) {
+            if ((strstr(names[i], "ntdll") != NULL) - (strstr(names[j], "ntdll") != NULL) > 0 ||
+                ((strstr(names[i], "ntdll") != NULL) == (strstr(names[j], "ntdll") != NULL) &&
+                 strcmp(names[i], names[j]) > 0)) {
                 char t[128];
                 memcpy(t, names[i], sizeof t); memcpy(names[i], names[j], sizeof t); memcpy(names[j], t, sizeof t);
             }

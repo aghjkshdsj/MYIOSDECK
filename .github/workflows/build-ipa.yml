@@ -115,6 +115,10 @@ jobs:
           mkdir -p build
           python3 engine/pedylib/pe2dylib.py audit engine/wine/madeira/app/Madeira/arm64ec-windows/*.dll \
             --md "$GITHUB_STEP_SUMMARY" --json build/pe-audit.json | head -30
+          # The first real Wine DLL for the no-JIT test: ntdll (no imports), x18 rewritten.
+          mkdir -p App/Generated/pedylib
+          python3 engine/pedylib/pe2dylib.py convert engine/wine/madeira/app/Madeira/arm64ec-windows/ntdll.dll \
+            App/Generated/pedylib | tail -4
 
       - name: Build without Wine
         if: steps.wine.outcome != 'success'
