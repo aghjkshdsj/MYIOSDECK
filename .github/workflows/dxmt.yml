@@ -49,6 +49,9 @@ jobs:
         id: dxmt
         run: bash engine/dxmt/build-unix.sh dxmt
 
+      - name: D3D12 test program
+        run: bash engine/dxmt/build-unix.sh tests
+
       - name: Collect
         run: bash engine/dxmt/build-unix.sh collect
 

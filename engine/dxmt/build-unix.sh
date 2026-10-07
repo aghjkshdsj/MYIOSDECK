@@ -5,6 +5,7 @@
 #   llvm    LLVM 15 libraries for iOS arm64 (host llvm-tblgen first)
 #   metal   Metal toolchain component (Xcode 26 ships it separately)
 #   dxmt    Madeira build/dxmt-ios/build.sh -> combined with LLVM -> libdxmt_combined.a
+#   tests   d3d12-cube-x64.exe with colour writes enabled (llvm-mingw)
 #   collect engine/dxmt/out
 # The Windows-side DXMT DLLs (d3d11, dxgi, winemetal, d3d12) are prebuilt in
 # Madeira's ARM64EC DLL farm and match this commit.
@@ -97,9 +98,32 @@ step_dxmt() {
     ls -la "$D/libdxmt_combined.a"
 }
 
+# Madeira's d3d12-cube-x64.exe zeroes its pipeline desc and never sets
+# RenderTargetWriteMask, so on D3D12 (and on Windows) it draws nothing but the
+# clear colour. Rebuild it with colour writes enabled; stage-app.sh ships it.
+step_tests() {
+    # shellcheck disable=SC1091
+    source "$ROOT/engine/wine/PIN"
+    local TC="$T/$LLVM_MINGW/bin" W="$M/madeira-d3d12/tests/windows" B="$M/build/d3d12-tests"
+    if [ ! -x "$TC/x86_64-w64-mingw32-clang" ]; then
+        curl -fsSL -o "$T/llvm-mingw.tar.xz" "$LLVM_MINGW_URL"
+        echo "$LLVM_MINGW_SHA256  $T/llvm-mingw.tar.xz" | shasum -a 256 -c -
+        tar -C "$T" -xf "$T/llvm-mingw.tar.xz"
+        rm "$T/llvm-mingw.tar.xz"
+    fi
+    mkdir -p "$B"
+    perl -pe 's/^(\s*)(pd\.NumRenderTargets = 1;)/$1$2\n$1pd.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;/' \
+        "$W/cube_window.c" > "$B/cube_window.c"
+    grep -q 'RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL' "$B/cube_window.c"
+    "$TC/x86_64-w64-mingw32-clang" -O2 -Wall -mwindows \
+        -o "$B/d3d12-cube-x64.exe" "$B/cube_window.c" -I"$W" -luuid -lole32
+    ls -la "$B/d3d12-cube-x64.exe"
+}
+
 step_collect() {
     mkdir -p "$OUT"
     cp "$M/build/dxmt-ios/libdxmt_combined.a" "$OUT/"
+    cp "$M/build/d3d12-tests/d3d12-cube-x64.exe" "$OUT/"
     git -C "$M" rev-parse HEAD > "$OUT/MADEIRA_SHA"
     ls -la "$OUT"
 }
@@ -109,7 +133,8 @@ case "${1:-all}" in
     llvm) step_llvm ;;
     metal) step_metal ;;
     dxmt) step_dxmt ;;
+    tests) step_tests ;;
     collect) step_collect ;;
-    all) step_fetch; step_llvm; step_metal; step_dxmt; step_collect ;;
+    all) step_fetch; step_llvm; step_metal; step_dxmt; step_tests; step_collect ;;
     *) echo "unknown step $1"; exit 2 ;;
 esac
