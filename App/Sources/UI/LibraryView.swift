@@ -22,7 +22,7 @@ struct LibraryView: View {
     private let stages = [
         Stage(id: 1, title: "JIT + FEX x86-64 translation", detail: "StikDebug JIT pool, FEXCore tuned to the A17 Pro, benchmarks, plus a no-JIT interpreter. Verified on iPhone 15 Pro Max / iOS 27.", done: true),
         Stage(id: 2, title: "Wine ARM64EC (Windows)", detail: "Wine running natively on ARM64 in-process, wineserver as a thread, FEX as xtajit64.dll for x86-64 code. Verified on device (build 20).", done: true),
-        Stage(id: 3, title: "Direct3D 9/10/11/12 on Metal", detail: "DXMT for D3D9-11 and Madeira's D3D12 converter are in the app; the D3D11/D3D12 cubes are the first test.", done: false),
+        Stage(id: 3, title: "Direct3D 9/10/11/12 on Metal", detail: "DXMT for D3D9-11 and Madeira's D3D12 converter. D3D11 and D3D12 cubes render at 60 fps on device (builds 21-22).", done: true),
         Stage(id: 4, title: "Steam", detail: "Steam sign-in (QR or password + Steam Guard), owned library, depot downloads, cloud saves, launch through Valve's Windows client.", done: false),
         Stage(id: 5, title: "Deck input", detail: "Bluetooth controllers as XInput, touch controls, keyboard and mouse.", done: false),
     ]
@@ -43,7 +43,7 @@ struct LibraryView: View {
                 }
                 windowsCard
                 DeckCard(title: "Steam library", icon: "gamecontroller.fill") {
-                    Text("Steam sign-in and your owned games arrive with stage 4. Steam games run through Wine (stage 2) and need Direct3D on Metal (stage 3) first.")
+                    Text("Steam sign-in and your owned games arrive with stage 4. Wine (stage 2) and Direct3D on Metal (stage 3) are ready for them.")
                         .font(.subheadline).foregroundStyle(Deck.dim)
                 }
                 DeckCard(title: "Road to Steam games", icon: "map.fill") {
