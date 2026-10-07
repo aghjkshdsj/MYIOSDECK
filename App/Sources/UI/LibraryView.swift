@@ -86,13 +86,16 @@ struct LibraryView: View {
         DeckCard(title: "Steam", icon: "gamecontroller.fill") {
             if let name = steam.accountName {
                 HStack {
-                    StatusRow(label: "Signed in as \(name)", detail: "Tap a game to install it. Play comes next in stage 4.", level: .good)
+                    StatusRow(label: "Signed in as \(name)", detail: "Tap a game to install or play it.", level: .good)
                     Button("Sign out") { steam.signOut() }
                         .buttonStyle(DeckButtonStyle())
                         .frame(width: 110)
                 }
                 Divider().overlay(Deck.panelHi)
-                SteamGamesGrid(library: steamLibrary)
+                SteamGamesGrid(library: steamLibrary, playBlocker: steamPlayBlocker, onPlay: playSteam)
+                if let playError {
+                    StatusRow(label: "Could not start the game", detail: playError, level: .bad)
+                }
             } else {
                 Text("Sign in with your Steam account name and password (Steam Guard supported) or a QR code from the Steam app. The sign-in token stays in this device's Keychain; the password is never stored.")
                     .font(.subheadline).foregroundStyle(Deck.dim)
@@ -102,6 +105,35 @@ struct LibraryView: View {
         }
         .sheet(isPresented: $showSteamSignIn) { SteamSignInView() }
         .onAppear { steamLibrary.start() }
+    }
+
+    @State private var playError: String?
+
+    private var steamPlayBlocker: String? {
+        if !wine.linked { return "This build does not include Wine." }
+        if !jit.isReady { return "Play needs JIT: enable it on Home first." }
+        switch wine.state {
+        case .booting, .running, .finished: return "Wine already ran a program in this session. Restart MYIOSDECK to play."
+        default: return nil
+        }
+    }
+
+    /// Stage 4d: direct start of an installed Steam game on the game surface.
+    private func playSteam(_ game: OwnedSteamGame) {
+        playError = nil
+        Task { @MainActor in
+            do {
+                let plan = try await steamLibrary.launchPlan(game.id)
+                wine.runSteamGame(appID: game.id, title: game.name, plan: plan)
+                guard case .booting = wine.state else { return }
+                // Let the game sheet finish closing before the surface is presented.
+                try? await Task.sleep(for: .milliseconds(600))
+                surfaceTitle = game.name
+                showSurface = true
+            } catch {
+                playError = error.localizedDescription
+            }
+        }
     }
 
     private var windowsCard: some View {

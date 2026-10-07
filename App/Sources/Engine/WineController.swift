@@ -31,14 +31,27 @@ final class WineController: ObservableObject, @unchecked Sendable {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("wine-prefix")
     }
 
-    func run(_ program: Program) {
-        guard linked else {
-            state = .failed("This build does not include Wine yet.")
-            return
+    /// Stage 4d: a Steam game started as its own program (no Steam client). The
+    /// bridge publishes its identity (SteamAppId / SteamGameId / SteamAppPath)
+    /// and starts it in Steam's working folder; it reads and clears these.
+    func runSteamGame(appID: Int, title: String, plan: SteamLaunchPlan) {
+        setenv("MADEIRA_STEAM_APPID", String(appID), 1)
+        setenv("MADEIRA_STEAM_APPPATH", plan.appPath, 1)
+        setenv("MADEIRA_WORKDIR", plan.workingFolder, 1)
+        run(Program(id: plan.exe, title: title, detail: "", graphics: true), args: plan.arguments)
+    }
+
+    func run(_ program: Program, args: String = "") {
+        // Per-launch variables (runSteamGame) must not outlive a launch that never boots.
+        func refuse(_ why: String) {
+            for k in ["MADEIRA_STEAM_APPID", "MADEIRA_STEAM_APPPATH", "MADEIRA_WORKDIR"] { unsetenv(k) }
+            state = .failed(why)
         }
-        if case .running = state {
-            state = .failed("Wine is already running a program. Restart MYIOSDECK to run another.")
-            return
+        guard linked else { return refuse("This build does not include Wine yet.") }
+        switch state {
+        case .booting, .running, .finished:
+            return refuse("Wine already ran a program in this session. Restart MYIOSDECK to run another.")
+        default: break
         }
         state = .booting(program.title)
         // DXMT takes the layer when the program creates its swapchain.
@@ -47,7 +60,7 @@ final class WineController: ObservableObject, @unchecked Sendable {
         dlog("[wine] booting \(program.id) in \(prefix)")
         queue.async {
             var err = [CChar](repeating: 0, count: 512)
-            let ok = mid_wine_boot(prefix, program.id, "", &err, err.count)
+            let ok = mid_wine_boot(prefix, program.id, args, &err, err.count)
             let msg = String(cString: err)
             DispatchQueue.main.async {
                 self.state = ok ? .running(program.title) : .failed(msg)

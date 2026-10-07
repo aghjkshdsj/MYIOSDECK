@@ -11,6 +11,10 @@ struct OwnedSteamGame: Codable, Identifiable, Hashable, Sendable {
     var libraryCapsule: String?
     var headerImage: String?
     var parentID: Int?
+    /// Steam's launch configuration (config.launch); nil in caches from before 4d.
+    var launches: [SteamLaunchOption]?
+
+    var folderName: String { SteamInstallFiles.safeFolderName(installDir.isEmpty ? "app_\(id)" : installDir) }
 
     init(_ info: SteamAppInfo) {
         id = Int(info.appID)
@@ -20,7 +24,16 @@ struct OwnedSteamGame: Codable, Identifiable, Hashable, Sendable {
         libraryCapsule = info.libraryCapsule
         headerImage = info.headerImage
         parentID = info.parentID.map(Int.init)
+        launches = info.launches
     }
+}
+
+/// What Play starts for a direct Steam start (stage 4d): Windows paths in the prefix.
+struct SteamLaunchPlan {
+    var exe: String          // C:\Program Files (x86)\Steam\steamapps\common\<dir>\<program>
+    var arguments: String
+    var workingFolder: String
+    var appPath: String      // the install folder, for SteamAppPath
 }
 
 /// Stage 4b: the account's owned library, from Steam's own CM connection
@@ -158,9 +171,44 @@ final class SteamLibrary: ObservableObject {
         if active?.id == appID { active?.task.cancel() } else { downloads[appID] = nil }
     }
 
+    // MARK: Play (stage 4d, direct start)
+
+    enum PlayError: LocalizedError {
+        case notInstalled, noProgram
+        var errorDescription: String? {
+            switch self {
+            case .notInstalled: return "The game is not installed."
+            case .noProgram: return "Steam's launch configuration names no Windows program in the install folder."
+            }
+        }
+    }
+
+    /// The program Steam's launch configuration names (SteamDirectStart.choose),
+    /// as Windows paths. Asks Steam for the configuration when the cache lacks it.
+    func launchPlan(_ appID: Int) async throws -> SteamLaunchPlan {
+        guard var game = game(appID), installedBuild(appID) != nil else { throw PlayError.notInstalled }
+        if game.launches == nil, let info = try await fetcher.fetchInstallInfo(appID: UInt32(appID)) {
+            game.launches = info.launches
+            if let i = games.firstIndex(where: { $0.id == appID }) { games[i].launches = info.launches }
+        }
+        let root = SteamInstallPaths.common(drive: Self.drive).appendingPathComponent(game.folderName, isDirectory: true)
+        guard let choice = SteamDirectStart.choose(game.launches ?? [], installFolder: root) else { throw PlayError.noProgram }
+        let win = { (rel: String) in rel.replacingOccurrences(of: "/", with: "\\") }
+        let appPath = "C:\\" + win(SteamInstallPaths.libraryRelative) + "\\common\\" + game.folderName
+        let exe = appPath + "\\" + win(choice.program)
+        let folder: String
+        switch choice.folder {
+        case nil: folder = String(exe[..<exe.lastIndex(of: "\\")!])     // the program's own folder
+        case ""?: folder = appPath
+        case let f?: folder = appPath + "\\" + win(f)
+        }
+        dlog("[steam-play] app=\(appID) program=\(choice.program) launch=\(choice.launchIndex.map(String.init) ?? "-")")
+        return SteamLaunchPlan(exe: exe, arguments: choice.arguments, workingFolder: folder, appPath: appPath)
+    }
+
     func uninstall(_ appID: Int) {
         guard downloads[appID] == nil, let game = game(appID) else { return }
-        let folder = game.installDir.isEmpty ? "app_\(appID)" : game.installDir, apps = Self.steamApps
+        let folder = game.folderName, apps = Self.steamApps
         Task.detached(priority: .utility) {
             SteamInstallFiles.delete(appID: appID, folderName: folder, steamApps: apps)
             await MainActor.run { self.installGeneration += 1 }

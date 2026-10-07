@@ -34,6 +34,9 @@ struct SteamCover: View {
 /// Stage 4b: the signed-in account's Windows games.
 struct SteamGamesGrid: View {
     @ObservedObject var library: SteamLibrary
+    /// Why Play is unavailable (no JIT, Wine busy), or nil.
+    var playBlocker: String?
+    var onPlay: (OwnedSteamGame) -> Void = { _ in }
     @State private var filter = ""
 
     private var shown: [OwnedSteamGame] {
@@ -76,7 +79,7 @@ struct SteamGamesGrid: View {
                 }
             }
         }
-        .sheet(item: $selected) { SteamGameSheet(game: $0, library: library) }
+        .sheet(item: $selected) { SteamGameSheet(game: $0, library: library, playBlocker: playBlocker, onPlay: onPlay) }
     }
 
     @State private var selected: OwnedSteamGame?
@@ -99,10 +102,12 @@ struct SteamGamesGrid: View {
     }
 }
 
-/// One owned game: install, cancel, uninstall (stage 4c). Play arrives with 4d.
+/// One owned game: play (4d, direct start), install, cancel, uninstall (4c).
 struct SteamGameSheet: View {
     let game: OwnedSteamGame
     @ObservedObject var library: SteamLibrary
+    var playBlocker: String?
+    var onPlay: (OwnedSteamGame) -> Void
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -113,7 +118,7 @@ struct SteamGameSheet: View {
                         SteamCover(urls: library.artwork(game.id), title: game.name).frame(width: 120)
                         VStack(alignment: .leading, spacing: 6) {
                             Text(game.name).font(.title3.weight(.bold))
-                            Text("App ID \(game.id)").font(.caption).foregroundStyle(Deck.dim)
+                            Text("App ID \(String(game.id))").font(.caption).foregroundStyle(Deck.dim)
                             if let size = library.installedSize(game.id), library.installedBuild(game.id) != nil {
                                 Text("Installed, \(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))")
                                     .font(.caption).foregroundStyle(Deck.dim)
@@ -121,7 +126,7 @@ struct SteamGameSheet: View {
                         }
                     }
                     state
-                    Text("Games install into MYIOSDECK's Windows drive (C:\\Program Files (x86)\\Steam\\steamapps). Keep the app open while downloading: iOS pauses downloads in the background, and Install picks up where it stopped. Playing arrives in the next update.")
+                    Text("Games install into MYIOSDECK's Windows drive (C:\\Program Files (x86)\\Steam\\steamapps). Keep the app open while downloading: iOS pauses downloads in the background, and Install picks up where it stopped. Play starts the game's own program in Wine without the Steam client, so games that need Steam running (most online and DRM-protected ones) will not start yet.")
                         .font(.caption).foregroundStyle(Deck.dim)
                 }
                 .padding(16)
@@ -147,7 +152,12 @@ struct SteamGameSheet: View {
             Button("Retry") { library.install(game.id) }.buttonStyle(DeckButtonStyle())
         case nil:
             if library.installedBuild(game.id) != nil {
-                StatusRow(label: "Installed", detail: "Ready for Play (next update).", level: .good)
+                Button("Play") { dismiss(); onPlay(game) }
+                    .buttonStyle(DeckButtonStyle())
+                    .disabled(playBlocker != nil)
+                if let playBlocker {
+                    Text(playBlocker).font(.caption).foregroundStyle(Deck.dim)
+                }
                 Button("Check for update / repair") { library.install(game.id) }.buttonStyle(DeckButtonStyle())
                 Button("Uninstall", role: .destructive) { library.uninstall(game.id) }
             } else {
