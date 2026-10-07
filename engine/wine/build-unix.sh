@@ -84,7 +84,8 @@ step_deps() {
 step_ntdll() {
     # No-JIT step B: map PE images from signed dylibs when WINE_IOS_NOJIT=1
     # (engine/wine/patches/nojit_dylib.py). Start from the pristine file: the checkout is cached.
-    git -C "$M" checkout -- build/ntdll-unix/virtual_ios.c build/ntdll-unix/loader_ios.c build/ntdll-unix/process_ios.c
+    git -C "$M" checkout -- build/ntdll-unix/virtual_ios.c build/ntdll-unix/loader_ios.c build/ntdll-unix/process_ios.c \
+        build/ntdll-unix/env_ios.c
     python3 "$HERE/patches/nojit_dylib.py" "$M"
     # putenv() must not keep stack/freed buffers: iOS has no exec (engine/wine/patches/putenv_lifetime.py).
     python3 "$HERE/patches/putenv_lifetime.py" "$M"

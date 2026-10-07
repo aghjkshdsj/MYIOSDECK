@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""putenv() keeps the caller's buffer as part of the process environment. Wine's unix side
+"""Process-wide strings must outlive the Wine thread (putenv, setprogname).
+
+putenv() keeps the caller's buffer as part of the process environment. Wine's unix side
 passes it stack buffers (exec_wineloader) and a heap string that is freed later (winedebug):
 harmless on Linux, where exec() replaces the process right after, but on iOS there is no
 exec, so the environment ends up pointing into a dead thread's stack. iOS's own code scans
@@ -21,6 +23,14 @@ FIXES = {
     "build/ntdll-unix/process_ios.c": [
         ("if (winedebug) putenv( winedebug );",
          "if (winedebug) putenv( strdup( winedebug ) );   /* MYIOSDECK: winedebug is freed later */", 2),
+    ],
+    # setprogname() keeps the pointer too, and set_process_name hands it the exe path from a
+    # buffer on the bridge's Wine thread stack. Once that thread exits, getprogname() dangles
+    # and iOS frameworks that format the process name crash (build 53: the share sheet's
+    # CTMessageCenter init; build 52: the keyboard's network-availability check).
+    "build/ntdll-unix/env_ios.c": [
+        ("    setprogname( name );\n",
+         "    setprogname( strdup( name ) );   /* MYIOSDECK: name lives on a thread stack that ends */\n", 1),
     ],
 }
 
