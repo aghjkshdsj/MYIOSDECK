@@ -9,23 +9,25 @@ struct SteamCover: View {
     @State private var index = 0
 
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 8).fill(Deck.panelHi)
-            if index < urls.count {
-                AsyncImage(url: urls[index]) { phase in
-                    switch phase {
-                    case .success(let image): image.resizable().aspectRatio(contentMode: .fill)
-                    case .failure: Color.clear.onAppear { index += 1 }
-                    default: ProgressView()
+        // The 2:3 frame sets the size; the image only fills and is cropped to
+        // it, so a wide header-image fallback cannot spill into the next tile.
+        Deck.panelHi
+            .aspectRatio(2 / 3, contentMode: .fit)
+            .overlay {
+                if index < urls.count {
+                    AsyncImage(url: urls[index]) { phase in
+                        switch phase {
+                        case .success(let image): image.resizable().scaledToFill()
+                        case .failure: Color.clear.onAppear { index += 1 }
+                        default: ProgressView()
+                        }
                     }
+                    .id(index)
+                } else {
+                    Text(title).font(.caption.weight(.semibold)).multilineTextAlignment(.center).padding(6)
                 }
-                .id(index)
-            } else {
-                Text(title).font(.caption.weight(.semibold)).multilineTextAlignment(.center).padding(6)
             }
-        }
-        .aspectRatio(2 / 3, contentMode: .fit)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }
 
