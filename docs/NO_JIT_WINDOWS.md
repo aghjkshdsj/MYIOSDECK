@@ -37,6 +37,19 @@ the A17 Pro, build 39) and native, depending on how much time it spends in its o
   the TSD slot fixed at 275, offset 0x898). This is the main Step A job;
 - 6 hand-written TEB reads, all in `xtajit64.dll` (FEX), which FXI replaces anyway.
 
+**Build 43, iPhone 15 Pro Max, JIT off:** both spike DLLs (ARM64 and ARM64EC) loaded from
+signed dylibs and passed every check; their benchmark kernels ran at native speed (99–101%,
+checksums match). Build 42 showed that iOS refuses `mmap(MAP_FIXED)` over pages dyld mapped,
+hence the `__TEXT`/`__DATA` split.
+
+**x18 at build time (build 44):** `pe2dylib.py convert` rewrites every x18 use in ARM64 code
+(the ARM64EC code map excludes x64 thunks) into `b` to a signed trampoline placed just before
+the image: push two scratch registers, `mrs TPIDRRO_EL0`, load the TEB from the TSD slot whose
+offset the loader stores in the dylib, run the instruction on the scratch register, restore,
+branch back. All 11,196 sites in Madeira's DLLs are handled; 141 of 149 DLLs are then ready
+(7 D3D/Metal DLLs have one shared code/data page each, xtajit64 has FEX's TSD reads). Build 44
+also loads Wine's real `ntdll.dll` this way (743 sites rewritten) and calls into it.
+
 ARM64EC exports point at x64 "fast-forward" thunks in `.hexpthk`; a native caller
 follows their `jmp` (as Wine's `arm64x_check_call` does). The spike loader does the same.
 
