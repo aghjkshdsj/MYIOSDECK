@@ -148,6 +148,8 @@ int fxi_cond(FxiCpu *c, unsigned cc);        // x86 condition code 0-15
 extern Block *fxi_stop;                         // one "stop" uop: leaves the dispatch chain
 Block *fxi_lookup(FxiCpu *c, uint64_t rip);     // translate on miss; fxi_stop on error
 Block *fxi_translate(struct Fxi *vm, uint64_t rip);
+int fxi_insn_length(const uint8_t *p, int *op_end);   // x86-64 length (0: invalid)
+int fxi_probe(const uint8_t *p, uint64_t rip, char *why, size_t why_len);   // 1: FXI decodes it
 void fxi_fail(FxiCpu *c, const char *fmt, ...); // set c->stop and the error text
 long fxi_syscall(FxiCpu *c);                    // Linux syscall in RAX/RDI/...; returns result
 struct Fxi *fxi_vm_new(void);                   // empty block cache, stop block ready

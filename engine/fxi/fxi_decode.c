@@ -711,6 +711,109 @@ static int decode_one(Dec *d) {
     return ended;
 }
 
+// ---- x86-64 instruction length, independent of what FXI implements ----
+// Keeps a linear sweep (fxi --scan-pe) in step after an instruction FXI rejects.
+// Returns the length (0: invalid/unknown); *op_end = bytes up to and including the opcode.
+int fxi_insn_length(const uint8_t *p, int *op_end) {
+    const uint8_t *s = p;
+    int osz16 = 0, rexw = 0;
+    for (;; p++) {
+        uint8_t b = *p;
+        if (b == 0x66) osz16 = 1;
+        else if (b == 0x67 || b == 0xf0 || b == 0xf2 || b == 0xf3 || b == 0x2e || b == 0x36 ||
+                 b == 0x3e || b == 0x26 || b == 0x64 || b == 0x65) { }
+        else break;
+        if (p - s > 14) return 0;
+    }
+    if ((*p & 0xf0) == 0x40) { rexw = (*p >> 3) & 1; p++; }
+    int immz = osz16 ? 2 : 4, has_modrm = 0, imm = 0, map = 0;
+    uint8_t b = *p++;
+    if (b == 0xc4 || b == 0xc5 || b == 0x62) {   // VEX / EVEX
+        if (b == 0xc5) { map = 1; p += 1; }
+        else if (b == 0xc4) { map = p[0] & 0x1f; p += 2; }
+        else { map = p[0] & 7; p += 3; }
+        b = *p++;
+        has_modrm = 1;
+        if (map == 3) imm = 1;
+        else if (map == 1 && (b == 0x70 || b == 0x71 || b == 0x72 || b == 0x73 || b == 0xc2 || b == 0xc4 || b == 0xc5 || b == 0xc6)) imm = 1;
+    } else if (b == 0x0f) {
+        b = *p++;
+        if (b == 0x38) { p++; has_modrm = 1; }
+        else if (b == 0x3a) { p++; has_modrm = 1; imm = 1; }
+        else if (b == 0x0f) { has_modrm = 1; imm = 1; }   // 3DNow!
+        else if (b >= 0x80 && b <= 0x8f) imm = 4;
+        else if (b == 0x05 || b == 0x06 || b == 0x07 || b == 0x08 || b == 0x09 || b == 0x0b || b == 0x0e ||
+                 (b >= 0x30 && b <= 0x37) || b == 0x77 || b == 0xa0 || b == 0xa1 || b == 0xa2 || b == 0xa8 ||
+                 b == 0xa9 || b == 0xaa || (b >= 0xc8 && b <= 0xcf)) { }
+        else {
+            has_modrm = 1;
+            if ((b >= 0x70 && b <= 0x73) || b == 0xa4 || b == 0xac || b == 0xba || b == 0xc2 || b == 0xc4 ||
+                b == 0xc5 || b == 0xc6) imm = 1;
+        }
+    } else {
+        if (b < 0x40) {
+            if ((b & 7) < 4) has_modrm = 1;
+            else if ((b & 7) == 4) imm = 1;
+            else if ((b & 7) == 5) imm = immz;
+            else if (b != 0x26 && b != 0x2e && b != 0x36 && b != 0x3e) return 0;   // invalid in 64-bit mode
+        }
+        else if (b <= 0x5f) { }
+        else if (b == 0x63 || (b >= 0x84 && b <= 0x8f) || (b >= 0xd0 && b <= 0xd3) || (b >= 0xd8 && b <= 0xdf) ||
+                 b == 0xfe || b == 0xff) has_modrm = 1;
+        else if (b == 0x68 || b == 0xe8 || b == 0xe9) imm = b == 0x68 ? immz : 4;
+        else if (b == 0x69 || b == 0x81 || b == 0xc7) { has_modrm = 1; imm = immz; }
+        else if (b == 0x6b || b == 0x80 || b == 0x83 || b == 0xc0 || b == 0xc1 || b == 0xc6) { has_modrm = 1; imm = 1; }
+        else if (b == 0x6a || (b >= 0x70 && b <= 0x7f) || b == 0xa8 || (b >= 0xb0 && b <= 0xb7) || b == 0xcd ||
+                 (b >= 0xe0 && b <= 0xe7) || b == 0xeb) imm = 1;
+        else if (b == 0xa9) imm = immz;
+        else if (b >= 0xa0 && b <= 0xa3) imm = 8;
+        else if (b >= 0xb8 && b <= 0xbf) imm = rexw ? 8 : immz;
+        else if (b == 0xc2 || b == 0xca) imm = 2;
+        else if (b == 0xc8) imm = 3;
+        else if (b == 0xf6 || b == 0xf7) {
+            has_modrm = 1;
+            if (((p[0] >> 3) & 7) <= 1) imm = b == 0xf6 ? 1 : immz;
+        }
+        else if ((b >= 0x6c && b <= 0x6f) || (b >= 0x90 && b <= 0x99) || (b >= 0x9b && b <= 0x9f) ||
+                 (b >= 0xa4 && b <= 0xa7) || (b >= 0xaa && b <= 0xaf) || b == 0xc3 || b == 0xc9 || b == 0xcb ||
+                 b == 0xcc || b == 0xcf || b == 0xd7 || (b >= 0xec && b <= 0xef) || b == 0xf1 || b == 0xf4 ||
+                 b == 0xf5 || (b >= 0xf8 && b <= 0xfd)) { }
+        else return 0;
+    }
+    if (op_end) *op_end = (int)(p - s);
+    if (has_modrm) {
+        uint8_t m = *p++;
+        int mod = m >> 6, rm = m & 7;
+        if (mod != 3) {
+            if (rm == 4) { uint8_t sib = *p++; if (mod == 0 && (sib & 7) == 5) p += 4; }
+            else if (mod == 0 && rm == 5) p += 4;
+            if (mod == 1) p += 1; else if (mod == 2) p += 4;
+        }
+    }
+    p += imm;
+    return (int)(p - s);
+}
+
+// Does FXI's decoder accept the instruction at host address p (decoded as if at rip)?
+// Returns 1 and leaves why empty if so; else 0 with the decoder's reason in why.
+int fxi_probe(const uint8_t *p, uint64_t rip, char *why, size_t why_len) {
+    Dec *d = malloc(sizeof *d);
+    d->p = p; d->rip = rip; d->n = 0; d->fuse_at = -1;
+    decode_one(d);
+    OpFn ud = named("fail_ud");
+    int ok = 1;
+    why[0] = 0;
+    for (int i = 0; i < d->n; i++) {
+        if (d->u[i].fn != ud) continue;
+        char *msg = (char *)(uintptr_t)d->u[i].imm;
+        snprintf(why, why_len, "%s", msg);
+        free(msg);
+        ok = 0;
+    }
+    free(d);
+    return ok;
+}
+
 Block *fxi_translate(struct Fxi *vm, uint64_t rip) {
     Dec *d = malloc(sizeof *d);
     d->p = (const uint8_t *)(uintptr_t)rip;

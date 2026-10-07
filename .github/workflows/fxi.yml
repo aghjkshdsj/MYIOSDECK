@@ -29,3 +29,16 @@ jobs:
         run: bash engine/fxi/build.sh "$RUNNER_TEMP/fxi"
       - name: Native vs FXI
         run: bash engine/fxi/ci-test.sh "$RUNNER_TEMP/guests" "$RUNNER_TEMP/fxi/fxi"
+      # Static to-do list for Windows x64 code: every function in .pdata decoded by FXI.
+      # Madeira's own x64 test programs, at the pinned commit (engine/wine/PIN).
+      - name: Scan Windows x64 test programs
+        if: always()
+        run: |
+          . engine/wine/PIN
+          mkdir -p "$RUNNER_TEMP/pe"
+          for exe in hello-x64 fib-x64 clocktest-x64 heap-x64 fileio-x64 calltest-x64 fpconf-x64 child-test-x64 cube-x64 d3d12-cube-x64; do
+            curl -fsSL -o "$RUNNER_TEMP/pe/$exe.exe" \
+              "https://raw.githubusercontent.com/willfaust/Madeira/$MADEIRA_SHA/app/Madeira/arm64ec-windows/$exe.exe" || echo "no $exe"
+          done
+          { echo "## FXI static scan of Windows x64 programs"; echo; } >> "$GITHUB_STEP_SUMMARY"
+          "$RUNNER_TEMP/fxi/fxi" --scan-pe "$RUNNER_TEMP"/pe/*.exe | tee -a "$GITHUB_STEP_SUMMARY"
