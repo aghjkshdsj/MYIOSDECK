@@ -1,0 +1,66 @@
+name: Astra independent interpreter
+on:
+  push:
+    branches: ['gpt-astra/**']
+    paths: ['engine/astra/**', '.github/workflows/astra.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: astra-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  guest-fixtures:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build unchanged x86 guests
+        run: |
+          bash engine/guest/build.sh "$RUNNER_TEMP/astra-guests"
+          "$RUNNER_TEMP/astra-guests/hello.elf" > "$RUNNER_TEMP/astra-guests/hello-native.txt"
+          objdump -d "$RUNNER_TEMP/astra-guests/bench_sse2.elf" > "$RUNNER_TEMP/astra-guests/bench-disassembly.txt"
+          objdump -d "$RUNNER_TEMP/astra-guests/hello.elf" > "$RUNNER_TEMP/astra-guests/hello-disassembly.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: astra-x86-fixtures
+          path: ${{ runner.temp }}/astra-guests
+  compare:
+    needs: guest-fixtures
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: astra-x86-fixtures
+          path: ${{ runner.temp }}/astra-guests
+      - name: Toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang
+          chmod +x "$RUNNER_TEMP/astra-guests/"*.elf
+      - name: Build Astra and native ARM driver
+        run: bash engine/astra/build.sh "$RUNNER_TEMP/astra-bin"
+      - name: Build unchanged FXI in the same job
+        run: bash engine/fxi/build.sh "$RUNNER_TEMP/astra-fxi"
+      - name: Correctness and median performance
+        run: bash engine/astra/ci-test.sh "$RUNNER_TEMP/astra-guests" "$RUNNER_TEMP/astra-bin/astra" "$RUNNER_TEMP/astra-fxi/fxi" "$RUNNER_TEMP/astra-bin/native" "$RUNNER_TEMP/astra-results"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: astra-results-${{ matrix.os }}
+          path: ${{ runner.temp }}/astra-results
+  iphone-compile:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Compile all engine sources for iOS arm64
+        run: |
+          mkdir -p "$RUNNER_TEMP/astra-ios"
+          for source in astra decode vector; do
+            xcrun -sdk iphoneos clang -arch arm64 -O2 -ffp-contract=off -std=c++17 -c "engine/astra/$source.cpp" -o "$RUNNER_TEMP/astra-ios/$source.o"
+          done
