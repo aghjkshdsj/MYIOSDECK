@@ -31,6 +31,7 @@
 
 #include "bench.h"
 #include "jit_core.h"
+#include "pe_instance.h"
 
 #define PE_PAGE 0x4000u
 #define SCN_CNT_CODE 0x00000020u
@@ -152,13 +153,11 @@ static void *teb_via_tsd(uint64_t offset) {
 
 #define FAIL(...) do { snprintf(err, errlen, __VA_ARGS__); goto fail; } while (0)
 
-static bool pe_load(const char *path, pe_image *pe, char *err, size_t errlen) {
+// Steps 1-5 on one instance of the image (dyld's, or another from pe_instance.c).
+static bool pe_setup(pe_image *pe, uint8_t *img, uint8_t *data, uint8_t *end, uint8_t *tramps, uint64_t *teb_off,
+                     char *err, size_t errlen) {
     uint8_t *kinds = NULL;
     memset(pe, 0, sizeof *pe);
-    void *h = dlopen(path, RTLD_NOW | RTLD_LOCAL);
-    if (!h) FAIL("dlopen: %s", dlerror());
-    uint8_t *img = dlsym(h, "myiosdeck_pe_image"), *end = dlsym(h, "myiosdeck_pe_image_end");
-    uint8_t *data = dlsym(h, "myiosdeck_pe_data");
     if (!img || !end || !data) FAIL("no myiosdeck_pe_image/_data symbols in the dylib");
     if (img[0] != 'M' || img[1] != 'Z') FAIL("no MZ header at %p", (void *)img);
     const uint8_t *nt = img + rd32(img + 0x3C);
@@ -190,8 +189,6 @@ static bool pe_load(const char *path, pe_image *pe, char *err, size_t errlen) {
     }
     mid_log("[pe-dylib] %zu code pages signed RX in __TEXT, %zu data pages RW in __DATA from +0x%zx", code_pages,
             data_pages, split * PE_PAGE);
-    uint8_t *tramps = dlsym(h, "myiosdeck_x18_tramps");
-    uint64_t *teb_off = dlsym(h, "myiosdeck_teb_offset");
     if (!tramps || !teb_off) FAIL("no x18 trampoline / TEB offset symbols in the dylib");
     *teb_off = teb_tsd_offset();
     mid_log("[pe-dylib] x18: %zu KB of build-time trampolines; TEB at TSD offset 0x%llx", (size_t)(img - tramps) >> 10,
@@ -285,6 +282,14 @@ static bool pe_load(const char *path, pe_image *pe, char *err, size_t errlen) {
 fail:
     free(kinds);
     return false;
+}
+
+static bool pe_load(const char *path, pe_image *pe, void **handle, char *err, size_t errlen) {
+    void *h = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    *handle = h;
+    if (!h) { snprintf(err, errlen, "dlopen: %s", dlerror()); return false; }
+    return pe_setup(pe, dlsym(h, "myiosdeck_pe_image"), dlsym(h, "myiosdeck_pe_data"), dlsym(h, "myiosdeck_pe_image_end"),
+                    dlsym(h, "myiosdeck_x18_tramps"), dlsym(h, "myiosdeck_teb_offset"), err, errlen);
 }
 
 static void *pe_export(const pe_image *pe, const char *name) {
@@ -398,11 +403,40 @@ static bool run_ntdll(const pe_image *pe, const char *name, char *line, size_t l
     return ok;
 }
 
+// Step 4 (child processes) needs one set of DLLs per process: a second instance of the same
+// signed dylib, mapped by hand (pe_instance.c). Its code must run, and its data must be its own.
+static const char *run_instance(void *handle, const char *path, int first_counter) {
+    char err[256] = "";
+    mid_pe_instance in;
+    pe_image pe2;
+    mid_log("[pe-dylib] second instance: mapping %s again (signed code r-x from the file, fresh data)", path);
+    if (!mid_pe_dylib_instance(handle, path, &in, err, sizeof err)) {
+        mid_log("[pe-dylib] second instance: NOT POSSIBLE: %s", err);
+        return "second instance refused (see log)";
+    }
+    if (!pe_setup(&pe2, in.image, in.data, in.end, in.tramps, in.teb_offset, err, sizeof err)) {
+        mid_log("[pe-dylib] second instance: setup failed: %s", err);
+        return "second instance setup failed";
+    }
+    int (*add)(int, int) = pe_export(&pe2, "spike_add");
+    int (*counter)(void) = pe_export(&pe2, "spike_counter");
+    int (*words)(void) = pe_export(&pe2, "spike_words_len");
+    if (!add || !counter || !words) return "second instance: exports missing";
+    mid_log("[pe-dylib] second instance: calling spike_add at %p (signed code mapped by the app)", (void *)add);
+    int a = add(20, 22), c = counter(), w = words();
+    bool ok = a == 42 && c == 42 && w == 16;
+    mid_log("[pe-dylib] second instance: spike_add = %d (want 42), its own spike_counter = %d (want 42; the first "
+            "instance is at %d), relocated pointers = %d (want 16): %s", a, c, first_counter, w,
+            ok ? "PASSED (one DLL, two independent instances)" : "WRONG");
+    return ok ? "second instance ok" : "second instance WRONG";
+}
+
 static bool run_one(const char *path, const char *name, char *line, size_t linelen) {
     char err[256] = "";
     pe_image pe;
+    void *handle = NULL;
     mid_log("[pe-dylib] ---- %s ----", name);
-    if (!pe_load(path, &pe, err, sizeof err)) {
+    if (!pe_load(path, &pe, &handle, err, sizeof err)) {
         mid_log("[pe-dylib] %s: LOAD FAILED: %s", name, err);
         snprintf(line, linelen, "%s: load failed: %s", name, err);
         return false;
@@ -456,7 +490,8 @@ static bool run_one(const char *path, const char *name, char *line, size_t linel
     }
     double avg = n ? eff_sum / n : 0;
     mid_log("[pe-dylib] %s: %s, DLL code at %.0f%% of native", name, fails ? "FAILED" : "PASSED", avg);
-    snprintf(line, linelen, "%s: %s, %.0f%% of native", name, fails ? "failed (see log)" : "passed", avg);
+    const char *inst = run_instance(handle, path, counter());
+    snprintf(line, linelen, "%s: %s, %.0f%% of native; %s", name, fails ? "failed (see log)" : "passed", avg, inst);
     return fails == 0;
 }
 

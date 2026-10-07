@@ -89,6 +89,8 @@ step_ntdll() {
     python3 "$HERE/patches/nojit_dylib.py" "$M"
     # putenv() must not keep stack/freed buffers: iOS has no exec (engine/wine/patches/putenv_lifetime.py).
     python3 "$HERE/patches/putenv_lifetime.py" "$M"
+    # Step 4: no-JIT children load their own ntdll (engine/wine/patches/nojit_child.py).
+    python3 "$HERE/patches/nojit_child.py" "$M"
     # dwrite's unix side wants generated headers from the PE tree; the native
     # tree generates the same headers (include/all), so use that instead.
     sed -i '' 's#wine/build-arm64ec/include#wine/build-macos/include#g' "$M/build/ntdll-unix/build.sh"

@@ -35,7 +35,22 @@ struct ios_nojit_image
     char *data;   /* first __DATA byte: everything below is code/headers, never written */
     size_t size;
     int   mapped; /* a view was created for it */
+    void *handle; /* dlopen handle of the dylib (every instance of one DLL shares it) */
 };
+
+/* Step 4: another instance of a signed dylib for another Windows process (the same DLL mapped
+ * again): App/Sources/Native/pe_instance.c, mid_pe_dylib_instance (same layout as
+ * mid_pe_instance there). */
+struct ios_nojit_pe_instance
+{
+    char *image, *data, *end;
+    uint64_t *teb_offset;
+    char *tramps;
+    void *reserve;
+    size_t reserve_size;
+};
+extern _Bool mid_pe_dylib_instance( void *handle, const char *path, struct ios_nojit_pe_instance *out,
+                                    char *err, size_t errlen );
 static struct ios_nojit_image ios_nojit_images[512];
 static int ios_nojit_count;
 static pthread_mutex_t ios_nojit_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -175,20 +190,52 @@ static struct ios_nojit_image *ios_nojit_load( const UNICODE_STRING *nt_name )
     name[n] = 0;
     if (!n) return NULL;
 
-    pthread_mutex_lock( &ios_nojit_lock );
-    for (i = 0; i < (unsigned int)ios_nojit_count; i++)
-        if (!strcmp( ios_nojit_images[i].name, name )) { im = &ios_nojit_images[i]; break; }
-    if (im)
-    {
-        pthread_mutex_unlock( &ios_nojit_lock );
-        if (im->mapped)
-        {
-            ios_nojit_trace( "[nojit] %s: mapped again; one signed image per DLL so far -- not supported yet\n", name );
-            return NULL;
-        }
-        return im;
-    }
     snprintf( path, sizeof(path), "%s/lib%s.dylib", dir, name );
+    pthread_mutex_lock( &ios_nojit_lock );
+    {
+        struct ios_nojit_image *first = NULL;
+        for (i = 0; i < (unsigned int)ios_nojit_count; i++)
+        {
+            if (strcmp( ios_nojit_images[i].name, name )) continue;
+            if (!first) first = &ios_nojit_images[i];
+            if (!ios_nojit_images[i].mapped) { im = &ios_nojit_images[i]; break; }
+        }
+        if (im)
+        {
+            pthread_mutex_unlock( &ios_nojit_lock );
+            return im;
+        }
+        if (first)
+        {
+            /* Mapped again: another Windows process (a child) needs its own copy of this DLL.
+             * One dylib loads once, so map another instance of it by hand. */
+            struct ios_nojit_pe_instance in;
+            char err[256];
+            int k = 1;
+            for (i = 0; i < (unsigned int)ios_nojit_count; i++) k += !strcmp( ios_nojit_images[i].name, name );
+            if (ios_nojit_count >= (int)(sizeof(ios_nojit_images) / sizeof(ios_nojit_images[0])) ||
+                !mid_pe_dylib_instance( first->handle, path, &in, err, sizeof(err) ))
+            {
+                pthread_mutex_unlock( &ios_nojit_lock );
+                ios_nojit_trace( "[nojit] %s: mapped again, and another instance failed: %s\n", name,
+                                 ios_nojit_count >= 512 ? "too many images" : err );
+                return NULL;
+            }
+            *in.teb_offset = ios_teb_tls_slot_offset;
+            im = &ios_nojit_images[ios_nojit_count];
+            snprintf( im->name, sizeof(im->name), "%s", name );
+            im->base = in.image;
+            im->data = in.data;
+            im->size = in.end - in.image;
+            im->handle = first->handle;
+            __atomic_store_n( &ios_nojit_count, ios_nojit_count + 1, __ATOMIC_RELEASE );
+            pthread_mutex_unlock( &ios_nojit_lock );
+            ios_nojit_trace( "[nojit] %s: instance #%d at %p+0x%lx (another Windows process)\n", name, k,
+                             im->base, (unsigned long)im->size );
+            if (!strcmp( name, "xtajit64.dll" )) ios_nojit_install_fxi( im );
+            return im;
+        }
+    }
     if (access( path, R_OK ) || ios_nojit_count >= (int)(sizeof(ios_nojit_images) / sizeof(ios_nojit_images[0])))
     {
         pthread_mutex_unlock( &ios_nojit_lock );
@@ -212,6 +259,7 @@ static struct ios_nojit_image *ios_nojit_load( const UNICODE_STRING *nt_name )
     im->base = img;
     im->data = data;
     im->size = end - img;
+    im->handle = h;
     __atomic_store_n( &ios_nojit_count, ios_nojit_count + 1, __ATOMIC_RELEASE );
     pthread_mutex_unlock( &ios_nojit_lock );
     ios_nojit_trace( "[nojit] %s: signed image %p+0x%lx (code+headers 0x%lx), TEB slot offset 0x%x\n",
