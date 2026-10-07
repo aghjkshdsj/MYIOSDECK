@@ -13,6 +13,9 @@ typedef unsigned char u8;
 
 #define FLAGS_MASK 0x8c5ull   // CF PF ZF SF OF (AF is undefined after and/or/xor, CPUs differ)
 #define GET_FLAGS "\n\tpushfq\n\tpopq %[f]"
+// Instructions that leave some flags alone report what came before: start from a known state
+// (ZF PF set, CF SF OF clear), not from the compiler's last imul (PF undefined, CPUs differ).
+#define KNOWN_FLAGS "cmpq %[p], %[p]\n\t"
 
 static u64 g_hash = 1469598103934665603ull;
 
@@ -80,13 +83,13 @@ static void t_xadd_xchg(void) {
 #define LOCK_ALU(NAME, INSN, START, SRC)                                                       \
     do {                                                                                       \
         u64 f; mem[0] = (START);                                                               \
-        __asm__ volatile("stc\n\t" INSN " %[s], (%[p])" GET_FLAGS : [f] "=&r"(f) : [s] "r"((u64)(SRC)), [p] "r"(mem) : "memory", "cc"); \
+        __asm__ volatile(KNOWN_FLAGS "stc\n\t" INSN " %[s], (%[p])" GET_FLAGS : [f] "=&r"(f) : [s] "r"((u64)(SRC)), [p] "r"(mem) : "memory", "cc"); \
         report(NAME, mem[0], 0, f);                                                            \
     } while (0)
 #define LOCK_ALU_I(NAME, INSN, START)                                                          \
     do {                                                                                       \
         u64 f; mem[0] = (START);                                                               \
-        __asm__ volatile("clc\n\t" INSN GET_FLAGS : [f] "=&r"(f) : [p] "r"(mem) : "memory", "cc"); \
+        __asm__ volatile(KNOWN_FLAGS INSN GET_FLAGS : [f] "=&r"(f) : [p] "r"(mem) : "memory", "cc"); \
         report(NAME, mem[0], 0, f);                                                            \
     } while (0)
 
@@ -117,18 +120,18 @@ static void t_cmpxchg8b16b(void) {
     u64 f, a, d;
     mem[0] = 0x0000000200000001ull;
     a = 1; d = 2;
-    __asm__ volatile("lock cmpxchg8b (%[p])" GET_FLAGS : "+a"(a), "+d"(d), [f] "=&r"(f) : "b"(0xaull), "c"(0xbull), [p] "r"(mem) : "memory", "cc");
+    __asm__ volatile(KNOWN_FLAGS "lock cmpxchg8b (%[p])" GET_FLAGS : "+a"(a), "+d"(d), [f] "=&r"(f) : "b"(0xaull), "c"(0xbull), [p] "r"(mem) : "memory", "cc");
     report("cmpxchg8b ok", mem[0], a | d << 32, f);
     a = 1; d = 2;
-    __asm__ volatile("lock cmpxchg8b (%[p])" GET_FLAGS : "+a"(a), "+d"(d), [f] "=&r"(f) : "b"(0xcull), "c"(0xdull), [p] "r"(mem) : "memory", "cc");
+    __asm__ volatile(KNOWN_FLAGS "lock cmpxchg8b (%[p])" GET_FLAGS : "+a"(a), "+d"(d), [f] "=&r"(f) : "b"(0xcull), "c"(0xdull), [p] "r"(mem) : "memory", "cc");
     report("cmpxchg8b fail", mem[0], a | d << 32, f);
     mem[0] = 111; mem[1] = 222;
     a = 111; d = 222;
-    __asm__ volatile("lock cmpxchg16b (%[p])" GET_FLAGS : "+a"(a), "+d"(d), [f] "=&r"(f) : "b"(333ull), "c"(444ull), [p] "r"(mem) : "memory", "cc");
+    __asm__ volatile(KNOWN_FLAGS "lock cmpxchg16b (%[p])" GET_FLAGS : "+a"(a), "+d"(d), [f] "=&r"(f) : "b"(333ull), "c"(444ull), [p] "r"(mem) : "memory", "cc");
     report("cmpxchg16b ok", mem[0], mem[1], f);
     report("cmpxchg16b ok rdx:rax", a, d, 0);
     a = 1; d = 2;
-    __asm__ volatile("lock cmpxchg16b (%[p])" GET_FLAGS : "+a"(a), "+d"(d), [f] "=&r"(f) : "b"(5ull), "c"(6ull), [p] "r"(mem) : "memory", "cc");
+    __asm__ volatile(KNOWN_FLAGS "lock cmpxchg16b (%[p])" GET_FLAGS : "+a"(a), "+d"(d), [f] "=&r"(f) : "b"(5ull), "c"(6ull), [p] "r"(mem) : "memory", "cc");
     report("cmpxchg16b fail", a, d, f);
 }
 
