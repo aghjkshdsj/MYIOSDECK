@@ -171,7 +171,10 @@ final class SteamLibrary: ObservableObject {
     private func pump() {
         guard active == nil, !queue.isEmpty else { return }
         let appID = queue.removeFirst()
-        let task = Task { @MainActor [weak self] in await self?.run(appID) }
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.run(appID)
+        }
         active = (appID, task)
     }
 
