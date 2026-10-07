@@ -1,10 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// No-JIT step B: Wine loads an x64 emulator DLL (xtajit64.dll) into every ARM64EC process
-// and calls it through this interface (dlls/ntdll/signal_arm64ec.c). With JIT that is FEX.
-// Without JIT there is no x64 CPU yet (step D puts FXI here), so this stub accepts the
-// process and thread setup, reports no emulated CPU features, and stops the process with
-// status 0xE0F00001 if x64 code is ever entered. Enough for ARM64EC programs, which never
-// leave native code.
+// The x64 emulator DLL Wine loads into every ARM64EC process (as xtajit64.dll; FEX with JIT).
+// Without JIT this is FXI's front end (docs/NO_JIT_WINDOWS.md step D): Wine's emulator
+// interface (dlls/ntdll/signal_arm64ec.c) forwarded to the app, which interprets the x64 code
+// with FXI (App/Sources/Native/fxi_win_glue.S, fxi_win_host.c).
+//
+// The app's table of entry points reaches this DLL through MyiosdeckFxiHost: Wine's no-JIT
+// map hook (engine/wine/patches/nojit_dylib.py) stores it when it maps this image.
+//
+// ExitToX64, DispatchJump, RetToEntryThunk and BeginSimulation have register-level
+// conventions (x9 = target, lr = return address, ...) and are exported as DATA, as FEX does,
+// so the loader hands out their real address rather than an x64 entry thunk: each is a jump
+// through the host table that keeps every register except x16.
 
 typedef long NTSTATUS;
 typedef unsigned long long SIZE_T;
@@ -12,20 +18,61 @@ typedef void *HANDLE;
 #define EXPORT __declspec(dllexport)
 #define WINAPI __stdcall
 
-__declspec(dllimport) NTSTATUS WINAPI NtTerminateProcess(HANDLE process, NTSTATUS status);
 __declspec(dllimport) unsigned long DbgPrint(const char *fmt, ...);
 
-static void no_x64_cpu(const char *where) {
-    DbgPrint("[xtajit64-stub] x64 code reached (%s): this build has no x64 CPU without JIT yet\n", where);
-    NtTerminateProcess((HANDLE)-1, (NTSTATUS)0xE0F00001);
-    for (;;) {}
+// Filled by the map hook: mid_fxi_win_host (fxi_win_host.c).
+EXPORT void **MyiosdeckFxiHost;
+
+enum { H_EXIT_TO_X64, H_DISPATCH_JUMP, H_RET_TO_ENTRY_THUNK, H_BEGIN_SIMULATION, H_PROCESS_INIT,
+       H_THREAD_INIT, H_FEATURE_PRESENT };
+
+#define DISPATCH(name, slot)                                       \
+    __asm__(".text\n"                                              \
+            ".p2align 2\n"                                         \
+            ".globl " #name "\n"                                   \
+            #name ":\n"                                            \
+            "adrp x16, MyiosdeckFxiHost\n"                         \
+            "ldr x16, [x16, #:lo12:MyiosdeckFxiHost]\n"            \
+            "ldr x16, [x16, #" #slot "]\n"                         \
+            "br x16\n"                                             \
+            ".section .drectve\n"                                  \
+            ".ascii \" -export:" #name ",DATA\"\n"                 \
+            ".text\n")
+DISPATCH(ExitToX64, 0);
+DISPATCH(DispatchJump, 8);
+DISPATCH(RetToEntryThunk, 16);
+DISPATCH(BeginSimulation, 24);
+
+// Call a native app function (Apple arm64 ABI) with one argument. A plain blr: an ARM64EC
+// indirect call would go through __os_arm64x_check_icall, which treats non-EC code as x64.
+static long host_call(int slot, long arg) {
+    if (!MyiosdeckFxiHost || !MyiosdeckFxiHost[slot]) return (long)0xC0000001;
+    register long x0 __asm__("x0") = arg;
+    register void *x16 __asm__("x16") = MyiosdeckFxiHost[slot];
+    __asm__ volatile("blr x16"
+                     : "+r"(x0), "+r"(x16)
+                     :
+                     : "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x15", "x17",
+                       "x30", "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7", "memory", "cc");
+    return x0;
 }
 
-EXPORT NTSTATUS WINAPI ProcessInit(void) { return 0; }
+EXPORT NTSTATUS WINAPI ProcessInit(void) {
+    if (!MyiosdeckFxiHost) {
+        DbgPrint("[xtajit64-fxi] no host table: this process cannot run x64 code without JIT\n");
+        return (NTSTATUS)0xC0000001;
+    }
+    return host_call(H_PROCESS_INIT, 0);
+}
+EXPORT NTSTATUS WINAPI ThreadInit(void) { return host_call(H_THREAD_INIT, 0); }
+EXPORT unsigned char WINAPI BTCpu64IsProcessorFeaturePresent(unsigned int feature) {
+    return host_call(H_FEATURE_PRESENT, feature) != 0;
+}
+
 EXPORT void WINAPI ProcessTerm(HANDLE handle, int after, NTSTATUS status) { (void)handle; (void)after; (void)status; }
-EXPORT NTSTATUS WINAPI ThreadInit(void) { return 0; }
 EXPORT NTSTATUS WINAPI ThreadTerm(HANDLE thread, long status) { (void)thread; (void)status; return 0; }
-EXPORT unsigned char WINAPI BTCpu64IsProcessorFeaturePresent(unsigned int feature) { (void)feature; return 0; }
+// FXI keeps no translated code, so nothing to flush or invalidate yet (self-modifying x64
+// code is a later step).
 EXPORT void WINAPI BTCpu64FlushInstructionCache(const void *addr, SIZE_T size) { (void)addr; (void)size; }
 EXPORT void WINAPI FlushInstructionCacheHeavy(const void *addr, SIZE_T size) { (void)addr; (void)size; }
 EXPORT void WINAPI BTCpu64NotifyMemoryDirty(void *addr, SIZE_T size) { (void)addr; (void)size; }
@@ -52,13 +99,6 @@ EXPORT NTSTATUS WINAPI ResetToConsistentState(void *ptrs, void *ctx, void *x64ct
     return 0;
 }
 EXPORT void WINAPI UpdateProcessorInformation(void *info) { (void)info; }
-
-// Entering x64 code: the ARM64EC dispatch points (special register conventions; they never
-// return here) and the emulation loop.
-EXPORT void WINAPI BeginSimulation(void) { no_x64_cpu("BeginSimulation"); }
-EXPORT void ExitToX64(void) { no_x64_cpu("ExitToX64"); }
-EXPORT void DispatchJump(void) { no_x64_cpu("DispatchJump"); }
-EXPORT void RetToEntryThunk(void) { no_x64_cpu("RetToEntryThunk"); }
 
 int WINAPI DllMainCRTStartup(void *module, unsigned reason, void *reserved) {
     (void)module; (void)reason; (void)reserved;

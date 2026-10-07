@@ -13,8 +13,11 @@ final class WineController: ObservableObject, @unchecked Sendable {
         let title: String
         let detail: String
         var graphics = false  // opens a window: shown on the game surface (stage 3)
-        /// Runs without JIT: Wine's DLLs from signed dylibs, no x64 code (docs/NO_JIT_WINDOWS.md).
+        /// Runs without JIT: Wine's DLLs from signed dylibs, x64 code through FXI (docs/NO_JIT_WINDOWS.md).
         var noJIT = false
+        /// The program file when it differs from id (one exe, two list entries).
+        var exeName: String? = nil
+        var exe: String { exeName ?? id }
     }
 
     /// The signed Wine dylibs (engine/pedylib), present when CI converted the DLL farm.
@@ -27,6 +30,9 @@ final class WineController: ObservableObject, @unchecked Sendable {
     static let programs = [
         Program(id: "hello-arm64ec.exe", title: "Windows Hello (ARM64EC, no JIT)",
                 detail: "Wine from signed dylibs, no JIT needed: native Windows ARM code only", noJIT: true),
+        Program(id: "hello-x64-nojit", title: "Windows Hello (x64, no JIT)",
+                detail: "x64 code interpreted by FXI inside Wine: the App Store path", noJIT: true,
+                exeName: "hello-x64.exe"),
         Program(id: "hello-x64.exe", title: "Windows Hello (x64)", detail: "Console hello world through Wine + FEX ARM64EC"),
         Program(id: "fib-x64.exe", title: "Fibonacci (x64)", detail: "Recursive CPU test: x86-64 call/ret through FEX"),
         Program(id: "clocktest-x64.exe", title: "Clock test (x64)", detail: "Windows timers and QueryPerformanceCounter"),
@@ -131,10 +137,10 @@ final class WineController: ObservableObject, @unchecked Sendable {
             dlog("[display] virtual monitor \(w)x\(h) for \(program.title)")
         }
         let prefix = prefixURL.path
-        dlog("[wine] booting \(program.id) in \(prefix)")
+        dlog("[wine] booting \(program.exe) in \(prefix)")
         queue.async {
             var err = [CChar](repeating: 0, count: 512)
-            let ok = mid_wine_boot(prefix, program.id, args, &err, err.count)
+            let ok = mid_wine_boot(prefix, program.exe, args, &err, err.count)
             let msg = String(cString: err)
             DispatchQueue.main.async {
                 self.state = ok ? .running(program.title) : .failed(msg)

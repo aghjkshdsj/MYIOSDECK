@@ -120,6 +120,38 @@ static int ios_nojit_mprotect( void *base, size_t size, int unix_prot, int *ret 
     return 1;
 }
 
+/* Step D: the emulator DLL (xtajit64.dll = engine/pedylib/emu) forwards Wine's x64-emulator
+ * interface to FXI in the app through its exported MyiosdeckFxiHost slot. */
+static void ios_nojit_install_fxi( struct ios_nojit_image *im )
+{
+    extern void *mid_fxi_win_host_table( int tsd_offset );
+    extern int ios_teb_tls_slot_offset;
+    IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)im->base;
+    IMAGE_NT_HEADERS *nt = (IMAGE_NT_HEADERS *)(im->base + dos->e_lfanew);
+    IMAGE_DATA_DIRECTORY *dir = &nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+    IMAGE_EXPORT_DIRECTORY *exp = (IMAGE_EXPORT_DIRECTORY *)(im->base + dir->VirtualAddress);
+    DWORD *names = (DWORD *)(im->base + exp->AddressOfNames);
+    DWORD *funcs = (DWORD *)(im->base + exp->AddressOfFunctions);
+    WORD *ords = (WORD *)(im->base + exp->AddressOfNameOrdinals);
+    DWORD i;
+
+    for (i = 0; dir->Size && i < exp->NumberOfNames; i++)
+    {
+        void **slot;
+        if (strcmp( im->base + names[i], "MyiosdeckFxiHost" )) continue;
+        slot = (void **)(im->base + funcs[ords[i]]);
+        if ((char *)slot < im->data)
+        {
+            ios_nojit_trace( "[nojit] xtajit64.dll: MyiosdeckFxiHost is not in writable data\n" );
+            return;
+        }
+        *slot = mid_fxi_win_host_table( ios_teb_tls_slot_offset );
+        ios_nojit_trace( "[nojit] xtajit64.dll: FXI host table %p installed (FXI is the x64 CPU)\n", *slot );
+        return;
+    }
+    ios_nojit_trace( "[nojit] xtajit64.dll: no MyiosdeckFxiHost export -- x64 code cannot run\n" );
+}
+
 /* Find (and dlopen once) the signed dylib for an image. Called outside virtual_mutex. */
 static struct ios_nojit_image *ios_nojit_load( const UNICODE_STRING *nt_name )
 {
@@ -185,6 +217,7 @@ static struct ios_nojit_image *ios_nojit_load( const UNICODE_STRING *nt_name )
     ios_nojit_trace( "[nojit] %s: signed image %p+0x%lx (code+headers 0x%lx), TEB slot offset 0x%x\n",
              name, img, (unsigned long)im->size, (unsigned long)(data - img), ios_teb_tls_slot_offset );
     if (!ios_teb_tls_slot_offset) ios_nojit_trace( "[nojit] WARNING: TEB TSD slot not known yet\n" );
+    if (!strcmp( name, "xtajit64.dll" )) ios_nojit_install_fxi( im );
     return im;
 }
 

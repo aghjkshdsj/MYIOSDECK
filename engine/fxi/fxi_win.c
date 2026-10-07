@@ -79,6 +79,7 @@ uint64_t fxi_win_run(FxiCpu *c) {
 }
 
 const char *fxi_win_error(FxiCpu *c) { return c->err ? c->err : "?"; }
+void fxi_win_set_teb(FxiCpu *c, uint64_t teb) { c->r[R_GS] = teb; }
 uint64_t fxi_win_rip(FxiCpu *c) { return c->rip; }
 
 // An AMD64 CONTEXT (BeginSimulation, after NtContinue / at thread start).

@@ -42,6 +42,7 @@ FxiCpu *fxi_win_cpu_new(void);
 /// address, or 0 on an error (fxi_win_error).
 uint64_t fxi_win_run(FxiCpu *c);
 const char *fxi_win_error(FxiCpu *c);
+void fxi_win_set_teb(FxiCpu *c, uint64_t teb);   // GS base
 uint64_t fxi_win_rip(FxiCpu *c);
 /// Load an AMD64 CONTEXT into the CPU.
 void fxi_win_load_context(FxiCpu *c, const void *amd64_context);
