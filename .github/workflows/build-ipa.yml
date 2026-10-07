@@ -3,7 +3,7 @@ name: Build IPA
 on:
   push:
     branches: [main]
-    paths-ignore: ["engine/wine/**", "engine/dxmt/**", "engine/fxi/**", ".github/workflows/wine-unix.yml", ".github/workflows/dxmt.yml", ".github/workflows/fxi.yml", "docs/**", "*.md"]
+    paths-ignore: ["engine/wine/**", "engine/dxmt/**", ".github/workflows/wine-unix.yml", ".github/workflows/dxmt.yml", ".github/workflows/fxi.yml", "docs/**", "*.md"]
   pull_request:
   workflow_dispatch:
 

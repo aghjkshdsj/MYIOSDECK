@@ -5,7 +5,8 @@ import UIKit
 /// How x86-64 code is executed.
 enum RunMode: String {
     case jit = "FEX JIT"            // translated to ARM64 once, runs at near-native speed
-    case interpreter = "Interpreter" // Blink, no executable memory needed (no JIT)
+    case interpreter = "Interpreter" // no JIT: FXI (MYIOSDECK's interpreter)
+    case blink = "Blink"             // no JIT: Blink, kept for comparison
 }
 
 struct BenchResult: Identifiable {
@@ -18,8 +19,10 @@ struct BenchResult: Identifiable {
     /// The interpreter runs a smaller workload; native time at that same size.
     var interpScale: UInt32?
     var nativeAtInterpScaleNs: UInt64?
-    var interpNs: UInt64?
+    var interpNs: UInt64?            // FXI
     var interpMatch: Bool?
+    var blinkNs: UInt64?
+    var blinkMatch: Bool?
 
     /// Share of native speed (100% = as fast as native ARM64).
     var fexEfficiency: Double? {
@@ -28,6 +31,10 @@ struct BenchResult: Identifiable {
     }
     var interpEfficiency: Double? {
         guard let i = interpNs, i > 0, let n = nativeAtInterpScaleNs else { return nil }
+        return Double(n) / Double(i) * 100
+    }
+    var blinkEfficiency: Double? {
+        guard let i = blinkNs, i > 0, let n = nativeAtInterpScaleNs else { return nil }
         return Double(n) / Double(i) * 100
     }
 }
@@ -55,9 +62,12 @@ final class EngineController: ObservableObject, @unchecked Sendable {
     @Published private(set) var lastReportURL: URL?
 
     let linked = mid_engine_linked()
-    let interpreterLinked = mid_interp_linked()
+    /// FXI is always built in, so there is always a no-JIT path.
+    let interpreterLinked = true
+    let blinkLinked = mid_interp_linked()
     let fexVersion = String(cString: mid_engine_version())
-    let interpVersion = String(cString: mid_interp_version())
+    let interpVersion = String(cString: mid_fxi_version())
+    let blinkVersion = String(cString: mid_interp_version())
 
     /// The interpreter runs this fraction of each kernel's normal workload.
     static let interpreterScaleDivisor: UInt32 = 20
@@ -112,14 +122,19 @@ final class EngineController: ObservableObject, @unchecked Sendable {
                     let run = self.run(ptr, len, ["bench", name], mode: .jit)
                     (r.fexNs, r.fexMatch) = Self.parseResult(run, expectedSum: nativeSum)
                 }
-                if interpreter, let iptr, self.interpreterLinked {
+                if interpreter, let iptr {
                     let scale = max(1, fullScale / Self.interpreterScaleDivisor)
                     var smallSum: UInt64 = 0
                     r.interpScale = scale
                     r.nativeAtInterpScaleNs = mid_bench_native(Int32(i), scale, &smallSum)
-                    self.setBusy("x86-64 via interpreter (no JIT): \(name)")
+                    self.setBusy("x86-64 via FXI interpreter (no JIT): \(name)")
                     let run = self.run(iptr, ilen, ["bench", name, String(scale)], mode: .interpreter)
                     (r.interpNs, r.interpMatch) = Self.parseResult(run, expectedSum: smallSum)
+                    if self.blinkLinked {
+                        self.setBusy("x86-64 via Blink (no JIT, for comparison): \(name)")
+                        let b = self.run(iptr, ilen, ["bench", name, String(scale)], mode: .blink)
+                        (r.blinkNs, r.blinkMatch) = Self.parseResult(b, expectedSum: smallSum)
+                    }
                 }
                 results.append(r)
                 let snapshot = results
@@ -142,23 +157,27 @@ final class EngineController: ObservableObject, @unchecked Sendable {
         lines.append("app: \(info?["CFBundleShortVersionString"] ?? "?") build \(info?["CFBundleVersion"] ?? "?")")
         lines.append("jit: \(mid_jit_pool_ready() ? "on (\(mid_jit_pool_size() >> 20) MB pool)" : "OFF")" +
                      " | fex: \(fexVersion.prefix(10)) preset \(presetName) (x86-64-v2 build)" +
-                     " | interpreter: blink \(interpVersion.prefix(10)) (SSE2 build)")
+                     " | no-JIT: \(interpVersion) + blink \(blinkVersion.prefix(10)) (SSE2 build)")
         lines.append("thermal: \(ProcessInfo.processInfo.thermalState.rawValue) | low power: \(ProcessInfo.processInfo.isLowPowerModeEnabled)")
-        lines.append(Self.row(["kernel", "native", "fex", "fex%", "native/\(d)", "interp/\(d)", "interp%"]))
+        lines.append(Self.row(["kernel", "native", "fex", "fex%", "native/\(d)", "fxi/\(d)", "fxi%", "blink%"]))
         for r in results {
             lines.append(Self.row([r.name, Self.ms(r.nativeNs), r.fexNs.map(Self.ms) ?? "-",
                                    r.fexEfficiency.map { String(format: "%.0f%%", $0) } ?? "-",
                                    r.nativeAtInterpScaleNs.map(Self.ms) ?? "-", r.interpNs.map(Self.ms) ?? "-",
-                                   r.interpEfficiency.map { String(format: "%.1f%%", $0) } ?? "-"]))
-            if r.fexMatch == false || r.interpMatch == false {
-                lines.append("  ! checksum mismatch (fex=\(String(describing: r.fexMatch)) interp=\(String(describing: r.interpMatch)))")
+                                   r.interpEfficiency.map { String(format: "%.1f%%", $0) } ?? "-",
+                                   r.blinkEfficiency.map { String(format: "%.1f%%", $0) } ?? "-"]))
+            if r.fexMatch == false || r.interpMatch == false || r.blinkMatch == false {
+                lines.append("  ! checksum mismatch (fex=\(String(describing: r.fexMatch)) fxi=\(String(describing: r.interpMatch)) blink=\(String(describing: r.blinkMatch)))")
             }
         }
         if let a = Self.average(results.compactMap(\.fexEfficiency)) {
             lines.append(String(format: "average FEX JIT: %.0f%% of native", a))
         }
         if let a = Self.average(results.compactMap(\.interpEfficiency)) {
-            lines.append(String(format: "average interpreter (no JIT): %.1f%% of native, about %.0fx slower", a, 100 / max(a, 0.001)))
+            lines.append(String(format: "average FXI interpreter (no JIT): %.1f%% of native, about %.0fx slower", a, 100 / max(a, 0.001)))
+        }
+        if let a = Self.average(results.compactMap(\.blinkEfficiency)) {
+            lines.append(String(format: "average Blink interpreter (no JIT): %.1f%% of native", a))
         }
         lines.append("==== END REPORT ====")
         lines.forEach { dlog("[report] \($0)") }
@@ -172,7 +191,7 @@ final class EngineController: ObservableObject, @unchecked Sendable {
     }
 
     private static func row(_ cols: [String]) -> String {
-        let widths = [8, 10, 10, 6, 11, 11, 8]
+        let widths = [8, 10, 10, 6, 11, 11, 8, 8]
         return zip(cols, widths).map { c, w in c.count >= w ? c : c + String(repeating: " ", count: w - c.count) }
             .joined(separator: " ")
     }
@@ -206,7 +225,8 @@ final class EngineController: ObservableObject, @unchecked Sendable {
         let ok = argv.withUnsafeMutableBufferPointer { buf -> Bool in
             switch mode {
             case .jit: return mid_engine_run_elf(elf, len, Int32(args.count), buf.baseAddress, result)
-            case .interpreter: return mid_interp_run_elf(elf, len, Int32(args.count), buf.baseAddress, result)
+            case .interpreter: return mid_fxi_run_elf(elf, len, Int32(args.count), buf.baseAddress, result)
+            case .blink: return mid_interp_run_elf(elf, len, Int32(args.count), buf.baseAddress, result)
             }
         }
         let r = result.pointee

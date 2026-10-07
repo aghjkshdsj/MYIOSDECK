@@ -37,6 +37,11 @@ targets:
       - path: App/Sources/Native/bench.c
         # Same math as the x86-64 guest (no FMA contraction) so checksums compare exactly.
         compilerFlags: ["-O2", "-ffp-contract=off"]
+      # FXI, the no-JIT x86-64 interpreter (docs/FAST_INTERPRETER.md). Always -O2, and no FMA
+      # contraction so guest float results match x86.
+      - path: engine/fxi
+        excludes: ["fxi_main.c", "*.sh"]
+        compilerFlags: ["-O2", "-ffp-contract=off"]
       # Stage 2 (Wine): engine/wine/stage-app.sh inserts Madeira's app-side sources
       # and the Windows side (DLL farm, NLS, prefix) here when it staged them.
       # @WINE_SOURCES@
@@ -63,6 +68,7 @@ targets:
           - "$(inherited)"
           - "$(SRCROOT)/App/Generated"
           - "$(SRCROOT)/engine/guest"
+          - "$(SRCROOT)/engine/fxi"
           - "$(MYIOSDECK_FEX_HEADERS)"
           - "$(MYIOSDECK_WINE_HEADERS)"
         OTHER_LDFLAGS:
