@@ -20,6 +20,7 @@ jobs:
           "$RUNNER_TEMP/astra-guests/hello.elf" > "$RUNNER_TEMP/astra-guests/hello-native.txt"
           objdump -d "$RUNNER_TEMP/astra-guests/bench_sse2.elf" > "$RUNNER_TEMP/astra-guests/bench-disassembly.txt"
           objdump -d "$RUNNER_TEMP/astra-guests/hello.elf" > "$RUNNER_TEMP/astra-guests/hello-disassembly.txt"
+          bash engine/astra/probe-build.sh "$RUNNER_TEMP/astra-guests"
       - uses: actions/upload-artifact@v4
         with:
           name: astra-x86-fixtures
@@ -47,6 +48,13 @@ jobs:
         run: bash engine/astra/build.sh "$RUNNER_TEMP/astra-bin"
       - name: Build unchanged FXI in the same job
         run: bash engine/fxi/build.sh "$RUNNER_TEMP/astra-fxi"
+      - name: Instruction, fusion and failure probes
+        run: |
+          "$RUNNER_TEMP/astra-bin/safety"
+          "$RUNNER_TEMP/astra-bin/astra" "$RUNNER_TEMP/astra-guests/astra-probe.elf" > "$RUNNER_TEMP/astra-probe.txt"
+          diff -u "$RUNNER_TEMP/astra-guests/astra-probe-native.txt" "$RUNNER_TEMP/astra-probe.txt"
+          ASTRA_NO_FUSION=1 "$RUNNER_TEMP/astra-bin/astra" "$RUNNER_TEMP/astra-guests/astra-probe.elf" > "$RUNNER_TEMP/astra-probe-unfused.txt"
+          diff -u "$RUNNER_TEMP/astra-probe.txt" "$RUNNER_TEMP/astra-probe-unfused.txt"
       - name: Correctness and median performance
         run: bash engine/astra/ci-test.sh "$RUNNER_TEMP/astra-guests" "$RUNNER_TEMP/astra-bin/astra" "$RUNNER_TEMP/astra-fxi/fxi" "$RUNNER_TEMP/astra-bin/native" "$RUNNER_TEMP/astra-results"
       - uses: actions/upload-artifact@v4
@@ -61,6 +69,6 @@ jobs:
       - name: Compile all engine sources for iOS arm64
         run: |
           mkdir -p "$RUNNER_TEMP/astra-ios"
-          for source in astra decode vector; do
+          for source in astra decode vector fusion; do
             xcrun -sdk iphoneos clang -arch arm64 -O2 -ffp-contract=off -std=c++17 -c "engine/astra/$source.cpp" -o "$RUNNER_TEMP/astra-ios/$source.o"
           done

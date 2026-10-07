@@ -128,6 +128,7 @@ Op decode(Cpu *c,U &pc) {
             p.kind=SSE; p.aux=(1<<8)|(op==0x16?0x36:0x22); p.imm=d.byte(); break;
         }
         p.kind=SSE; p.aux=(d.prefix<<8)|op;
+        if(!select_sse(p) || op==0x22 || op==0x36)fault(c,pc,"unimplemented opcode");
         unsigned m=d.byte(); p.a=d.reg(((m>>3)&7)+((d.rex&4)?8:0),8); p.b=d.rm(m,8);
         if(op==0x70 || op==0xc6) p.imm=d.byte();
         if(op==0x71 || op==0x72 || op==0x73) {
@@ -174,6 +175,7 @@ Op *block(Cpu *c,U pc) {
         result[i]=ops[i]; result[i].fn=select(result[i]);
         if(!result[i].fn)fault(c,result[i].pc,"unimplemented instruction form");
     }
+    if(!std::getenv("ASTRA_NO_FUSION"))optimize_block(c,result,ops.size());
     c->cache.emplace(pc,result); ++c->out->blocks; return result;
 }
 }

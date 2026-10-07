@@ -139,7 +139,7 @@ inline bool condition(Cpu *c,int cc) {
     case 4: b=(f.r>>(f.bits-1))&1; break;
     case 5: b=f.kind==SSE?f.b:!__builtin_parity((unsigned)(uint8_t)f.r); break;
     case 6: b=bool((f.r>>(f.bits-1))&1)!=overflow(f); break;
-    default: b=(f.r==0)||(bool((f.r>>(f.bits-1))&1)!=overflow(f)); break;
+    default: b=(f.kind==SSE?bool(f.a):f.r==0)||(bool((f.r>>(f.bits-1))&1)!=overflow(f)); break;
     }
     return b ^ (cc&1);
 }
@@ -232,5 +232,6 @@ template<Kind K> Handler sized(const Op &p) {
 }
 Handler select(const Op &p);
 Handler select_sse(const Op &p);
+void optimize_block(Cpu *c,Op *ops,size_t n);
 Op decode(Cpu *c,U &pc);
 }
