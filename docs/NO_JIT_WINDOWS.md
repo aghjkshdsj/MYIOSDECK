@@ -55,6 +55,21 @@ also loads Wine's real `ntdll.dll` this way (743 sites rewritten) and calls into
 sites, all correct; every x18 form in the spike DLLs correct; kernels at native speed. The
 TEB's TSD offset on that device was 0x8c8 (not Madeira's 0x898), so it stays a runtime value.
 
+**Build 52, JIT off: step B works for ARM64EC programs.** Wine ran `hello-arm64ec.exe` (a
+normal llvm-mingw console program) start to finish with no JIT: the program, ntdll, the stub
+x64 emulator, kernel32, kernelbase and ucrtbase all mapped from signed dylibs
+(`engine/wine/patches/nojit_dylib.py`), ARM64EC process init, TLS callbacks, `main`, console
+and file I/O, TEB access through rewritten x18 sites, exit code 42. Its 50M-step integer loop
+took 79.8 ms, native speed. Lessons on the way: Wine relocates each image itself from the
+header's ImageBase once the server reports NOT_AT_BASE (relocating in the map hook too applied
+ntdll's pointers twice, build 49); `putenv()` with stack buffers (Madeira's exec_wineloader)
+leaves the environment pointing into a dead thread's stack on iOS, where no exec follows, and
+iOS's own code later crashed on it (build 52; `engine/wine/patches/putenv_lifetime.py`).
+
+Next: the x64 side (step D: FXI behind the emulator interface the stub implements), the 8 DLLs
+that still need a 16 KB rebuild, child processes (one signed ntdll per pseudo-process), and
+step C for whatever runtime code real programs reach.
+
 ARM64EC exports point at x64 "fast-forward" thunks in `.hexpthk`; a native caller
 follows their `jmp` (as Wine's `arm64x_check_call` does). The spike loader does the same.
 
