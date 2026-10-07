@@ -1,91 +1,120 @@
-# Hand-off: getting Windows games to run without JIT
+# Hand-off: Windows games without JIT (App Store path)
 
-Paste the prompt below into a new chat (Claude Code desktop, Windows). It is self-contained.
+Self-contained notes for continuing this work in a new chat. Read this file, then
+`docs/NO_JIT_WINDOWS.md` (plan + per-build findings), `docs/APP_STORE.md`,
+`docs/FAST_INTERPRETER.md`, `docs/ROADMAP.md`.
 
----
-
-Continue my iOS project **MYIOSDECK** (github.com/aghjkshdsj/MYIOSDECK, cloned at
-`C:\Users\Danial\MYIOSDECK`). Goal for this chat: **run Windows games on iPhone without JIT**,
-with extreme performance as the priority. Read `docs/HANDOFF_NO_JIT.md`, `docs/FAST_INTERPRETER.md`,
-`docs/NO_JIT.md`, `docs/APP_STORE.md` and `docs/ROADMAP.md` first.
+## Goal
+Windows games on iPhone **without JIT**, as fast as possible, shippable on the **App Store**
+(guideline 4.7 allows PC emulators since July 2024; UTM SE is the precedent and also runs
+without JIT). The owner has **written permission from Madeira's author** for App Store
+distribution of Madeira's GPL code. Wine's LGPL still needs a relink-compliant setup before
+submission. Without JIT only code inside the signed app bundle runs natively. Wine, D3D -> Metal
+and everything else in the bundle stay native; the game's own x64 code runs in **FXI**, our
+interpreter (8.1% of native on the A17 Pro, build 39; target 15-25% after phase 4). A JIT
+sideload edition (FEX, ~90% of native) stays the full-speed option, from the same code.
 
 ## Environment and workflow
-- Windows 11, PowerShell. No local C compiler: **everything builds in GitHub Actions**.
-- git and gh are installed but not on the tool shell's PATH: prepend
-  `$env:Path = "C:\Program Files\Git\cmd;C:\Program Files\GitHub CLI;" + $env:Path`.
-  gh is logged in as `aghjkshdsj` with `repo` and `workflow` scopes.
-- Loop: edit -> commit -> push to `main` -> `gh run watch` -> on failure read
-  `gh run view <id> --log-failed` (grep `error:`) -> fix -> release `build-N` holds the IPA.
-- Workflows: `build-ipa.yml` (the app, skips docs and `engine/wine|dxmt` changes),
-  `wine-unix.yml` (Stage 2 Wine unix libs), `dxmt.yml` (Stage 3 DXMT + fixed D3D12 test exe; dispatches
-  the IPA build), `fxi.yml` (FXI on Linux: every guest runs natively and under FXI, checksums must match,
-  job summary shows FXI % of native).
-- Device: iPhone 15 Pro Max (A17 Pro), iOS 27.0.1, sideloaded with iloader, JIT through StikDebug,
-  Backbone Pro controller, paid dev account (increased-memory-limit and
-  extended-virtual-addressing entitlements are active). I test each build and send logs
-  (`Documents/myiosdeck-log.txt`, shared from the app) and screenshots.
-- Upstream: Madeira (github.com/willfaust/Madeira) pinned at `65e6fe8f0da45b28b610c71fda9791e89d1060a6`
-  (`engine/wine/PIN`, `engine/dxmt/PIN`). For reading its source, shallow-fetch it into
-  `C:\Users\Danial\AppData\Local\Temp\claude\md` (the scratch path is too long for git on Windows).
-  Its FEX fork: willfaust/FEX `ios-port-2607` @ `3bec2ac4` (`engine/fex/PIN`).
+- Windows 11, PowerShell, no local compiler or Python: **everything builds in GitHub Actions**.
+- git/gh are not on the tool shell's PATH: prepend `C:\Program Files\Git\cmd;C:\Program Files\GitHub CLI`
+  (bash: `export PATH="/c/Program Files/Git/cmd:/c/Program Files/GitHub CLI:$PATH"`).
+  gh is logged in as `aghjkshdsj` (repo + workflow scopes).
+- The working copy is CRLF (autocrlf): edit existing files with the Edit tool, not sed/perl.
+- Loop: edit -> commit -> push `main` -> watch CI -> release `build-N` holds the IPA.
+  - `wine-unix.yml`: Madeira's Wine unix side + our patches (`engine/wine/patches/*.py`, applied in
+    `engine/wine/build-unix.sh` step_ntdll after `git checkout` of the patched files). ~3 min; on
+    success it dispatches `build-ipa.yml`, which uses the newest successful Wine libs.
+  - `build-ipa.yml`: guests job (Linux: x86 guests, llvm-mingw spike/emulator/hello DLLs) +
+    iOS job (FEX, Blink, Wine staging, PE->dylib conversion of the whole DLL farm, Xcode). ~5 min.
+    Uploads artifacts `guests`, `dsym`, `build-logs` (incl. `pe-audit.json`).
+  - `fxi.yml`: FXI on Linux, every guest natively and under FXI, checksums must match.
+  - `symbolicate.yml` (workflow_dispatch, inputs `run_id`, `offsets`): turns `.ips` imageOffsets
+    of the MYIOSDECK image into function names with that run's dSYM (Wine libs have no line info).
+- Device: iPhone 15 Pro Max (A17 Pro), iOS 27.0.1, sideloaded with iloader, paid dev account.
+  The owner tests every build and sends `Documents/myiosdeck-log.txt` (shared from the app), the
+  crash log the app offers after a crash (`myiosdeck-crash-log.txt`, ends with the crash-proof
+  `Wine no-JIT trace` section), and `.ips` reports (Settings > Privacy & Security > Analytics &
+  Improvements > Analytics Data). **Give a release link for every build and say exactly what to
+  test and which log to send.** Before sending a build, verify the artifact (e.g. `unzip -l` the
+  IPA, read exports/bytes of a DLL with PowerShell): that caught builds that would have crashed.
+- Madeira (github.com/willfaust/Madeira) pinned in `engine/wine/PIN`; a full checkout lives at
+  `C:\Users\Danial\AppData\Local\Temp\claude\md`, its Wine fork (sparse) at `...\claude\mw`,
+  Madeira's FEX fork at `...\claude\fex` (ARM64EC frontend: `Source/Windows/ARM64EC/Module.S`,
+  `Module.cpp` = the reference for Wine's emulator interface).
 
-## What works today (with JIT)
-- Stage 1: JIT pool via StikDebug, FEXCore at ~93% of native.
-- Stage 2: Wine ARM64EC in-process (Madeira's ntdll/win32u/wineserver), Windows programs run.
-- Stage 3: DXMT (D3D9-11 -> Metal) and Madeira's D3D12 converter; D3D11/D3D12 cubes at 60 fps.
-- Stage 4 (partial): Steam sign-in (vendored SwiftSteam in `App/Sources/Steam/SwiftSteam`), owned
-  library with covers, depot downloads into the prefix, direct Play (game exe in Wine without the
-  Steam client). Billies Wheelie runs at 60 fps; Battle Simulator runs but says "couldn't verify
-  your Steam license" (needs Valve's Steam client in Wine, not done); 1v1.LOL loads, "no internet".
-- App: full-screen game surface (`App/Sources/Render/GameSurface.swift`), in-game menu (Resume, Hide,
-  Controller API switch, Quit = exit app), controller bridge (`App/Sources/Engine/ControllerBridge.swift`:
-  XInput / +DirectInput / HID generic / HID DualSense / Keyboard and mouse), crash-report popup
-  (`App/Sources/App/CrashReporter.swift`), no-JIT alert offering Enable JIT.
+## State (2026-10-07, build 57)
+- **FXI**: no-JIT x86-64 interpreter (`engine/fxi`), 8.1% of native on device. Since build 57 it
+  also has a Windows mode (`fxi_win.c`): FS/GS segment slots (r[17]/r[18], `gs:[0x30]` = TEB),
+  a thread-safe shared block cache, cached `ec_exit` blocks for jumps into native ARM64EC code.
+- **Step A (Wine DLLs as signed code) proven, builds 43-44**: `engine/pedylib/pe2dylib.py`
+  converts a PE image into a dylib: `__TEXT` [x18 trampolines][PE headers + code] then `__DATA`
+  [rest][TEB TSD-offset word]. Every x18 (TEB) use in ARM64 code is rewritten at build time into
+  a trampoline that reads the TEB from TPIDRRO_EL0's TSD slot; 11,196/11,196 sites in Madeira's
+  DLLs handled; 150 of 167 farm PE files convert (the rest: x64 test exes, 7 D3D/Metal DLLs with
+  one shared code/data page each, xtajit64 = FEX).
+- **Step B (Wine maps from the signed dylibs) works for ARM64EC programs, builds 52-54**:
+  `engine/wine/patches/nojit_dylib.py` patches Madeira's `virtual_ios.c` (active only with
+  `WINE_IOS_NOJIT=1`): `virtual_map_image` maps from `<PE dir>/lib<name>.dylib`; `mprotect_exec`
+  makes code-page requests no-ops and serves exec requests outside signed images without
+  PROT_EXEC (logged); every `[nojit]` line also goes to `MYIOSDECK_NOJIT_TRACE` (crash-proof).
+  `hello-arm64ec.exe` (llvm-mingw ARM64EC, normal CRT) ran start to finish with JIT off,
+  native-speed loop, exit code 42 (`[program]` lines: it writes `C:\myiosdeck-output.txt`, which
+  `WineController.watch` copies into the log).
+  `engine/wine/patches/putenv_lifetime.py` fixes Madeira bugs that crashed iOS after a Windows
+  program exited: `putenv` with stack buffers and `setprogname` with a pointer into the Wine
+  thread's stack (iOS has no exec).
+- **Step D part 1 (FXI = Wine's x64 CPU) works, build 57**: the emulator DLL Wine loads as
+  xtajit64.dll (`engine/pedylib/emu/xtajit64_stub.c`) exports ExitToX64 / DispatchJump /
+  RetToEntryThunk / BeginSimulation as DATA (real code addresses, jumps through
+  `MyiosdeckFxiHost`, which the map hook fills with `mid_fxi_win_host_table()`), and
+  ProcessInit/ThreadInit/BTCpu64IsProcessorFeaturePresent via a plain `blr` into the app.
+  App side: `App/Sources/Native/fxi_win_glue.S` (transitions in the ARM64EC register mapping:
+  RAX=x8 RCX=x0 RDX=x1 RBX=x27 RSP=sp RBP=x29 RSI=x25 RDI=x26 R8-R11=x2-x5 R12-R15=x19-x22,
+  XMM0-15=v0-v15, x9 = target; CPU area = TEB+0x1788: +0 InSimulation, +8 EmulatorStackBase,
+  +0x18 ContextAmd64, +0x30 EmulatorData[0] = our FxiCpu; entry thunk = target + [target-4];
+  a return into an exit thunk is recognised by `blr x16` at [target-4]) and
+  `fxi_win_host.c` (per-thread FxiCpu, errors end the Windows program via Wine's unix
+  NtTerminateProcess with 0xE0F0F001, not the app).
+  **Build 57 result**: Library > "Windows Hello (x64, no JIT)" ran hello-x64.exe's x64 TLS
+  callback through ExitToX64 in FXI and stopped cleanly at **`lock cmpxchg [rbx], rsi`**
+  (`f0 48 0f b1 33`, unimplemented). Everything around it worked.
 
-## FXI: our no-JIT x86-64 interpreter (`engine/fxi`, in the app since build 39)
-- Design: pre-decoded uop blocks cached by guest rip; `[[clang::musttail]]` threaded dispatch (no loop);
-  lazy flags (`fxi_flags.c`) + backward flag-liveness choosing no-flags handler variants; cmp/test+jcc
-  fusion; block chaining + one-entry inline caches for ret/indirect; specialised handlers per op x size x
-  form generated by macros (`fxi_ops.c`); branchless EA (register slot 16 = 0); identity-mapped guest
-  memory; SSE2 subset as lane loops (`fxi_sse.c`); decoder `fxi_decode.c`; ELF static-PIE loader and
-  Linux syscalls write/exit_group/clock_gettime/arch_prctl (`fxi_core.c`); CLI `fxi_main.c`.
-- App bridge: `App/Sources/Native/fxi_bridge.c` (`mid_fxi_run_elf`); `EngineController` runs no-JIT work
-  with FXI, Performance tab shows FEX / FXI / Blink.
-- CI numbers (x86-64 Linux host): integer 10.8%, float 6.7%, memory 7.5%, branch 10.2%, SIMD 5.3% of
-  native, all checksums match. **A17 Pro (build 39): FXI 8.1% of native on average** (integer 10.4%,
-  float 7.8%, memory 8.0%, branch 7.6%, SIMD 6.5%); Blink 0.8%, FEX JIT 90%.
-- No-JIT Windows work is tracked in `docs/NO_JIT_WINDOWS.md` (milestone A spike: `engine/pedylib`).
-- Gaps: no FS/GS segment overrides (Windows uses GS for the TEB), no 32-bit addressing, no x87, only a
-  few SSE3/SSSE3/SSE4 ops (`pinsrd/q`, `pextrd/q`), no AVX, no shld/shrd/cmpxchg/xadd, no self-modifying
-  code invalidation, no threads. An unimplemented instruction stops the guest and names its bytes.
+## Next steps (in order)
+1. FXI instructions for real Windows x64 code, driven by the STOP lines:
+   `cmpxchg` (0F B0/B1, with LOCK = a real atomic: Windows threads share memory), `xadd` (0F C0/C1),
+   `xchg` with memory (implicitly locked), `cmpxchg8b/16b` (0F C7 /1), `lock`-prefixed ALU ops
+   (add/sub/and/or/xor/inc/dec/neg on memory must be atomic), then whatever the next STOP names.
+   Known FXI gaps: no 32-bit addressing, no x87, few SSE3+/SSSE3/SSE4, no AVX, no shld/shrd,
+   no self-modifying-code invalidation, no x64 exceptions (int3, guest faults -> SEH).
+   Rebuild loop for FXI alone: `fxi.yml` (Linux checksums) before the IPA.
+2. Until hello-x64 prints: x64 SEH/unwinding and guest faults inside FXI (a host SIGSEGV while
+   interpreting must become a Windows exception for the x64 code), FPCR/MXCSR, `syscall` never
+   expected (x64 ntdll stubs jump to EC code).
+3. Threads (ThreadInit per thread exists; check the inline-cache race in fxi_ops.c INDIRECT:
+   imm/link written non-atomically), NotifyMemoryProtect/Flush for code invalidation.
+4. Child processes: one signed ntdll per pseudo-process (ship several separately signed ntdll
+   dylibs; today a second mapping of a DLL returns "mapped again -- not supported").
+5. 16 KB-aligned rebuild of the 7 D3D/Metal DLLs (or of the whole PE side) so D3D games load.
+6. FXI speed (phase 4 of docs/FAST_INTERPRETER.md): preserve_none dispatch, superinstructions,
+   NEON SSE, guest register caching; cache ffwd thunks (x64 -> EC calls) as direct exits.
+7. App Store flavour: IPA without FEX/StikDebug flow, no get-task-allow, distribution signing,
+   Wine LGPL relink setup, then submission under 4.7.
 
-## Why Windows games still need JIT (the work for this chat)
-Without JIT iOS executes only signed code. Today Madeira's Wine:
-1. loads its ARM64EC PE DLLs (`arm64ec-windows/*.dll`, prebuilt in Madeira) from files and copies their
-   code into the JIT pool to run it (`[jit-pool] image ... -> pool`, `ml957/ml958` logs);
-2. writes runtime trampolines/thunks into the JIT pool (syscall frames, dispatcher patches, EC thunks);
-3. runs x86-64 game code through FEX as `xtajit64.dll` (also a PE DLL in the JIT pool).
-
-No-JIT plan (milestone 1 = **Windows Hello (x64) runs with JIT off**, then a real game):
-- A. Rebuild Wine's PE DLLs with 16 KB section alignment (code and data never share an iOS page) and
-  package each image as a signed Mach-O dylib in the app bundle (code in an executable segment, data
-  writable, section offsets preserved so ARM64 PC-relative references still work); text must need no
-  relocation writes.
-- B. Change Madeira's ntdll unix loader (`build/ntdll-unix/loader_ios.c`, `virtual_ios.c` in the Madeira
-  checkout; our CI builds it via `engine/wine/build-unix.sh`) to use those images instead of copying
-  code into the JIT pool when JIT is off.
-- C. Replace every runtime-generated trampoline with fixed code compiled into the app.
-- D. Plug FXI in as the x86-64 CPU in place of FEX/xtajit64 (ARM64EC emulator interface), adding GS-based
-  TEB access, Windows x64 calling convention transitions, exceptions/unwinding, threads.
-- E. Speed FXI up (phase 4 in `docs/FAST_INTERPRETER.md`): NEON intrinsics for SSE, superinstructions,
-  `preserve_none` dispatch, SSE4/AVX coverage driven by real game code.
-Expect months; FXI-speed games (~5-10% of native) suit 2D/older titles. Start with a feasibility spike:
-can one Wine ARM64EC DLL run from a signed dylib with JIT off?
+## Hard-won iOS / Wine facts
+- iOS refuses `mmap(MAP_FIXED)` over pages dyld mapped (EPERM): data must be in `__DATA` from the start.
+- ARM64EC exports point at x64 fast-forward thunks (`48 8b c4 48 89 58 20 55 5d e9 rel32`).
+- The TEB TSD slot offset differs per run/device (0x8c8, 0x8e0 seen; Madeira saw 0x898): runtime value.
+- Wine's server answers a mapping off its preferred base with STATUS_IMAGE_NOT_AT_BASE; Wine then
+  relocates (load_ntdll -> virtual_relocate_module; PE loader perform_relocations). Relocating
+  in the map hook too applied pointers twice (build 49).
+- The read-only PE header keeps its preferred ImageBase; code computing `ptr - ImageBase` after
+  relocation breaks (update_arm64ec_ranges runs before relocation, fine).
+- Madeira points the console handle at a file (type 1): console output is not in `[stdio]`.
+- Crash logs: Wine's stderr reaches the app through a pipe whose tail is lost on a crash; use the
+  nojit trace file and `.ips` + `symbolicate.yml`.
 
 ## Rules
-- Don't upload game binaries anywhere (public repo, copyright). Don't add Steam emulators (Goldberg)
-  or anything that bypasses license checks; use the real Steam client.
-- Madeira code is GPL-3.0-or-later with the Madeira Converter Exception; keep headers, note vendored
-  code in `THIRD-PARTY-NOTICES.md`.
-- Every build I install gets a release link; tell me exactly what to test and what log to send.
-- Be honest about what is and isn't possible on iOS; give a recommendation, not a menu, when deciding.
+- Never upload game binaries; no Steam emulators or license-check bypasses.
+- Keep GPL/LGPL headers; note vendored/ported code in `THIRD-PARTY-NOTICES.md`.
+- Every build gets a release link + exact test steps + which log to send.
+- Be honest about what iOS allows; give a recommendation, not a menu.

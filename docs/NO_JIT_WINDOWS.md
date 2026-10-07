@@ -66,7 +66,14 @@ ntdll's pointers twice, build 49); `putenv()` with stack buffers (Madeira's exec
 leaves the environment pointing into a dead thread's stack on iOS, where no exec follows, and
 iOS's own code later crashed on it (build 52; `engine/wine/patches/putenv_lifetime.py`).
 
-Next: the x64 side (step D: FXI behind the emulator interface the stub implements), the 8 DLLs
+**Build 57, JIT off: step D part 1 works.** FXI is Wine's x64 CPU (emulator DLL ->
+`MyiosdeckFxiHost` -> `App/Sources/Native/fxi_win_glue.S` / `fxi_win_host.c`, FXI Windows mode in
+`engine/fxi/fxi_win.c`). hello-x64.exe's x64 TLS callback entered FXI through ExitToX64 and ran
+until `lock cmpxchg [rbx], rsi` (unimplemented), where the Windows program stopped cleanly
+(0xE0F0F001) and the app kept running. Next: the atomic instructions and the rest of what
+real x64 code needs (docs/HANDOFF_NO_JIT.md, "Next steps").
+
+Next (before build 57): the x64 side (step D: FXI behind the emulator interface the stub implements), the 8 DLLs
 that still need a 16 KB rebuild, child processes (one signed ntdll per pseudo-process), and
 step C for whatever runtime code real programs reach.
 
