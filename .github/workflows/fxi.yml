@@ -1,0 +1,31 @@
+name: FXI interpreter
+
+# Builds the FXI x86-64 interpreter for the Linux CI host and runs the guest
+# test programs natively and under FXI: checksums must match, and the job
+# summary shows FXI's speed as a percentage of native.
+on:
+  push:
+    branches: [main]
+    paths: ["engine/fxi/**", "engine/guest/**", ".github/workflows/fxi.yml"]
+  pull_request:
+    paths: ["engine/fxi/**", "engine/guest/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fxi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Toolchain
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq clang xxd > /dev/null
+          clang --version | head -1
+      - name: Guest programs
+        run: bash engine/guest/build.sh "$RUNNER_TEMP/guests"
+      - name: Build FXI
+        run: bash engine/fxi/build.sh "$RUNNER_TEMP/fxi"
+      - name: Native vs FXI
+        run: bash engine/fxi/ci-test.sh "$RUNNER_TEMP/guests" "$RUNNER_TEMP/fxi/fxi"

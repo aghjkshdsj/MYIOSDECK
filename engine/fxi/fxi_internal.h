@@ -1,0 +1,160 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// FXI internals: CPU state, micro-ops, lazy flags. See docs/FAST_INTERPRETER.md.
+
+#ifndef FXI_INTERNAL_H
+#define FXI_INTERNAL_H
+
+#include <stdint.h>
+#include <string.h>
+
+#include "fxi.h"
+
+#if !defined(__clang__)
+#error FXI needs clang (musttail threaded dispatch)
+#endif
+
+#define FXI_LIKELY(x) __builtin_expect(!!(x), 1)
+#define FXI_UNLIKELY(x) __builtin_expect(!!(x), 0)
+#define FXI_INLINE static inline __attribute__((always_inline))
+
+typedef struct FxiCpu FxiCpu;
+typedef struct Uop Uop;
+typedef struct Block Block;
+
+// A 128-bit XMM register, viewed per lane width.
+typedef union {
+    uint8_t b[16]; uint16_t w[8]; uint32_t d[4]; uint64_t q[2];
+    int8_t sb[16]; int16_t sw[8]; int32_t sd[4]; int64_t sq[2];
+    float f[4]; double g[2];
+} X128;
+
+// Every handler has this signature; each ends by tail-calling the next uop.
+typedef void (*OpFn)(FxiCpu *c, Uop *u);
+
+// Register slots. GPRs 0-15 in x86 order (RAX RCX RDX RBX RSP RBP RSI RDI R8-R15);
+// slot 16 is always zero, so a missing base or index costs nothing in an EA.
+enum { R_AX, R_CX, R_DX, R_BX, R_SP, R_BP, R_SI, R_DI, R_ZERO = 16 };
+
+// Lazy flag kinds (combined with the size index 0-3 for 8/16/32/64 bits).
+enum {
+    LF_ADD = 0, LF_ADC, LF_SUB, LF_SBB, LF_LOGIC, LF_INC, LF_DEC, LF_NEG,
+    LF_SHL, LF_SHR, LF_SAR, LF_MUL, LF_ROL, LF_ROR, LF_RAW,
+};
+#define LF(kind, szi) ((kind) << 2 | (szi))
+
+struct FxiCpu {
+    uint64_t r[17];          // GPRs + zero slot; 8-bit regs are byte offsets into this
+    uint64_t rip;            // only exact at block boundaries and on errors
+    // Lazy flags: the last flag-writing operation's inputs and result.
+    uint64_t lf_res, lf_a, lf_b;
+    uint32_t lf_op;          // LF(kind, size index)
+    uint32_t lf_cin;         // carry in (ADC/SBB/INC/DEC), CF=OF for MUL, raw RFLAGS for LF_RAW
+    uint32_t df;             // direction flag
+    uint64_t fs_base, gs_base;
+    _Alignas(16) X128 xmm[16];
+    uint32_t mxcsr;
+    // Run state
+    int stop;                // nonzero: leave the dispatch chain
+    long long exit_code;
+    char *err;               // fxi_result.error
+    struct Fxi *vm;
+};
+
+// One decoded instruction (or fused pair). 56 bytes.
+struct Uop {
+    OpFn fn;
+    Block *link;             // chained successor (taken / call target / inline-cache block)
+    uint64_t imm;            // immediate, absolute branch target, or inline-cache rip
+    int64_t disp;            // EA displacement (RIP-relative already absolute)
+    uint64_t aux;            // fallthrough / return address / next rip
+    Block *link2;            // fallthrough successor of a conditional branch
+    uint16_t dst, src;       // register byte offsets (GPR) or XMM indices
+    uint8_t base, index, scale, cc;
+};
+
+struct Block {
+    uint64_t rip;
+    uint32_t n;              // uops (including the terminator)
+    Uop u[];                 // flexible array
+};
+
+// Interpreter instance (one guest).
+struct Fxi {
+    FxiCpu cpu;
+    Block **table;           // open-addressed rip -> Block
+    uint64_t table_mask, table_count;
+    unsigned long long blocks, syscalls;
+    fxi_result *out;
+    // Guest image
+    uint8_t *image; size_t image_size;
+    uint8_t *stack; size_t stack_size;
+    uint64_t brk;
+};
+
+// ---- Register file access (byte offsets) ----
+#define REGP(c, off) ((uint8_t *)(c)->r + (off))
+FXI_INLINE uint64_t rd8(FxiCpu *c, unsigned off) { return *REGP(c, off); }
+FXI_INLINE uint64_t rd16(FxiCpu *c, unsigned off) { uint16_t v; memcpy(&v, REGP(c, off), 2); return v; }
+FXI_INLINE uint64_t rd32(FxiCpu *c, unsigned off) { return (uint32_t)c->r[off >> 3]; }
+FXI_INLINE uint64_t rd64(FxiCpu *c, unsigned off) { return c->r[off >> 3]; }
+FXI_INLINE void wr8(FxiCpu *c, unsigned off, uint64_t v) { *REGP(c, off) = (uint8_t)v; }
+FXI_INLINE void wr16(FxiCpu *c, unsigned off, uint64_t v) { uint16_t x = (uint16_t)v; memcpy(REGP(c, off), &x, 2); }
+FXI_INLINE void wr32(FxiCpu *c, unsigned off, uint64_t v) { c->r[off >> 3] = (uint32_t)v; }  // zero-extends, as x86-64
+FXI_INLINE void wr64(FxiCpu *c, unsigned off, uint64_t v) { c->r[off >> 3] = v; }
+
+// ---- Memory (identity-mapped; unaligned allowed) ----
+FXI_INLINE uint64_t ld8(uint64_t a) { return *(const uint8_t *)(uintptr_t)a; }
+FXI_INLINE uint64_t ld16(uint64_t a) { uint16_t v; memcpy(&v, (const void *)(uintptr_t)a, 2); return v; }
+FXI_INLINE uint64_t ld32(uint64_t a) { uint32_t v; memcpy(&v, (const void *)(uintptr_t)a, 4); return v; }
+FXI_INLINE uint64_t ld64(uint64_t a) { uint64_t v; memcpy(&v, (const void *)(uintptr_t)a, 8); return v; }
+FXI_INLINE void st8(uint64_t a, uint64_t v) { *(uint8_t *)(uintptr_t)a = (uint8_t)v; }
+FXI_INLINE void st16(uint64_t a, uint64_t v) { uint16_t x = (uint16_t)v; memcpy((void *)(uintptr_t)a, &x, 2); }
+FXI_INLINE void st32(uint64_t a, uint64_t v) { uint32_t x = (uint32_t)v; memcpy((void *)(uintptr_t)a, &x, 4); }
+FXI_INLINE void st64(uint64_t a, uint64_t v) { memcpy((void *)(uintptr_t)a, &v, 8); }
+
+// Branchless effective address: base/index are register slots (16 = zero).
+FXI_INLINE uint64_t fxi_ea(FxiCpu *c, const Uop *u) {
+    return c->r[u->base] + (c->r[u->index] << u->scale) + (uint64_t)u->disp;
+}
+
+// ---- Lazy flags ----
+uint64_t fxi_flag_cf(FxiCpu *c);
+uint64_t fxi_flag_of(FxiCpu *c);
+uint64_t fxi_flag_pf(FxiCpu *c);
+uint64_t fxi_flag_af(FxiCpu *c);
+uint64_t fxi_flag_zf(FxiCpu *c);
+uint64_t fxi_flag_sf(FxiCpu *c);
+uint64_t fxi_rflags(FxiCpu *c);              // materialised RFLAGS
+void fxi_set_rflags(FxiCpu *c, uint64_t f);  // explicit write (popf, sahf, stc...)
+int fxi_cond(FxiCpu *c, unsigned cc);        // x86 condition code 0-15
+
+// ---- Dispatch ----
+#define FXI_NEXT(c, u) do { __attribute__((musttail)) return (u)[1].fn((c), (u) + 1); } while (0)
+#define FXI_GOTO_BLOCK(c, b) do { Block *b_ = (b); __attribute__((musttail)) return b_->u[0].fn((c), b_->u); } while (0)
+
+extern Block *fxi_stop;                         // one "stop" uop: leaves the dispatch chain
+Block *fxi_lookup(FxiCpu *c, uint64_t rip);     // translate on miss; fxi_stop on error
+Block *fxi_translate(struct Fxi *vm, uint64_t rip);
+void fxi_fail(FxiCpu *c, const char *fmt, ...); // set c->stop and the error text
+long fxi_syscall(FxiCpu *c);                    // Linux syscall in RAX/RDI/...; returns result
+
+// Handler tables the decoder picks from (fxi_ops.c).
+enum { F_RR, F_RI, F_RM, F_MR, F_MI, F_COUNT };           // operand forms
+enum { ALU_ADD, ALU_OR, ALU_ADC, ALU_SBB, ALU_AND, ALU_SUB, ALU_XOR, ALU_CMP, ALU_TEST, ALU_COUNT };
+extern const OpFn fxi_alu_tab[ALU_COUNT][F_COUNT][4][2];  // [op][form][size][flags?]
+extern const OpFn fxi_mov_tab[F_COUNT][4];
+enum { SH_ROL, SH_ROR, SH_RCL, SH_RCR, SH_SHL, SH_SHR, SH_SAL, SH_SAR };
+extern const OpFn fxi_shift_tab[8][2][4];                 // [op][R/M][size]
+enum { U_INC, U_DEC, U_NOT, U_NEG };
+extern const OpFn fxi_unary_tab[4][2][4];                 // [op][R/M][size]
+extern const OpFn fxi_ext_tab[2][2][3][4];                // movzx/movsx [signed][R/M][src 8/16/32][dst size]
+extern const OpFn fxi_cmov_tab[2][4];                     // [R/M][size] (cc in u->cc)
+extern const OpFn fxi_setcc_tab[2];                       // [R/M]
+extern const OpFn fxi_lea_tab[4];
+extern const OpFn fxi_muldiv_tab[4][2][4];                // [mul imul div idiv][R/M][size]
+extern const OpFn fxi_imul2_tab[2][4];                    // imul r, r/m [R/M][size]
+extern const OpFn fxi_imul3_tab[2][4];                    // imul r, r/m, imm
+extern const OpFn fxi_fjcc_tab[2][2][2][16];              // fused cmp/test+jcc [cmp/test][RR/RI][32/64][cc]
+OpFn fxi_named(const char *name);                         // misc handlers by name (decoder)
+
+#endif
