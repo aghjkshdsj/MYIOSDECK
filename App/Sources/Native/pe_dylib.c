@@ -260,7 +260,20 @@ static void *pe_export(const pe_image *pe, const char *name) {
     for (uint32_t i = 0; i < nnames; i++) {
         if (strcmp((const char *)pe->base + rd32(pe->base + names + 4 * i), name)) continue;
         uint32_t f = rd32(pe->base + funcs + 4 * rd16(pe->base + ords + 2 * i));
-        return f >= rva && f < rva + size ? NULL : pe->base + f; // forwarders unsupported
+        if (f >= rva && f < rva + size) return NULL; // forwarders unsupported
+        uint8_t *p = pe->base + f;
+        // ARM64EC exports point at an x64 "fast-forward" thunk in .hexpthk
+        // (mov rax,rsp; mov [rax+0x20],rbx; push rbp; pop rbp; jmp <native>), so x64
+        // callers and hooks see x64 code. A native caller follows the jmp, as Wine's
+        // arm64x_check_call does (.Lffwd_seq in signal_arm64ec.c).
+        static const uint8_t ffwd[10] = { 0x48, 0x8b, 0xc4, 0x48, 0x89, 0x58, 0x20, 0x55, 0x5d, 0xe9 };
+        if (!memcmp(p, ffwd, sizeof ffwd)) {
+            uint8_t *native = p + 14 + (int32_t)rd32(p + 10);
+            mid_log("[pe-dylib] export %s: x64 fast-forward thunk +0x%x -> native +0x%lx", name, f,
+                    (unsigned long)(native - pe->base));
+            p = native;
+        }
+        return p;
     }
     return NULL;
 }
