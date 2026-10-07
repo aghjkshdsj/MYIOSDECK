@@ -44,6 +44,16 @@ return or syscall.
 5. **Windows**: FXI as the CPU for Wine's x86-64 code (the role xtajit64.dll/FEX plays today),
    which needs the Wine-side no-JIT work first.
 
+## Status (2026-10-07)
+
+- Phases 1 and 3 done, phase 2 partly (the SSE2 subset compilers emit for the test programs, plus
+  `pinsrd/q`, `pextrd/q`). All guest programs give native-identical results under FXI.
+- CI host (x86-64 Linux, clang), FXI as a share of native: integer 10.8%, float 6.7%, memory 7.5%,
+  branch 10.2%, SIMD 5.3%. Blink on an A17 Pro measured 0.5–1.5% on the same kernels.
+- In the app since build 39: no-JIT runs use FXI; the Performance tab shows FEX, FXI and Blink.
+- Next: device numbers, then phase 4 (profile-driven: SSE on NEON intrinsics, superinstructions
+  for the hottest pairs, `preserve_none` dispatch).
+
 ## Honest expectations
 
 A tuned interpreter on an A17 Pro should reach roughly 5–20% of native on compiled game code:
