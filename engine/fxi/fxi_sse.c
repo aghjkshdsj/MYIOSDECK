@@ -214,6 +214,16 @@ DEF_CVT2SI(cvtss2si, f, ld32, 0)
 DEF_CVT2SI(cvttsd2si, g, ld64, 1)
 DEF_CVT2SI(cvtsd2si, g, ld64, 0)
 
+// ---- SSE4.1 lane insert/extract (u->imm = lane) ----
+static void pinsrd_R(FxiCpu *c, Uop *u) { XR(u->dst)->d[u->imm & 3] = (uint32_t)c->r[u->src >> 3]; FXI_NEXT(c, u); }
+static void pinsrd_M(FxiCpu *c, Uop *u) { XR(u->dst)->d[u->imm & 3] = (uint32_t)ld32(fxi_ea(c, u)); FXI_NEXT(c, u); }
+static void pinsrq_R(FxiCpu *c, Uop *u) { XR(u->dst)->q[u->imm & 1] = c->r[u->src >> 3]; FXI_NEXT(c, u); }
+static void pinsrq_M(FxiCpu *c, Uop *u) { XR(u->dst)->q[u->imm & 1] = ld64(fxi_ea(c, u)); FXI_NEXT(c, u); }
+static void pextrd_R(FxiCpu *c, Uop *u) { c->r[u->dst >> 3] = XR(u->src)->d[u->imm & 3]; FXI_NEXT(c, u); }
+static void pextrd_M(FxiCpu *c, Uop *u) { st32(fxi_ea(c, u), XR(u->src)->d[u->imm & 3]); FXI_NEXT(c, u); }
+static void pextrq_R(FxiCpu *c, Uop *u) { c->r[u->dst >> 3] = XR(u->src)->q[u->imm & 1]; FXI_NEXT(c, u); }
+static void pextrq_M(FxiCpu *c, Uop *u) { st64(fxi_ea(c, u), XR(u->src)->q[u->imm & 1]); FXI_NEXT(c, u); }
+
 // ---- name table for the decoder ----
 #define E2(n) { #n "_RR", n##_RR }, { #n "_RM", n##_RM }
 #define E4CVT(n) { #n "_R32", n##_R32 }, { #n "_R64", n##_R64 }, { #n "_M32", n##_M32 }, { #n "_M64", n##_M64 }
@@ -243,6 +253,8 @@ static const struct { const char *name; OpFn fn; } kSse[] = {
     { "psrlw_RI", psrlw_RI }, { "psrld_RI", psrld_RI }, { "psrlq_RI", psrlq_RI },
     { "psraw_RI", psraw_RI }, { "psrad_RI", psrad_RI }, { "pslldq_RI", pslldq_RI }, { "psrldq_RI", psrldq_RI },
     E4CVT(cvtsi2ss), E4CVT(cvtsi2sd), E4CVT(cvttss2si), E4CVT(cvtss2si), E4CVT(cvttsd2si), E4CVT(cvtsd2si),
+    { "pinsrd_R", pinsrd_R }, { "pinsrd_M", pinsrd_M }, { "pinsrq_R", pinsrq_R }, { "pinsrq_M", pinsrq_M },
+    { "pextrd_R", pextrd_R }, { "pextrd_M", pextrd_M }, { "pextrq_R", pextrq_R }, { "pextrq_M", pextrq_M },
 };
 
 OpFn fxi_sse_named(const char *name) {

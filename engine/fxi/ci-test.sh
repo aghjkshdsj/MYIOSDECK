@@ -33,7 +33,7 @@ for spec in integer:3 float:16 memory:50 branch:6 simd:150; do
         fail=1; continue
     fi
     fns=$(sed -n 's/.*ns=\([0-9]*\).*/\1/p' <<< "$fxi"); fsum=$(sed -n 's/.*sum=\([0-9]*\).*/\1/p' <<< "$fxi")
-    pct=$(awk -v n="$nns" -v f="$fns" 'BEGIN { printf "%.2f", f > 0 ? 100 * n / f : 0 }')
+    pct=$(awk -v n="$nns" -v f="$fns" 'BEGIN { printf "%.2f", (f > 0 ? 100 * n / f : 0) }')
     if [ "$nsum" = "$fsum" ]; then ck="match"; else ck="MISMATCH ($nsum vs $fsum)"; fail=1; fi
     echo "$k: native ${nns} ns, fxi ${fns} ns = ${pct}% of native, checksum $ck"
     echo "| $k | ${nns} ns | ${fns} ns | ${pct}% | $ck |" >> "$summary"

@@ -579,6 +579,20 @@ static int decode_one(Dec *d) {
     case 0x0b: { Uop *u = emit(d, named("hlt")); u->aux = d->rip; return 1; }
     case 0x0d: case 0x18: case 0x19: case 0x1a: case 0x1b: case 0x1c: case 0x1d: case 0x1e: case 0x1f:
         modrm(d); emit(d, named("nop")); return 0;   // prefetch, hint nops, endbr64
+    case 0x3a: {   // SSE4.1 subset: pinsrd/q, pextrd/q (66 prefix)
+        uint8_t op3 = *d->p++;
+        if (!d->opsize16 || (op3 != 0x22 && op3 != 0x16)) return unimplemented(d, "0f 3a");
+        modrm(d);
+        uint64_t lane = rd_u8(d);
+        char nm[16];
+        snprintf(nm, sizeof nm, "%s%c_%s", op3 == 0x22 ? "pinsr" : "pextr", d->rexw ? 'q' : 'd', d->is_mem ? "M" : "R");
+        Uop *u = emit(d, named(nm));
+        u->imm = lane;
+        if (op3 == 0x22) { u->dst = (uint16_t)d->reg; u->src = (uint16_t)(d->rm * 8); }   // xmm <- r/m
+        else { u->dst = (uint16_t)(d->rm * 8); u->src = (uint16_t)d->reg; }              // r/m <- xmm
+        if (d->is_mem) set_mem(d, u);
+        return 0;
+    }
     case 0x31: emit(d, named("rdtsc")); return 0;
     case 0xa2: emit(d, named("cpuid")); return 0;
     case 0xa3: case 0xba: {
