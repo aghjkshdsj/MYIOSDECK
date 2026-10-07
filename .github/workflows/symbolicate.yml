@@ -1,0 +1,35 @@
+name: Symbolicate a crash
+
+# Turns image offsets from a device crash report (.ips: "imageOffset" of frames in the
+# MYIOSDECK image) into function + source line, using the dSYM a Build IPA run kept.
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Build IPA run id whose dSYM matches the crashed build
+        required: true
+      offsets:
+        description: Space-separated image offsets (decimal or 0x hex) in the MYIOSDECK image
+        required: true
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  atos:
+    runs-on: macos-26
+    steps:
+      - name: Download dSYM
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download "${{ inputs.run_id }}" -R "$GITHUB_REPOSITORY" -n dsym -D dsym
+      - name: atos
+        run: |
+          DWARF=$(find dsym -path '*DWARF/*' -type f | head -1)
+          echo "DWARF: $DWARF"
+          LOAD=0x100000000
+          for o in ${{ inputs.offsets }}; do
+            addr=$(printf '0x%x' $(( LOAD + o )))
+            echo "$o -> $(xcrun atos -arch arm64 -o "$DWARF" -l $LOAD $addr)" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
