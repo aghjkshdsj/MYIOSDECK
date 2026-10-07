@@ -32,6 +32,18 @@ int wine_crash_exit_status(uint32_t *status);
 /// the MYIOSDECK log, line by line. Idempotent.
 void mid_capture_stdio(void);
 
+/// Stage 3 display: hand DXMT the CAMetalLayer every Wine window presents into
+/// (once per process; the layer must outlive Wine).
+void mid_display_set_layer(void *metal_layer);
+
+/// Where the game surface sits: `frame` in window points (winios desktop
+/// compositor), `rect` the presented area relative to that frame.
+void mid_display_layout(double fx, double fy, double fw, double fh,
+                        double rx, double ry, double rw, double rh);
+
+/// The guest's virtual monitor in pixels (1024x768 unless a program changes it).
+void mid_display_screen_size(int *w, int *h);
+
 #ifdef __cplusplus
 }
 #endif

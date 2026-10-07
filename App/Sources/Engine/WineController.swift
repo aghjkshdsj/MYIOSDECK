@@ -10,6 +10,7 @@ final class WineController: ObservableObject, @unchecked Sendable {
         let id: String      // file name in the DLL farm (C:\windows\system32)
         let title: String
         let detail: String
+        var graphics = false  // opens a window: shown on the game surface (stage 3)
     }
 
     /// Madeira's test programs, shipped in the ARM64EC DLL farm.
@@ -17,6 +18,8 @@ final class WineController: ObservableObject, @unchecked Sendable {
         Program(id: "hello-x64.exe", title: "Windows Hello (x64)", detail: "Console hello world through Wine + FEX ARM64EC"),
         Program(id: "fib-x64.exe", title: "Fibonacci (x64)", detail: "Recursive CPU test: x86-64 call/ret through FEX"),
         Program(id: "clocktest-x64.exe", title: "Clock test (x64)", detail: "Windows timers and QueryPerformanceCounter"),
+        Program(id: "cube-x64.exe", title: "Direct3D 11 cube (x64)", detail: "Spinning cube: D3D11 through DXMT to Metal", graphics: true),
+        Program(id: "d3d12-cube-x64.exe", title: "Direct3D 12 cube (x64)", detail: "Spinning cube: D3D12 through Madeira's converter to Metal", graphics: true),
     ]
 
     @Published private(set) var state: State = .idle
@@ -38,6 +41,8 @@ final class WineController: ObservableObject, @unchecked Sendable {
             return
         }
         state = .booting(program.title)
+        // DXMT takes the layer when the program creates its swapchain.
+        if program.graphics { GameHostView.register() }
         let prefix = prefixURL.path
         dlog("[wine] booting \(program.id) in \(prefix)")
         queue.async {

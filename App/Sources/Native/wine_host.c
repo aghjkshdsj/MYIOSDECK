@@ -115,6 +115,20 @@ static void follow_wine_log(const char *prefix) {
 
 static int g_booted;
 
+/* Madeira's IOSDisplayShim.m and Winios.m (staged app sources). */
+extern void madeira_display_set_layer(void *layer);
+extern void winios_screen_size(int *w, int *h);
+extern void winios_set_compositor_frame(double x, double y, double w, double h);
+extern void winios_set_desktop_rect(double x, double y, double w, double h, int set);
+
+void mid_display_set_layer(void *metal_layer) { madeira_display_set_layer(metal_layer); }
+void mid_display_screen_size(int *w, int *h) { winios_screen_size(w, h); }
+void mid_display_layout(double fx, double fy, double fw, double fh,
+                        double rx, double ry, double rw, double rh) {
+    winios_set_compositor_frame(fx, fy, fw, fh);
+    winios_set_desktop_rect(rx, ry, rw, rh, 1);
+}
+
 bool mid_wine_linked(void) { return true; }
 int mid_wine_running(void) { return wine_process_is_running(); }
 
@@ -179,6 +193,13 @@ bool mid_wine_boot(const char *prefix, const char *exe, const char *args, char *
 }
 
 #else
+
+void mid_display_set_layer(void *metal_layer) { (void)metal_layer; }
+void mid_display_screen_size(int *w, int *h) { *w = 1024; *h = 768; }
+void mid_display_layout(double fx, double fy, double fw, double fh,
+                        double rx, double ry, double rw, double rh) {
+    (void)fx; (void)fy; (void)fw; (void)fh; (void)rx; (void)ry; (void)rw; (void)rh;
+}
 
 bool mid_wine_linked(void) { return false; }
 int mid_wine_running(void) { return 0; }

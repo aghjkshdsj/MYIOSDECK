@@ -9,6 +9,8 @@ struct LibraryView: View {
     @EnvironmentObject private var wine: WineController
     @EnvironmentObject private var jit: JITController
     @State private var noJITAction: (() -> Void)?
+    @State private var surfaceTitle = ""
+    @State private var showSurface = false
 
     private struct Stage: Identifiable {
         let id: Int
@@ -19,8 +21,8 @@ struct LibraryView: View {
 
     private let stages = [
         Stage(id: 1, title: "JIT + FEX x86-64 translation", detail: "StikDebug JIT pool, FEXCore tuned to the A17 Pro, benchmarks, plus a no-JIT interpreter. Verified on iPhone 15 Pro Max / iOS 27.", done: true),
-        Stage(id: 2, title: "Wine ARM64EC (Windows)", detail: "Wine running natively on ARM64 in-process, wineserver as a thread, FEX as xtajit64.dll for x86-64 code.", done: false),
-        Stage(id: 3, title: "Direct3D 9/10/11/12 on Metal", detail: "DXMT for D3D9-11 and a D3D12 path, presenting through the Metal stage.", done: false),
+        Stage(id: 2, title: "Wine ARM64EC (Windows)", detail: "Wine running natively on ARM64 in-process, wineserver as a thread, FEX as xtajit64.dll for x86-64 code. Verified on device (build 20).", done: true),
+        Stage(id: 3, title: "Direct3D 9/10/11/12 on Metal", detail: "DXMT for D3D9-11 and Madeira's D3D12 converter are in the app; the D3D11/D3D12 cubes are the first test.", done: false),
         Stage(id: 4, title: "Steam", detail: "Steam sign-in (QR or password + Steam Guard), owned library, depot downloads, cloud saves, launch through Valve's Windows client.", done: false),
         Stage(id: 5, title: "Deck input", detail: "Bluetooth controllers as XInput, touch controls, keyboard and mouse.", done: false),
     ]
@@ -55,10 +57,31 @@ struct LibraryView: View {
             .frame(maxWidth: .infinity)
         }
         .jitGate(pending: $noJITAction)
+        .fullScreenCover(isPresented: $showSurface) { gameSurface }
+    }
+
+    /// Full-screen surface for a Windows program's Direct3D window. The bar sits
+    /// outside the surface because the Metal host view is above all other views.
+    private var gameSurface: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text(surfaceTitle).font(.headline)
+                Spacer()
+                Button("Close") { showSurface = false }
+                    .buttonStyle(DeckButtonStyle())
+                    .frame(width: 90)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(Deck.panel)
+            GameSurfaceView()
+                .ignoresSafeArea(edges: [.bottom, .horizontal])
+        }
+        .background(Color.black)
     }
 
     private var windowsCard: some View {
-        DeckCard(title: "Windows programs (Wine, stage 2)", icon: "macwindow") {
+        DeckCard(title: "Windows programs (Wine + Direct3D)", icon: "macwindow") {
             if !wine.linked {
                 Text("Wine is being built for iOS in CI (Stage 2). Once it links, Windows x64 programs run here through Wine ARM64EC + FEX.")
                     .font(.subheadline).foregroundStyle(Deck.dim)
@@ -72,11 +95,21 @@ struct LibraryView: View {
                             Text(p.detail).font(.caption).foregroundStyle(Deck.dim)
                         }
                         Spacer()
-                        Button("Play") { wine.run(p) }
+                        Button("Play") {
+                            wine.run(p)
+                            if p.graphics, case .booting = wine.state {
+                                surfaceTitle = p.title
+                                showSurface = true
+                            }
+                        }
                             .buttonStyle(DeckButtonStyle())
                             .frame(width: 90)
                             .disabled(!jit.isReady)
                     }
+                }
+                if !surfaceTitle.isEmpty, !showSurface {
+                    Button("Show \(surfaceTitle)") { showSurface = true }
+                        .buttonStyle(DeckButtonStyle())
                 }
                 switch wine.state {
                 case .idle:
