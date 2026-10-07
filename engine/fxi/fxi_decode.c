@@ -23,7 +23,7 @@ typedef struct {
 typedef struct {
     const uint8_t *p, *start;
     uint64_t rip;              // start of the current instruction
-    int rex, rexw, rexr, rexx, rexb, opsize16, rep, repne, seg, addr32, seg_bad;
+    int rex, rexw, rexr, rexx, rexb, opsize16, rep, repne, seg, addr32, seg_bad, lock;
     // ModRM
     int mod, reg, rm, is_mem, riprel;
     uint8_t base, index, scale;
@@ -126,6 +126,15 @@ static int unimplemented(Dec *d, const char *what) {
 // ---- emission helpers ----
 static void emit_alu(Dec *d, int op, int form, int bits, uint16_t dst, uint16_t src, uint64_t imm) {
     int si = si_of(bits);
+    if (d->lock && (form == F_MR || form == F_MI) && op != ALU_CMP && op != ALU_TEST) {
+        Uop *u = emit(d, named("lock_alu"));   // atomic read-modify-write (fxi_atomic.c)
+        u->cc = (uint8_t)si; u->aux = (uint64_t)op; u->imm = imm;
+        u->src = form == F_MI ? 0xffff : src;
+        set_mem(d, u);
+        meta(d)->kill = 1;
+        meta(d)->reads = (op == ALU_ADC || op == ALU_SBB);
+        return;
+    }
     Uop *u = emit(d, fxi_alu_tab[op][form][si][1]);
     u->dst = dst; u->src = src; u->imm = imm;
     if (form == F_RM || form == F_MR || form == F_MI) set_mem(d, u);
@@ -295,17 +304,37 @@ static int decode_sse(Dec *d, uint8_t op) {
     return unimplemented(d, "sse");
 }
 
+// lock inc/dec/not/neg on memory: atomic (fxi_atomic.c). Flags always recorded.
+static void emit_lock_unary(Dec *d, int op, int bits) {
+    Uop *u = emit(d, named("lock_unary"));
+    u->cc = (uint8_t)si_of(bits); u->aux = (uint64_t)op;
+    set_mem(d, u);
+    if (op == U_INC || op == U_DEC) meta(d)->reads = 1;   // keep CF
+    else if (op == U_NEG) meta(d)->kill = 1;
+}
+
+// bt/bts/btr/btc (bop 0-3) with the bit index in a register (src) or an immediate.
+static void emit_bitop(Dec *d, int bop, int bits, int has_imm) {
+    uint64_t imm = has_imm ? rd_u8(d) : 0;
+    Uop *u = emit(d, named(d->is_mem ? "bitop_M" : "bitop_R"));
+    u->cc = (uint8_t)si_of(bits); u->aux = (uint64_t)bop; u->imm = imm;
+    u->src = has_imm ? 0xffff : gpr(d, d->reg, bits);
+    if (d->is_mem) set_mem(d, u); else u->dst = gpr(d, d->rm, bits);
+    meta(d)->reads = 1;   // only CF changes
+}
+
 // ---- one instruction; returns 1 when it ended the block ----
 static int decode_one_inner(Dec *d) {
     d->start = d->p;
-    d->rex = d->rexw = d->rexr = d->rexx = d->rexb = d->opsize16 = d->rep = d->repne = d->seg = d->addr32 = d->seg_bad = 0;
+    d->rex = d->rexw = d->rexr = d->rexx = d->rexb = d->opsize16 = d->rep = d->repne = d->seg = d->addr32 = d->seg_bad = d->lock = 0;
     uint8_t b;
     for (;;) {   // legacy prefixes
         b = *d->p;
         if (b == 0x66) d->opsize16 = 1;
         else if (b == 0xf3) { d->rep = 1; d->repne = 0; }
         else if (b == 0xf2) { d->repne = 1; d->rep = 0; }
-        else if (b == 0xf0 || b == 0x2e || b == 0x3e || b == 0x26 || b == 0x36) { }
+        else if (b == 0xf0) d->lock = 1;
+        else if (b == 0x2e || b == 0x3e || b == 0x26 || b == 0x36) { }
         else if (b == 0x64 || b == 0x65) d->seg = b;
         else if (b == 0x67) d->addr32 = 1;
         else break;
@@ -392,10 +421,14 @@ static int decode_one_inner(Dec *d) {
     case 0x86: case 0x87: {
         int sz = b == 0x86 ? 8 : bits;
         modrm(d);
-        char nm[16]; snprintf(nm, sizeof nm, "xchg_%s_%d", d->is_mem ? "M" : "R", sz);
+        if (d->is_mem) {   // implicitly locked: atomic
+            Uop *u = emit(d, named("xchg_M"));
+            u->cc = (uint8_t)si_of(sz); u->src = gpr(d, d->reg, sz); set_mem(d, u);
+            return 0;
+        }
+        char nm[16]; snprintf(nm, sizeof nm, "xchg_R_%d", sz);
         Uop *u = emit(d, named(nm));
         u->dst = gpr(d, d->rm, sz); u->src = gpr(d, d->reg, sz);
-        if (d->is_mem) set_mem(d, u);
         return 0;
     }
     case 0x88: case 0x89: {
@@ -511,6 +544,7 @@ static int decode_one_inner(Dec *d) {
             return 0;
         }
         if (op == 2 || op == 3) {
+            if (d->lock && d->is_mem) { emit_lock_unary(d, op == 2 ? U_NOT : U_NEG, sz); return 0; }
             Uop *u = emit(d, fxi_unary_tab[op == 2 ? U_NOT : U_NEG][d->is_mem][si_of(sz)]);
             u->dst = gpr(d, d->rm, sz); if (d->is_mem) set_mem(d, u);
             if (op == 3) meta(d)->cc_live = 1;
@@ -527,6 +561,7 @@ static int decode_one_inner(Dec *d) {
         modrm(d);
         int op = d->reg & 7;
         if (op <= 1) {
+            if (d->lock && d->is_mem) { emit_lock_unary(d, op == 0 ? U_INC : U_DEC, sz); return 0; }
             Uop *u = emit(d, fxi_unary_tab[op == 0 ? U_INC : U_DEC][d->is_mem][si_of(sz)]);
             u->dst = gpr(d, d->rm, sz); if (d->is_mem) set_mem(d, u);
             meta(d)->cc_live = 1;
@@ -602,16 +637,31 @@ static int decode_one_inner(Dec *d) {
     }
     case 0x31: emit(d, named("rdtsc")); return 0;
     case 0xa2: emit(d, named("cpuid")); return 0;
-    case 0xa3: case 0xba: {
+    case 0xa3: case 0xab: case 0xb3: case 0xbb:   // bt bts btr btc r/m, r
         modrm(d);
-        if (d->is_mem) return unimplemented(d, "bt mem");
-        if (op == 0xba && (d->reg & 7) != 4) return unimplemented(d, "bts/btr/btc");
-        Uop *u = emit(d, named("bt_R"));
-        u->dst = gpr(d, d->rm, bits); u->cc = (uint8_t)si_of(bits);
-        if (op == 0xba) { u->src = 0xffff; u->imm = rd_u8(d); } else u->src = gpr(d, d->reg, bits);
-        meta(d)->reads = 1;
+        emit_bitop(d, (op >> 3) & 3, bits, 0);
+        return 0;
+    case 0xba:                                     // bt bts btr btc r/m, imm8 (/4-/7)
+        modrm(d);
+        if ((d->reg & 7) < 4) return unimplemented(d, "0f ba /0-3");
+        emit_bitop(d, d->reg & 3, bits, 1);
+        return 0;
+    case 0xb0: case 0xb1: case 0xc0: case 0xc1: {  // cmpxchg, xadd r/m, r
+        int sz = (op & 1) ? bits : 8, is_xadd = op >= 0xc0;
+        modrm(d);
+        char nm[16]; snprintf(nm, sizeof nm, "%s_%s", is_xadd ? "xadd" : "cmpxchg", d->is_mem ? "M" : "R");
+        Uop *u = emit(d, named(nm));
+        u->cc = (uint8_t)si_of(sz); u->src = gpr(d, d->reg, sz);
+        if (d->is_mem) set_mem(d, u); else u->dst = gpr(d, d->rm, sz);
+        meta(d)->kill = 1;
         return 0;
     }
+    case 0xc7:                                     // cmpxchg8b/16b m
+        modrm(d);
+        if ((d->reg & 7) != 1 || !d->is_mem) return unimplemented(d, "0f c7");
+        set_mem(d, emit(d, named(d->rexw ? "cmpxchg16b" : "cmpxchg8b")));
+        meta(d)->reads = 1;   // only ZF changes
+        return 0;
     case 0xaf: {
         modrm(d);
         Uop *u = emit(d, fxi_imul2_tab[d->is_mem][si_of(bits)]);

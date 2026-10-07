@@ -26,4 +26,10 @@ for prog in hello bench bench_sse2; do
     if [ "$prog" = hello ]; then "$OUT/$prog.elf"; else "$OUT/$prog.elf" integer 2; "$OUT/$prog.elf" simd 10; fi
     (cd "$OUT" && xxd -i -n "guest_${prog}_elf" "$prog.elf" > "guest_${prog}.h")
 done
+
+# atomics: cmpxchg/xadd/xchg/lock ALU/cmpxchg16b/bt* results and flags (FXI must match exactly).
+# -mno-red-zone: the test reads flags with pushfq inside inline asm.
+gcc "${CFLAGS[@]}" -march=x86-64 -mno-red-zone -o "$OUT/atomics.elf" "$HERE/atomics.c"
+strip "$OUT/atomics.elf"
+"$OUT/atomics.elf" | tail -1
 ls -la "$OUT"

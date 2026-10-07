@@ -470,10 +470,9 @@ static void op_cqo(FxiCpu *c, Uop *u) { c->r[R_DX] = (int64_t)c->r[R_AX] < 0 ? ~
 static void op_bswap32(FxiCpu *c, Uop *u) { wr32(c, u->dst, __builtin_bswap32((uint32_t)c->r[u->dst >> 3])); FXI_NEXT(c, u); }
 static void op_bswap64(FxiCpu *c, Uop *u) { c->r[u->dst >> 3] = __builtin_bswap64(c->r[u->dst >> 3]); FXI_NEXT(c, u); }
 
-// xchg: [R/M][size]
+// xchg r, r by size (xchg with memory is atomic: fxi_atomic.c)
 #define DEF_XCHG(S)                                                                        \
-    static void xchg_R_##S(FxiCpu *c, Uop *u) { uint64_t a = rd##S(c, u->dst), b = rd##S(c, u->src); wr##S(c, u->dst, b); wr##S(c, u->src, a); FXI_NEXT(c, u); } \
-    static void xchg_M_##S(FxiCpu *c, Uop *u) { uint64_t ad = fxi_ea(c, u); uint64_t a = ld##S(ad), b = rd##S(c, u->src); st##S(ad, b); wr##S(c, u->src, a); FXI_NEXT(c, u); }
+    static void xchg_R_##S(FxiCpu *c, Uop *u) { uint64_t a = rd##S(c, u->dst), b = rd##S(c, u->src); wr##S(c, u->dst, b); wr##S(c, u->src, a); FXI_NEXT(c, u); }
 DEF_XCHG(8) DEF_XCHG(16) DEF_XCHG(32) DEF_XCHG(64)
 
 // Bit scans and counts (16/32/64): the decoder puts the operand size index in u->cc.
@@ -497,16 +496,6 @@ BIT_OP(tzcnt, { uint64_t r = v ? (uint64_t)__builtin_ctzll(v) : bits; bitdst(c, 
 BIT_OP(lzcnt, { uint64_t r = v ? (uint64_t)(__builtin_clzll(v) - (64 - bits)) : bits; bitdst(c, u, r);
                fxi_set_rflags(c, (fxi_rflags(c) & ~0x41ull) | (v == 0) | (uint64_t)(r == 0) << 6); })
 BIT_OP(popcnt, { bitdst(c, u, (uint64_t)__builtin_popcountll(v)); fxi_set_rflags(c, (uint64_t)(v == 0) << 6); })
-
-// bt r, r|imm (register operand only; size index in u->cc, bit index from
-// register u->src or, when u->src == 0xffff, u->imm). Only CF changes.
-static void bt_R(FxiCpu *c, Uop *u) {
-    unsigned si = u->cc, bits = 8u << si;
-    uint64_t v = si == 1 ? rd16(c, u->dst) : si == 2 ? rd32(c, u->dst) : rd64(c, u->dst);
-    unsigned n = (u->src == 0xffff ? (unsigned)u->imm : (unsigned)c->r[u->src >> 3]) & (bits - 1);
-    fxi_set_rflags(c, (fxi_rflags(c) & ~1ull) | ((v >> n) & 1));
-    FXI_NEXT(c, u);
-}
 
 static void op_cld(FxiCpu *c, Uop *u) { c->df = 0; FXI_NEXT(c, u); }
 static void op_std(FxiCpu *c, Uop *u) { c->df = 1; FXI_NEXT(c, u); }
@@ -581,19 +570,20 @@ static const struct { const char *name; OpFn fn; } kNamed[] = {
     { "cbw", op_cbw }, { "cwde", op_cwde }, { "cdqe", op_cdqe }, { "cwd", op_cwd }, { "cdq", op_cdq }, { "cqo", op_cqo },
     { "bswap32", op_bswap32 }, { "bswap64", op_bswap64 },
     { "xchg_R_8", xchg_R_8 }, { "xchg_R_16", xchg_R_16 }, { "xchg_R_32", xchg_R_32 }, { "xchg_R_64", xchg_R_64 },
-    { "xchg_M_8", xchg_M_8 }, { "xchg_M_16", xchg_M_16 }, { "xchg_M_32", xchg_M_32 }, { "xchg_M_64", xchg_M_64 },
     { "bsf_R", bsf_R }, { "bsf_M", bsf_M }, { "bsr_R", bsr_R }, { "bsr_M", bsr_M },
     { "tzcnt_R", tzcnt_R }, { "tzcnt_M", tzcnt_M }, { "lzcnt_R", lzcnt_R }, { "lzcnt_M", lzcnt_M },
-    { "popcnt_R", popcnt_R }, { "popcnt_M", popcnt_M }, { "bt_R", bt_R },
+    { "popcnt_R", popcnt_R }, { "popcnt_M", popcnt_M },
     { "cld", op_cld }, { "std", op_std }, { "clc", op_clc }, { "stc", op_stc }, { "cmc", op_cmc },
     { "lahf", op_lahf }, { "sahf", op_sahf }, { "cpuid", op_cpuid }, { "rdtsc", op_rdtsc },
     { "stos", op_stos }, { "movs", op_movs },
 };
 
-OpFn fxi_sse_named(const char *name);   // fxi_sse.c
+OpFn fxi_sse_named(const char *name);      // fxi_sse.c
+OpFn fxi_atomic_named(const char *name);   // fxi_atomic.c
 
 OpFn fxi_named(const char *name) {
     for (size_t i = 0; i < sizeof kNamed / sizeof kNamed[0]; i++)
         if (!strcmp(kNamed[i].name, name)) return kNamed[i].fn;
-    return fxi_sse_named(name);
+    OpFn f = fxi_atomic_named(name);
+    return f ? f : fxi_sse_named(name);
 }

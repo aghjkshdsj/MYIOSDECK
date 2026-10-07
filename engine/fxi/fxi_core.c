@@ -12,7 +12,7 @@
 
 #include "fxi_internal.h"
 
-#define FXI_VERSION "fxi 0.1 (integer + SSE2 core)"
+#define FXI_VERSION "fxi 0.2 (integer + SSE2 core, atomics)"
 
 Block *fxi_stop;
 static int g_echo_fd = -1;

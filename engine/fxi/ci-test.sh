@@ -15,6 +15,17 @@ else
     echo "hello: FAILED"; cat /tmp/fxi_hello.txt; fail=1
 fi
 
+echo "== atomics =="
+"$G/atomics.elf" > /tmp/native_atomics.txt
+"$FXI" "$G/atomics.elf" > /tmp/fxi_atomics.txt 2> /tmp/fxi_atomics_err.txt
+if diff -u /tmp/native_atomics.txt /tmp/fxi_atomics.txt; then
+    echo "atomics: match ($(wc -l < /tmp/native_atomics.txt) lines)"
+    echo "atomics (cmpxchg/xadd/xchg/lock ALU/cmpxchg16b/bt*): **match**" >> "$summary"
+else
+    echo "atomics: MISMATCH"; cat /tmp/fxi_atomics_err.txt; fail=1
+    echo "atomics: **MISMATCH** $(tail -1 /tmp/fxi_atomics_err.txt)" >> "$summary"
+fi
+
 {
     echo "## FXI vs native (x86-64 CI host)"
     echo "| kernel | native | FXI | FXI % of native | checksum |"
