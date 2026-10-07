@@ -36,7 +36,7 @@ typedef void (*OpFn)(FxiCpu *c, Uop *u);
 // travel between handlers as arguments, which preserve_none keeps in host registers
 // (23 on ARM64: c, u and 21 values). Order: the first nine go to callee-saved x20-x28,
 // so they survive calls into ordinary C; the hottest guest registers come first.
-#if defined(__has_attribute) && __has_attribute(preserve_none)
+#if defined(__aarch64__) && defined(__has_attribute) && __has_attribute(preserve_none)   // x86 hosts: too few argument registers
 #define FXR_CC __attribute__((preserve_none))
 #else
 #define FXR_CC

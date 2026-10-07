@@ -441,20 +441,62 @@ static const PFn t_fj_ri[2][2][16] = {
 // definitions are FXI's own (fxr_sse_ops.inc), memory operands come through T. ----
 #define LANES4(...) for (int i = 0; i < 4; i++) { __VA_ARGS__; }
 #define LANES2(...) for (int i = 0; i < 2; i++) { __VA_ARGS__; }
-typedef struct SseOp { const char *name; PFn rr, rt; struct SseOp *next; } SseOp;
+typedef struct SseOp { const char *name; PFn rr, rt; struct SseOp *next; int hot; } SseOp;
 static SseOp *g_sse_ops;
+// Load W bytes from an address into a zeroed 16-byte temporary.
+#define XLOAD(t, addr, W) do { if ((W) < 16) memset(&(t), 0, sizeof(t)); memcpy(&(t), (const void *)(uintptr_t)(addr), (W)); } while (0)
+// Each op's body is one inline function shared by its register, T and [base+index] forms.
 #define DEF_X(NAME, W, ...)                                                                \
-    PH px_##NAME##_RR(FXR_PARAMS) {                                                        \
-        X128 *D = &c->xmm[u->dst]; X128 t = c->xmm[u->src]; const X128 *S = &t; (void)D; (void)S; \
-        __VA_ARGS__; PNEXT(); }                                                            \
-    PH px_##NAME##_RT(FXR_PARAMS) {                                                        \
-        X128 *D = &c->xmm[u->dst]; X128 t; memset(&t, 0, sizeof t);                        \
-        memcpy(&t, (const void *)(uintptr_t)T, (W)); const X128 *S = &t; (void)D; (void)S;  \
-        __VA_ARGS__; PNEXT(); }                                                            \
-    static SseOp sse_##NAME = { #NAME, px_##NAME##_RR, px_##NAME##_RT, 0 };                \
+    FXI_INLINE void sx_##NAME(FxiCpu *c, Uop *u, X128 *D, const X128 *S) {                 \
+        (void)c; (void)u; (void)D; (void)S; __VA_ARGS__; }                                 \
+    PH px_##NAME##_RR(FXR_PARAMS) { X128 t = c->xmm[u->src]; sx_##NAME(c, u, &c->xmm[u->dst], &t); PNEXT(); } \
+    PH px_##NAME##_RT(FXR_PARAMS) { X128 t; XLOAD(t, T, (W)); sx_##NAME(c, u, &c->xmm[u->dst], &t); PNEXT(); } \
+    static SseOp sse_##NAME = { #NAME, px_##NAME##_RR, px_##NAME##_RT, 0, -1 };            \
     __attribute__((constructor)) static void reg_##NAME(void) { sse_##NAME.next = g_sse_ops; g_sse_ops = &sse_##NAME; }
 #include "fxr_sse_ops.inc"
 #undef DEF_X
+
+// The hottest vector ops with a [base + index*scale + disp] memory operand get one handler per
+// (base, index) pair, so the address costs no extra dispatch (XMM operands stay runtime indices).
+#define HOT_SSE(X) X(movx, 16) X(addps, 16) X(subps, 16) X(mulps, 16) X(divps, 16) X(addpd, 16) X(subpd, 16) \
+    X(mulpd, 16) X(divpd, 16) X(addss, 4) X(subss, 4) X(mulss, 4) X(divss, 4) X(addsd, 8) X(subsd, 8) X(mulsd, 8) \
+    X(divsd, 8) X(pand, 16) X(pandn, 16) X(por, 16) X(pxor, 16) X(paddd, 16) X(paddq, 16) X(psubd, 16) X(psubq, 16) \
+    X(pcmpeqb, 16) X(pcmpeqd, 16) X(pmuludq, 16)
+#define BI_EA(B, I) (g##B + (g##I << u->scale) + (uint64_t)u->disp)
+#define DEF_XBI(I, B, NAME, W) PH pxb_##NAME##_##B##_##I(FXR_PARAMS) {                     \
+        X128 t; XLOAD(t, BI_EA(B, I), (W)); sx_##NAME(c, u, &c->xmm[u->dst], &t); PNEXT(); }
+#define DEF_XBI_ROW(B, NAME, W) R17B(DEF_XBI, B, NAME, W)
+#define DEF_HOT(NAME, W) R17(DEF_XBI_ROW, NAME, W)
+HOT_SSE(DEF_HOT)
+#define E_XBI(I, B, NAME) pxb_##NAME##_##B##_##I,
+#define ROW_XBI(B, NAME) { R17B(E_XBI, B, NAME) },
+#define TAB_HOT(NAME, W) { R17(ROW_XBI, NAME) },
+static const PFn t_hot[][17][17] = { HOT_SSE(TAB_HOT) };
+#define NAME_HOT(NAME, W) #NAME,
+static const char *const k_hot_names[] = { HOT_SSE(NAME_HOT) };
+
+// Vector/scalar loads and stores, and integer stores of an immediate, with [base + index]:
+#define DEF_MEMBI(I, B)                                                                    \
+    PH pxs_movx_##B##_##I(FXR_PARAMS) { memcpy((void *)(uintptr_t)BI_EA(B, I), &c->xmm[u->src], 16); PNEXT(); } \
+    PH pxs_movss_##B##_##I(FXR_PARAMS) { st32(BI_EA(B, I), c->xmm[u->src].d[0]); PNEXT(); } \
+    PH pxs_movsd_##B##_##I(FXR_PARAMS) { st64(BI_EA(B, I), c->xmm[u->src].q[0]); PNEXT(); } \
+    PH pxl_movss_##B##_##I(FXR_PARAMS) { X128 *D = &c->xmm[u->dst]; uint32_t v = (uint32_t)ld32(BI_EA(B, I)); \
+        D->q[0] = D->q[1] = 0; D->d[0] = v; PNEXT(); }                                      \
+    PH pxl_movsd_##B##_##I(FXR_PARAMS) { X128 *D = &c->xmm[u->dst]; uint64_t v = ld64(BI_EA(B, I)); \
+        D->q[0] = v; D->q[1] = 0; PNEXT(); }                                                \
+    PH psi_8_##B##_##I(FXR_PARAMS) { st8(BI_EA(B, I), u->imm); PNEXT(); }                   \
+    PH psi_16_##B##_##I(FXR_PARAMS) { st16(BI_EA(B, I), u->imm); PNEXT(); }                 \
+    PH psi_32_##B##_##I(FXR_PARAMS) { st32(BI_EA(B, I), u->imm); PNEXT(); }                 \
+    PH psi_64_##B##_##I(FXR_PARAMS) { st64(BI_EA(B, I), u->imm); PNEXT(); }
+#define DEF_MEMBI_ROW(B, _) R17B(DEF_MEMBI, B)
+R17(DEF_MEMBI_ROW, _)
+#define E_MBI(I, B, NAME) NAME##_##B##_##I,
+#define ROW_MBI(B, NAME) { R17B(E_MBI, B, NAME) },
+static const PFn t_xs_movx[17][17] = { R17(ROW_MBI, pxs_movx) }, t_xs_movss[17][17] = { R17(ROW_MBI, pxs_movss) },
+    t_xs_movsd[17][17] = { R17(ROW_MBI, pxs_movsd) }, t_xl_movss[17][17] = { R17(ROW_MBI, pxl_movss) },
+    t_xl_movsd[17][17] = { R17(ROW_MBI, pxl_movsd) };
+static const PFn t_sti_bi[4][17][17] = { { R17(ROW_MBI, psi_8) }, { R17(ROW_MBI, psi_16) }, { R17(ROW_MBI, psi_32) },
+                                          { R17(ROW_MBI, psi_64) } };
 // (u)comiss/(u)comisd: ZF PF CF, the others clear, as raw lazy flags.
 #define COMIS(NAME, W, FIELD)                                                              \
     PH px_##NAME##_RR(FXR_PARAMS) { double a = c->xmm[u->dst].FIELD[0], b = c->xmm[u->src].FIELD[0]; \
@@ -464,7 +506,7 @@ static SseOp *g_sse_ops;
         double a = c->xmm[u->dst].FIELD[0], b = t.FIELD[0];                                \
         uint64_t f = (a != a || b != b) ? 0x45 : a < b ? 0x01 : a == b ? 0x40 : 0;         \
         SETF(LF_RAW, 3, 0, 0, 0, f); PNEXT(); }                                            \
-    static SseOp sse_##NAME = { #NAME, px_##NAME##_RR, px_##NAME##_RT, 0 };                \
+    static SseOp sse_##NAME = { #NAME, px_##NAME##_RR, px_##NAME##_RT, 0, -1 };            \
     __attribute__((constructor)) static void reg_##NAME(void) { sse_##NAME.next = g_sse_ops; g_sse_ops = &sse_##NAME; }
 COMIS(comiss, 4, f)
 COMIS(comisd, 8, g)
@@ -532,6 +574,9 @@ static void init_desc(void) {
     };
     for (size_t i = 0; i < sizeof named / sizeof named[0]; i++) put(fxi_named(named[i].n), FAM_NAMED, (uint8_t)named[i].id, 0, 0, 0, 0);
     char nm[48];
+    for (SseOp *s = g_sse_ops; s; s = s->next)
+        for (size_t h = 0; h < sizeof k_hot_names / sizeof k_hot_names[0]; h++)
+            if (!strcmp(s->name, k_hot_names[h])) s->hot = (int)h;
     for (const SseOp *s = g_sse_ops; s; s = s->next) {
         snprintf(nm, sizeof nm, "%s_RR", s->name); put(fxi_named(nm), FAM_SSE, 0, 0, 0, 0, s);
         snprintf(nm, sizeof nm, "%s_RM", s->name); put(fxi_named(nm), FAM_SSE, 1, 0, 0, 0, s);
@@ -577,7 +622,7 @@ static void lower_one(Out *o, const Uop *u) {
         }
         if (fm == F_MI) {
             if (simple_mem(u)) { put_uop(o, u, t_sti[si][u->base]); return; }
-            if (ea_ok(u)) { with_ea(o, u, t_stti[si]); return; }
+            if (ea_ok(u)) { put_uop(o, u, t_sti_bi[si][u->base][u->index]); return; }
         }
         break;
     }
@@ -656,16 +701,20 @@ static void lower_one(Out *o, const Uop *u) {
         case N_MOVSS_RR: put_uop(o, u, px_movss_RR); return;
         case N_MOVSD_RR: put_uop(o, u, px_movsd_RR); return;
         case N_MOVQ_RR: put_uop(o, u, px_movq_RR); return;
-        case N_MOVSS_RM: if (ea_ok(u)) { with_ea(o, u, px_movss_RT); return; } break;
-        case N_MOVSD_RM: if (ea_ok(u)) { with_ea(o, u, px_movsd_RT); return; } break;
-        case N_MOVSS_MR: if (ea_ok(u)) { with_ea(o, u, px_movss_TS); return; } break;
-        case N_MOVSD_MR: if (ea_ok(u)) { with_ea(o, u, px_movsd_TS); return; } break;
-        case N_MOVX_MR: if (ea_ok(u)) { with_ea(o, u, px_movx_TS); return; } break;
+        case N_MOVSS_RM: if (ea_ok(u)) { put_uop(o, u, t_xl_movss[u->base][u->index]); return; } break;
+        case N_MOVSD_RM: if (ea_ok(u)) { put_uop(o, u, t_xl_movsd[u->base][u->index]); return; } break;
+        case N_MOVSS_MR: if (ea_ok(u)) { put_uop(o, u, t_xs_movss[u->base][u->index]); return; } break;
+        case N_MOVSD_MR: if (ea_ok(u)) { put_uop(o, u, t_xs_movsd[u->base][u->index]); return; } break;
+        case N_MOVX_MR: if (ea_ok(u)) { put_uop(o, u, t_xs_movx[u->base][u->index]); return; } break;
         }
         break;
     case FAM_SSE:
         if (!d->a) { put_uop(o, u, d->sse->rr); return; }
-        if (ea_ok(u)) { with_ea(o, u, d->sse->rt); return; }
+        if (ea_ok(u)) {
+            if (d->sse->hot >= 0) { put_uop(o, u, t_hot[d->sse->hot][u->base][u->index]); return; }
+            with_ea(o, u, d->sse->rt);
+            return;
+        }
         break;
     }
     put_uop(o, u, p_slow);
