@@ -164,6 +164,13 @@ final class WineController: ObservableObject, @unchecked Sendable {
         let secs = String(format: "%.1f s", Date().timeIntervalSince(started))
         let how = crashed ? String(format: "ended with error 0x%08X after %@", status, secs) : "exited normally after \(secs)"
         dlog("[wine] \(title) \(how)")
+        // Test programs write their report to C:\myiosdeck-output.txt: proof that does not
+        // depend on where the console's output goes.
+        let report = prefixURL.appendingPathComponent("drive_c/myiosdeck-output.txt")
+        if let text = try? String(contentsOf: report, encoding: .utf8) {
+            for line in text.split(whereSeparator: \.isNewline) { dlog("[program] \(line)") }
+            try? FileManager.default.removeItem(at: report)
+        }
         DispatchQueue.main.async {
             self.state = .finished(title, how)
             // After the game surface has closed (LibraryView closes it on an error).
