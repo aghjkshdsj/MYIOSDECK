@@ -42,7 +42,7 @@ sideload edition (FEX, ~90% of native) stays the full-speed option, from the sam
   Madeira's FEX fork at `...\claude\fex` (ARM64EC frontend: `Source/Windows/ARM64EC/Module.S`,
   `Module.cpp` = the reference for Wine's emulator interface).
 
-## State (2026-10-07, build 64)
+## State (2026-10-07, build 66)
 - **FXI**: no-JIT x86-64 interpreter (`engine/fxi`), 8.1% of native on device. Since build 57 it
   also has a Windows mode (`fxi_win.c`): FS/GS segment slots (r[17]/r[18], `gs:[0x30]` = TEB),
   a thread-safe shared block cache, cached `ec_exit` blocks for jumps into native ARM64EC code.
@@ -123,6 +123,18 @@ sideload edition (FEX, ~90% of native) stays the full-speed option, from the sam
   of the prebuilt winemetal.dll) -> easy in the guests job. `d3d11` / `d3d10core` / `winemetal`:
   DXMT's meson PE build (`-Dwine_build_path=` Wine's ARM64EC PE build tree, cross file
   `build-arm64ec-win.txt`, Madeira docs/BUILDING.md step 4) -> needs Wine's PE side in CI.
+
+- **Build 64 result: x64 test suite 9/10 with JIT off** (callbacks, float, threads 400000,
+  raise, int3, divide, fault at the exact rip via a host Mach fault, c++, longjmp). `child`
+  failed: Madeira's child ntdll pool copy fails without JIT ("no parent mapping found"), the child
+  shared the parent's ntdll and crashed in its loader; the parent then hung at exit.
+- **Build 66 (step 4)**: `App/Sources/Native/pe_instance.c` maps another instance of a signed PE
+  dylib like dyld (F_ADDFILESIGS_RETURN, __TEXT r-x from the file, fresh __DATA from the file;
+  the dylibs have no dyld fixups). nojit_dylib.py: a second mapping of a DLL gets a new instance
+  (`[nojit] <dll>: instance #N`). `engine/wine/patches/nojit_child.py`: without JIT every child
+  takes Madeira's private-ntdll path (ios_load_child_ec_ntdll -> ios_set_proc_ntdll). Performance
+  tab "Run DLL test" also runs a second instance of the spike DLL (the iOS question: may the app
+  map signed code from a bundle file a second time?).
 
 ## Next steps (in order)
 1. FXI instructions for real Windows x64 code, driven by the STOP lines and `fxi --scan-pe`.
