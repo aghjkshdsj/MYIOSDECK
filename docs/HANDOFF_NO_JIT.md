@@ -42,7 +42,7 @@ sideload edition (FEX, ~90% of native) stays the full-speed option, from the sam
   Madeira's FEX fork at `...\claude\fex` (ARM64EC frontend: `Source/Windows/ARM64EC/Module.S`,
   `Module.cpp` = the reference for Wine's emulator interface).
 
-## State (2026-10-07, build 57)
+## State (2026-10-07, build 60)
 - **FXI**: no-JIT x86-64 interpreter (`engine/fxi`), 8.1% of native on device. Since build 57 it
   also has a Windows mode (`fxi_win.c`): FS/GS segment slots (r[17]/r[18], `gs:[0x30]` = TEB),
   a thread-safe shared block cache, cached `ec_exit` blocks for jumps into native ARM64EC code.
@@ -78,14 +78,22 @@ sideload edition (FEX, ~90% of native) stays the full-speed option, from the sam
   **Build 57 result**: Library > "Windows Hello (x64, no JIT)" ran hello-x64.exe's x64 TLS
   callback through ExitToX64 in FXI and stopped cleanly at **`lock cmpxchg [rbx], rsi`**
   (`f0 48 0f b1 33`, unimplemented). Everything around it worked.
+- **Build 60 (FXI 0.2)**: atomics in `engine/fxi/fxi_atomic.c`: cmpxchg, xadd, xchg m, cmpxchg8b/16b,
+  lock add/or/adc/sbb/and/sub/xor/inc/dec/not/neg on memory, bt/bts/btr/btc (reg + mem, signed bit
+  offsets), all memory forms real seq-cst host atomics (misaligned: one global split lock).
+  `engine/guest/atomics.c` checks results + flags against native in fxi.yml (byte-identical).
+- **`fxi --scan-pe <exe/dll>`** (fxi.yml step "Scan Windows x64 test programs"): decodes every
+  `.pdata` function with FXI's decoder (an independent length decoder keeps the sweep in step)
+  and lists unimplemented instructions with counts. Result: hello, fib, clocktest, heap, fileio,
+  calltest, fpconf, child-test, d3d12-cube decode 100%; cube-x64 needs x87 (db/d9/dd: long-double
+  printf in the mingw CRT). Use it on any game exe/DLL before a device round.
+- Branch `fxi-next` (not yet on main): shld/shrd, checked in fxi.yml. Merge with the next IPA.
 
 ## Next steps (in order)
-1. FXI instructions for real Windows x64 code, driven by the STOP lines:
-   `cmpxchg` (0F B0/B1, with LOCK = a real atomic: Windows threads share memory), `xadd` (0F C0/C1),
-   `xchg` with memory (implicitly locked), `cmpxchg8b/16b` (0F C7 /1), `lock`-prefixed ALU ops
-   (add/sub/and/or/xor/inc/dec/neg on memory must be atomic), then whatever the next STOP names.
-   Known FXI gaps: no 32-bit addressing, no x87, few SSE3+/SSSE3/SSE4, no AVX, no shld/shrd,
-   no self-modifying-code invalidation, no x64 exceptions (int3, guest faults -> SEH).
+1. FXI instructions for real Windows x64 code, driven by the STOP lines and `fxi --scan-pe`.
+   Atomics done (build 60), shld/shrd on `fxi-next`. Known FXI gaps: no 32-bit addressing, no x87
+   (cube-x64 needs it), few SSE3+/SSSE3/SSE4, no AVX, no self-modifying-code invalidation, no x64
+   exceptions (int3, guest faults -> SEH).
    Rebuild loop for FXI alone: `fxi.yml` (Linux checksums) before the IPA.
 2. Until hello-x64 prints: x64 SEH/unwinding and guest faults inside FXI (a host SIGSEGV while
    interpreting must become a Windows exception for the x64 code), FPCR/MXCSR, `syscall` never
