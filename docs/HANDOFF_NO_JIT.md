@@ -42,7 +42,7 @@ sideload edition (FEX, ~90% of native) stays the full-speed option, from the sam
   Madeira's FEX fork at `...\claude\fex` (ARM64EC frontend: `Source/Windows/ARM64EC/Module.S`,
   `Module.cpp` = the reference for Wine's emulator interface).
 
-## State (2026-10-07, build 70)
+## State (2026-10-07, build 71)
 - **FXI**: no-JIT x86-64 interpreter (`engine/fxi`), 8.1% of native on device. Since build 57 it
   also has a Windows mode (`fxi_win.c`): FS/GS segment slots (r[17]/r[18], `gs:[0x30]` = TEB),
   a thread-safe shared block cache, cached `ec_exit` blocks for jumps into native ARM64EC code.
@@ -147,8 +147,26 @@ sideload edition (FEX, ~90% of native) stays the full-speed option, from the sam
   All 7 have SectionAlignment 16384; build-ipa.yml copies the newest successful set into the farm
   before conversion: 156 PE files become signed dylibs (only x64 test exes + tftrace left).
   Library: "Direct3D 11 cube (x64, no JIT)" and "Direct3D 12 cube (x64, no JIT)".
-- Other branches in the repo: `claude/fxr` (FXR, a faster FXI fork from another session,
-  handed over for integration), `gpt-astra/interp`.
+- **Build 70 result**: x64 test suite 10/10 again; **Direct3D 12 cube runs with JIT off** (x64
+  program code in FXI, signed D3D12/Metal DLLs). D3D11 cube: DLL_NOT_FOUND, the meson build
+  linked d3d11/dxgi against `libc++.dll` / `libunwind.dll`, which the prefix lacks. Fixed:
+  `-static` in the cross file's link args, fresh meson build dir (`DXMT_BUILD`, bump it when the
+  link options change: the cached dir keeps old options), and `build-pe.sh collect` fails when a
+  DLL imports a toolchain runtime DLL (only api-ms-win-crt-*, kernel32, ntdll, user32, gdi32,
+  advapi32, winemetal, dxgi/d3d11 remain).
+- **FXR in the app**: `engine/fxr` (from `claude/fxr`, another session's work) is FXI with the 16
+  guest GPRs, an EA temporary and the lazy-flag words passed as `preserve_none` arguments (host
+  registers) between musttail handlers; hot forms specialised per register, everything else via
+  FXI's handler (`p_slow`, spills around the call). CI aarch64: 9.25% of native vs FXI 7.50%
+  (x86 hosts lack the argument registers: slower there). Its FXI copy is renamed to fxr_*
+  (`engine/fxr/fxr_rename.h`, included from its `fxi.h`; fxr.yml's iOS job fails on any global
+  `fxi_*` symbol); its headers are excluded from the Xcode project (same names as FXI's, header
+  map). Performance tab benchmark has an FXR column and the report `fxr%` + "FXR vs FXI";
+  Settings > Without JIT runs x86-64 Hello with FXR. **ELF only**: pinned handlers do not set
+  `c->cur` (no exact host-fault rip) and PIND writes `u->link` non-atomically, so Windows mode
+  stays on FXI until those are fixed. engine/fxr duplicates engine/fxi: port FXI fixes to both,
+  or fold FXR back into engine/fxi once it covers Windows mode.
+- Other branches in the repo: `claude/fxr` (FXR's origin), `gpt-astra/interp`.
 
 ## Next steps (in order)
 1. FXI instructions for real Windows x64 code, driven by the STOP lines and `fxi --scan-pe`.
@@ -159,7 +177,7 @@ sideload edition (FEX, ~90% of native) stays the full-speed option, from the sam
 3. Threads (build 63 suite checks them), NotifyMemoryProtect/Flush for code invalidation.
 4. Child processes: one signed ntdll per pseudo-process (ship several separately signed ntdll
    dylibs; today a second mapping of a DLL returns "mapped again -- not supported").
-5. 16 KB-aligned rebuild of the 7 D3D/Metal DLLs (or of the whole PE side) so D3D games load.
+5. D3D DLLs rebuilt with 16 KB sections (build 70: D3D12 runs; build 71: D3D11 static libc++). Next: a real D3D11 game.
 6. FXI speed (phase 4 of docs/FAST_INTERPRETER.md): preserve_none dispatch, superinstructions,
    NEON SSE, guest register caching; cache ffwd thunks (x64 -> EC calls) as direct exits.
 7. App Store flavour: IPA without FEX/StikDebug flow, no get-task-allow, distribution signing,
