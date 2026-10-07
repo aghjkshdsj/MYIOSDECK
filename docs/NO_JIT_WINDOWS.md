@@ -50,6 +50,11 @@ branch back. All 11,196 sites in Madeira's DLLs are handled; 141 of 149 DLLs are
 (7 D3D/Metal DLLs have one shared code/data page each, xtajit64 has FEX's TSD reads). Build 44
 also loads Wine's real `ntdll.dll` this way (743 sites rewritten) and calls into it.
 
+**Build 44, JIT off: step A proven.** Wine's ntdll ran from a signed dylib: `RtlComputeCrc32`,
+`RtlCompareMemory`, and `RtlSetLastWin32Error`/`RtlGetLastWin32Error` through rewritten x18
+sites, all correct; every x18 form in the spike DLLs correct; kernels at native speed. The
+TEB's TSD offset on that device was 0x8c8 (not Madeira's 0x898), so it stays a runtime value.
+
 ARM64EC exports point at x64 "fast-forward" thunks in `.hexpthk`; a native caller
 follows their `jmp` (as Wine's `arm64x_check_call` does). The spike loader does the same.
 
