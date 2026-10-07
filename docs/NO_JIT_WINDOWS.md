@@ -25,7 +25,22 @@ Only the game's own x86-64 code is interpreted. Wine, the D3D → Metal path (DX
 everything else stay native ARM64, so a game's speed sits between FXI's (8% of native on
 the A17 Pro, build 39) and native, depending on how much time it spends in its own code.
 
-## Step A spike (build 40)
+## What the audit of Madeira's real DLLs found (build 40)
+
+149 ARM64EC DLLs, 40 MB of code, sections mostly 4 KB aligned:
+- only **7** 16 KB pages anywhere hold code together with something written at load, and
+  **no** base relocation lands in code: the images are almost mappable as they are, and a
+  16 KB-aligned rebuild removes the rest;
+- **11,364 x18 instructions** (ntdll 745, user32 450, msvcr* ~220 each, …): Windows keeps
+  the TEB in x18 and iOS clears it, so each must be rewritten at build time into a branch
+  to a trampoline appended to the image that reads the TEB from TPIDRRO_EL0 (Madeira found
+  the TSD slot fixed at 275, offset 0x898). This is the main Step A job;
+- 6 hand-written TEB reads, all in `xtajit64.dll` (FEX), which FXI replaces anyway.
+
+ARM64EC exports point at x64 "fast-forward" thunks in `.hexpthk`; a native caller
+follows their `jmp` (as Wine's `arm64x_check_call` does). The spike loader does the same.
+
+## Step A spike (build 42)
 
 `engine/pedylib`:
 - `spike/spike.c` is a small DLL built like Wine's (llvm-mingw, `-nostdlib`, 16 KB
