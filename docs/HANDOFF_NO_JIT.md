@@ -42,7 +42,7 @@ sideload edition (FEX, ~90% of native) stays the full-speed option, from the sam
   Madeira's FEX fork at `...\claude\fex` (ARM64EC frontend: `Source/Windows/ARM64EC/Module.S`,
   `Module.cpp` = the reference for Wine's emulator interface).
 
-## State (2026-10-07, build 66)
+## State (2026-10-07, build 70)
 - **FXI**: no-JIT x86-64 interpreter (`engine/fxi`), 8.1% of native on device. Since build 57 it
   also has a Windows mode (`fxi_win.c`): FS/GS segment slots (r[17]/r[18], `gs:[0x30]` = TEB),
   a thread-safe shared block cache, cached `ec_exit` blocks for jumps into native ARM64EC code.
@@ -135,6 +135,20 @@ sideload edition (FEX, ~90% of native) stays the full-speed option, from the sam
   takes Madeira's private-ntdll path (ios_load_child_ec_ntdll -> ios_set_proc_ntdll). Performance
   tab "Run DLL test" also runs a second instance of the spike DLL (the iOS question: may the app
   map signed code from a bundle file a second time?).
+
+- **Build 66 result: x64 test suite 10/10 with JIT off.** The child pseudo-process loaded its own
+  instances of ntdll, xtajit64, kernel32, kernelbase, ucrtbase (`[nojit] ... instance #2`,
+  F_ADDFILESIGS_RETURN ok), ran and exited 33; the suite exited normally. iOS allows mapping
+  signed bundle code a second time.
+- **Build 70 (step 5)**: `engine/dxmt/build-pe.sh` + `.github/workflows/dxmt-pe.yml` (macOS):
+  Wine ARM64EC tree (`--enable-archs=arm64ec`, `make -C libs/winecrt0 / dlls/ntdll /
+  dlls/dbghelp`), DXMT meson with a cross file adding `--section-alignment=0x4000` ->
+  winemetal, d3d11, d3d10core, dxgi; Madeira's madeira_d3d12 (= d3d12) and d3d12core the same way.
+  All 7 have SectionAlignment 16384; build-ipa.yml copies the newest successful set into the farm
+  before conversion: 156 PE files become signed dylibs (only x64 test exes + tftrace left).
+  Library: "Direct3D 11 cube (x64, no JIT)" and "Direct3D 12 cube (x64, no JIT)".
+- Other branches in the repo: `claude/fxr` (FXR, a faster FXI fork from another session,
+  handed over for integration), `gpt-astra/interp`.
 
 ## Next steps (in order)
 1. FXI instructions for real Windows x64 code, driven by the STOP lines and `fxi --scan-pe`.
