@@ -62,11 +62,11 @@ final class WineController: ObservableObject, @unchecked Sendable {
         let api = UserDefaults.standard.string(forKey: "controllerAPI") ?? "xinput"
         unsetenv("MADEIRA_DINPUT_PAD"); unsetenv("MADEIRA_HIDPAD"); unsetenv("MADEIRA_HIDPAD_NAME")
         if api == "dinput" { setenv("MADEIRA_DINPUT_PAD", "1", 1) }
-        if api == "hid" {
-            setenv("MADEIRA_HIDPAD", "generic", 1)
-            if let name = GCController.controllers().first?.vendorName { setenv("MADEIRA_HIDPAD_NAME", name, 1) }
+        if api == "hid" || api == "dualsense" {
+            setenv("MADEIRA_HIDPAD", api == "hid" ? "generic" : "dualsense", 1)
+            if api == "hid", let name = GCController.controllers().first?.vendorName { setenv("MADEIRA_HIDPAD_NAME", name, 1) }
         }
-        ControllerBridge.shared.setHIDMode(api == "hid")
+        ControllerBridge.shared.setMode(api == "hid" || api == "dualsense" ? .hid : api == "keyboard" ? .keyboard : .xinput)
         dlog("[xinput] controller API for this session: \(api)")
         // DXMT takes the layer when the program creates its swapchain.
         if program.graphics {

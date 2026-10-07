@@ -56,6 +56,11 @@ void mid_pad_set(int slot, int connected, uint16_t buttons, uint8_t lt, uint8_t 
 void mid_hidpad_set(int connected, uint16_t buttons, uint8_t lt, uint8_t rt,
                     int16_t lx, int16_t ly, int16_t rx, int16_t ry);
 
+/// Keyboard mode: a Windows virtual-key press (down=1) or release (down=0),
+/// and a mouse button event (MOUSEEVENTF_* flags, no movement). No-op without Wine.
+void mid_post_key(int vk, int down);
+void mid_post_mouse_button(unsigned int flags);
+
 /// The guest's virtual monitor in pixels (1024x768 unless a program changes it).
 void mid_display_screen_size(int *w, int *h);
 

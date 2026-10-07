@@ -51,12 +51,14 @@ struct SettingsView: View {
 
                 DeckCard(title: "Controller", icon: "gamecontroller.fill") {
                     Picker("Controller API", selection: $settings.controllerAPI) {
-                        Text("XInput").tag("xinput")
-                        Text("+ DirectInput").tag("dinput")
-                        Text("HID").tag("hid")
+                        Text("XInput (Xbox controller)").tag("xinput")
+                        Text("XInput + DirectInput").tag("dinput")
+                        Text("HID gamepad").tag("hid")
+                        Text("HID DualSense (PS5)").tag("dualsense")
+                        Text("Keyboard and mouse").tag("keyboard")
                     }
-                    .pickerStyle(.segmented)
-                    Text("How Windows games see your controller. XInput suits most games. If a game ignores the controller, try + DirectInput (older games) or HID (player 1 as a USB gamepad, for engines that look for devices, such as Unity's old input system). Takes effect the next time a game starts.")
+                    .pickerStyle(.menu)
+                    Text("How Windows games see your controller; takes effect the next time a game starts. XInput suits most games. If a game ignores the controller, try DirectInput (older games), HID or DualSense (engines that look for devices, such as Unity's old input system), or Keyboard and mouse, which works with any game that takes keys: A Space, B Ctrl, X E, Y R, LB Q, RB F, L3 Shift, R3 C, Menu Esc, Options Enter, D-pad arrows, left stick WASD, RT left click, LT right click.")
                         .font(.footnote).foregroundStyle(Deck.dim)
                 }
 

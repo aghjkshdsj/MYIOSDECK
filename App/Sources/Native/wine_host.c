@@ -149,6 +149,11 @@ void mid_hidpad_set(int connected, uint16_t buttons, uint8_t lt, uint8_t rt,
     winios_hidpad_set_state(&h);
 }
 
+extern void winios_post_key(int vk, int down);
+extern void winios_pointer(int x, int y, unsigned int flags, unsigned int data);
+void mid_post_key(int vk, int down) { winios_post_key(vk, down); }
+void mid_post_mouse_button(unsigned int flags) { winios_pointer(0, 0, flags, 0); }
+
 extern void madeira_seed_prefix_if_needed(const char *prefix_path);
 void mid_wine_seed_prefix(const char *prefix) { madeira_seed_prefix_if_needed(prefix); }
 
@@ -226,6 +231,8 @@ bool mid_wine_boot(const char *prefix, const char *exe, const char *args, char *
 #else
 
 void mid_wine_seed_prefix(const char *prefix) { (void)prefix; }
+void mid_post_key(int vk, int down) { (void)vk; (void)down; }
+void mid_post_mouse_button(unsigned int flags) { (void)flags; }
 void mid_pad_set(int slot, int connected, uint16_t buttons, uint8_t lt, uint8_t rt,
                  int16_t lx, int16_t ly, int16_t rx, int16_t ry) {
     (void)slot; (void)connected; (void)buttons; (void)lt; (void)rt; (void)lx; (void)ly; (void)rx; (void)ry;
