@@ -57,6 +57,19 @@ struct LibraryView: View {
             .frame(maxWidth: .infinity)
         }
         .jitGate(pending: $noJITAction)
+        .alert("You are running this without JIT", isPresented: noJITGamePresented) {
+            Button("Enable JIT") {
+                let launch = noJITGame
+                noJITGame = nil
+                jit.enableWithStikDebug(poolMB: settings.jitPoolMB) {
+                    engine.start(settings: settings)
+                    DispatchQueue.main.async { launch?() }   // the game starts once JIT is ready
+                }
+            }
+            Button("Cancel", role: .cancel) { noJITGame = nil }
+        } message: {
+            Text("Windows games cannot run without JIT, so there is no Continue anyway for them: Wine itself is ARM64 code loaded from files, and iOS only lets that code run in memory prepared through StikDebug. (The interpreter runs the built-in Linux x86-64 tests only.) Enable JIT and the game starts right after.")
+        }
         .fullScreenCover(isPresented: $showSurface) { gameSurface }
         .onChange(of: wine.state) { _, state in
             // A crashed program: close the surface so the crash report can show.
@@ -81,17 +94,45 @@ struct LibraryView: View {
             }
             .confirmationDialog(surfaceTitle, isPresented: $showGameMenu, titleVisibility: .visible) {
                 Button("Resume") {}
+                Button("Controller: \(Self.controllerNames[settings.controllerAPI] ?? "XInput")…") {
+                    openingControllerMenu = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { showControllerMenu = true }
+                }
                 Button("Hide game (keeps running)") { showSurface = false }
                 Button("Quit game and close MYIOSDECK", role: .destructive) { CrashReporter.shared.quitApp() }
             } message: {
                 Text("A Windows game can only be stopped by closing MYIOSDECK; unsaved progress is lost.")
             }
+            .confirmationDialog("Controller", isPresented: $showControllerMenu, titleVisibility: .visible) {
+                ForEach(Self.controllerOrder, id: \.self) { api in
+                    let current = api == settings.controllerAPI
+                    let later = (api == "hid" || api == "dualsense") && api != wine.sessionAPI
+                    Button((current ? "✓ " : "") + (Self.controllerNames[api] ?? api) + (later ? " (next launch)" : "")) {
+                        settings.controllerAPI = api
+                        wine.switchController(to: api)
+                    }
+                }
+            } message: {
+                Text("XInput and Keyboard and mouse switch at once. HID modes need the game to start with them, so they apply at the next launch.")
+            }
             .onChange(of: showGameMenu) { _, open in
+                if !open, showSurface, !openingControllerMenu { GameHostView.shared.isHidden = false }
+            }
+            .onChange(of: showControllerMenu) { _, open in
+                if open { openingControllerMenu = false }
                 if !open, showSurface { GameHostView.shared.isHidden = false }
             }
     }
 
     @State private var showGameMenu = false
+    @State private var showControllerMenu = false
+    @State private var openingControllerMenu = false
+
+    private static let controllerOrder = ["xinput", "dinput", "hid", "dualsense", "keyboard"]
+    private static let controllerNames = [
+        "xinput": "Xbox (XInput)", "dinput": "XInput + DirectInput", "hid": "HID gamepad",
+        "dualsense": "DualSense (PS5)", "keyboard": "Keyboard and mouse",
+    ]
 
     /// Stage 4: Steam account (SwiftSteam, from Madeira). The owned library and
     /// downloads build on this sign-in.
@@ -121,10 +162,19 @@ struct LibraryView: View {
     }
 
     @State private var playError: String?
+    /// A Windows launch waiting for JIT (the no-JIT alert).
+    @State private var noJITGame: (() -> Void)?
+    private var noJITGamePresented: Binding<Bool> {
+        Binding(get: { noJITGame != nil }, set: { if !$0 { noJITGame = nil } })
+    }
+
+    /// Runs a Windows launch now, or asks to enable JIT first.
+    private func withJIT(_ launch: @escaping () -> Void) {
+        if jit.isReady { launch() } else { noJITGame = launch }
+    }
 
     private var steamPlayBlocker: String? {
         if !wine.linked { return "This build does not include Wine." }
-        if !jit.isReady { return "Play needs JIT: enable it on Home first." }
         switch wine.state {
         case .booting, .running, .finished: return "Wine already ran a program in this session. Restart MYIOSDECK to play."
         default: return nil
@@ -134,6 +184,11 @@ struct LibraryView: View {
     /// Stage 4d: direct start of an installed Steam game on the game surface.
     private func playSteam(_ game: OwnedSteamGame) {
         playError = nil
+        guard jit.isReady else {
+            // Let the game sheet close before the alert is presented.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { noJITGame = { playSteam(game) } }
+            return
+        }
         Task { @MainActor in
             do {
                 let plan = try await steamLibrary.launchPlan(game.id)
@@ -165,15 +220,16 @@ struct LibraryView: View {
                         }
                         Spacer()
                         Button("Play") {
-                            wine.run(p)
-                            if p.graphics, case .booting = wine.state {
-                                surfaceTitle = p.title
-                                showSurface = true
+                            withJIT {
+                                wine.run(p)
+                                if p.graphics, case .booting = wine.state {
+                                    surfaceTitle = p.title
+                                    showSurface = true
+                                }
                             }
                         }
                             .buttonStyle(DeckButtonStyle())
                             .frame(width: 90)
-                            .disabled(!jit.isReady)
                     }
                 }
                 if !surfaceTitle.isEmpty, !showSurface {
@@ -182,7 +238,7 @@ struct LibraryView: View {
                 }
                 switch wine.state {
                 case .idle:
-                    Text(jit.isReady ? "Output appears in the Logs tab ([stdio] lines)." : "Wine needs JIT: enable it on Home first.")
+                    Text(jit.isReady ? "Output appears in the Logs tab ([stdio] lines)." : "Windows programs need JIT; Play offers to enable it.")
                         .font(.caption).foregroundStyle(Deck.dim)
                 case .booting(let t): HStack { ProgressView(); Text("Starting Wine for \(t)…").foregroundStyle(Deck.dim) }
                 case .running(let t): StatusRow(label: "Running \(t)", detail: "Watch the Logs tab for its output.", level: .good)

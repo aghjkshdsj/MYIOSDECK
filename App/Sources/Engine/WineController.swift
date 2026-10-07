@@ -25,6 +25,30 @@ final class WineController: ObservableObject, @unchecked Sendable {
     ]
 
     @Published private(set) var state: State = .idle
+    /// The Controller API this Wine session started with (its HID / DirectInput
+    /// devices exist only if it started with them).
+    @Published private(set) var sessionAPI = "xinput"
+
+    static func bridgeMode(_ api: String) -> ControllerBridge.Mode {
+        switch api {
+        case "hid", "dualsense": return .hid
+        case "keyboard": return .keyboard
+        default: return .xinput
+        }
+    }
+
+    /// In-game switch (the game menu). Saved for the next launch either way;
+    /// applied now unless the mode needs a device this session was not started
+    /// with. Returns whether it took effect now.
+    @discardableResult
+    func switchController(to api: String) -> Bool {
+        UserDefaults.standard.set(api, forKey: "controllerAPI")
+        let needsStart = (api == "hid" || api == "dualsense") && api != sessionAPI
+        dlog("[xinput] in-game switch to \(api)\(needsStart ? " (applies at next launch)" : "")")
+        guard !needsStart else { return false }
+        ControllerBridge.shared.setMode(Self.bridgeMode(api))
+        return true
+    }
     let linked = mid_wine_linked()
 
     private let queue = DispatchQueue(label: "myiosdeck.wine", qos: .userInitiated)
@@ -66,7 +90,8 @@ final class WineController: ObservableObject, @unchecked Sendable {
             setenv("MADEIRA_HIDPAD", api == "hid" ? "generic" : "dualsense", 1)
             if api == "hid", let name = GCController.controllers().first?.vendorName { setenv("MADEIRA_HIDPAD_NAME", name, 1) }
         }
-        ControllerBridge.shared.setMode(api == "hid" || api == "dualsense" ? .hid : api == "keyboard" ? .keyboard : .xinput)
+        sessionAPI = api
+        ControllerBridge.shared.setMode(Self.bridgeMode(api))
         dlog("[xinput] controller API for this session: \(api)")
         // DXMT takes the layer when the program creates its swapchain.
         if program.graphics {
