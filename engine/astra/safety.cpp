@@ -27,6 +27,8 @@ int main() {
     check(elf({0x67,0x90}),"unimplemented");
     check(elf({0x0f,0xef,0xc0}),"unimplemented"); // MMX must not execute as XMM
     check(elf({0xf2,0x0f,0xd6,0xc0}),"unimplemented");
+    check(elf({0xf3,0x0f,0x1e,0xc8}),"unimplemented");
+    check(elf({0x0f,0x1f,0xc8}),"invalid nop");
     // A null guest load followed by an exit; predecode must not mask the load.
     check(elf({0x31,0xc0,0x48,0x8b,0x00,0x0f,0x05}),"memory outside");
     // Guest stores to decoded instructions fail, never leave stale cache data.

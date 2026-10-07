@@ -112,7 +112,10 @@ Op decode(Cpu *c,U &pc) {
         unsigned op=d.byte();
         if(op==0x05) { p.kind=SYSCALL; break; }
         if(op==0xa2) { p.kind=CPUID; break; }
-        if(op==0x1f || (op==0x1e && d.prefix==2)) { modrm(p.width); p.kind=NOP; break; }
+        if(op==0x1f) { if(modrm(p.width)!=0)fault(c,pc,"invalid nop form");p.kind=NOP;break; }
+        if(op==0x1e && d.prefix==2) {
+            unsigned tail=d.byte();if(tail!=0xfa && tail!=0xfb)fault(c,pc,"unimplemented cet instruction");p.kind=NOP;break;
+        }
         if(op>=0x80 && op<=0x8f) { p.kind=JCC; p.aux=op&15; I rel=(I)d.imm(4,true); p.imm=d.pos+rel; break; }
         if(op>=0x90 && op<=0x9f) { p.kind=SETCC; p.width=1; p.aux=op&15; modrm(1); break; }
         if(op>=0x40 && op<=0x4f) { p.kind=CMOV; p.aux=op&15; modrm(p.width,true); break; }
