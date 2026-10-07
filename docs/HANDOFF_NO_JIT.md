@@ -98,8 +98,8 @@ sideload edition (FEX, ~90% of native) stays the full-speed option, from the sam
 
 ## Next steps (in order)
 1. FXI instructions for real Windows x64 code, driven by the STOP lines and `fxi --scan-pe`.
-   Atomics (build 60), x87 + shld/shrd + 0F AE (build 61) done. Known FXI gaps: no 32-bit addressing, no x87
-   , few SSE3+/SSSE3/SSE4, no AVX, no self-modifying-code invalidation, no x64
+   Atomics (build 60), x87 + shld/shrd + 0F AE (build 61) done. Known FXI gaps: no 32-bit
+   addressing, few SSE3+/SSSE3/SSE4, no AVX, no self-modifying-code invalidation, no x64
    exceptions (int3, guest faults -> SEH).
    Rebuild loop for FXI alone: `fxi.yml` (Linux checksums) before the IPA.
 2. Until hello-x64 prints: x64 SEH/unwinding and guest faults inside FXI (a host SIGSEGV while
