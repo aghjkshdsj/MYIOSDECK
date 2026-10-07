@@ -130,7 +130,7 @@ int fxi_cond(FxiCpu *c, unsigned cc);        // x86 condition code 0-15
 
 // ---- Dispatch ----
 #define FXI_NEXT(c, u) do { __attribute__((musttail)) return (u)[1].fn((c), (u) + 1); } while (0)
-#define FXI_GOTO_BLOCK(c, b) do { Block *b_ = (b); __attribute__((musttail)) return b_->u[0].fn((c), b_->u); } while (0)
+#define FXI_GOTO_BLOCK(c, b) do { Block *fxi_gb_ = (b); __attribute__((musttail)) return fxi_gb_->u[0].fn((c), fxi_gb_->u); } while (0)
 
 extern Block *fxi_stop;                         // one "stop" uop: leaves the dispatch chain
 Block *fxi_lookup(FxiCpu *c, uint64_t rip);     // translate on miss; fxi_stop on error
