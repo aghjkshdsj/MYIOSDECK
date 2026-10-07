@@ -45,10 +45,14 @@ step_wine() {
             > configure.log 2>&1 || { tail -60 configure.log; return 1; }
     fi
     make -j"$JOBS" tools/all tools/winebuild/all tools/widl/all > make-tools.log 2>&1 || { tail -40 make-tools.log; return 1; }
-    make -j"$JOBS" dlls/winecrt0/arm64ec-windows/libwinecrt0.a dlls/ntdll/arm64ec-windows/libntdll.a \
-        dlls/dbghelp/arm64ec-windows/libdbghelp.a > make-libs.log 2>&1 || { tail -60 make-libs.log; return 1; }
-    ls -la tools/winebuild/winebuild dlls/winecrt0/arm64ec-windows/libwinecrt0.a \
-        dlls/ntdll/arm64ec-windows/libntdll.a dlls/dbghelp/arm64ec-windows/libdbghelp.a
+    # Per-directory makes, as Madeira's build/wine-pe scripts do (winecrt0 is in libs/ in this
+    # Wine; DXMT's meson looks in libs/winecrt0 and dlls/winecrt0).
+    local crt=libs/winecrt0
+    [ -d ../libs/winecrt0 ] || crt=dlls/winecrt0
+    { make -j"$JOBS" -C "$crt" && make -j"$JOBS" -C dlls/ntdll && make -j"$JOBS" -C dlls/dbghelp; } > make-libs.log 2>&1 ||
+        { tail -60 make-libs.log; return 1; }
+    ls -la tools/winebuild/winebuild
+    find "$crt" dlls/ntdll dlls/dbghelp -name '*.a' | xargs ls -la
 }
 
 step_dxmt() {
