@@ -65,12 +65,105 @@ struct SteamGamesGrid: View {
             }
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 10)], spacing: 12) {
                 ForEach(shown) { game in
-                    VStack(alignment: .leading, spacing: 4) {
-                        SteamCover(urls: library.artwork(game.id), title: game.name)
-                        Text(game.name).font(.caption2).lineLimit(2).foregroundStyle(Deck.dim)
+                    Button { selected = game } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            SteamCover(urls: library.artwork(game.id), title: game.name)
+                                .overlay(alignment: .bottomLeading) { badge(game.id) }
+                            Text(game.name).font(.caption2).lineLimit(2).foregroundStyle(Deck.dim)
+                        }
                     }
+                    .buttonStyle(.plain)
                 }
             }
+        }
+        .sheet(item: $selected) { SteamGameSheet(game: $0, library: library) }
+    }
+
+    @State private var selected: OwnedSteamGame?
+
+    @ViewBuilder private func badge(_ id: Int) -> some View {
+        let text: String? = {
+            switch library.downloads[id] {
+            case .queued: return "Waiting"
+            case .active(let p): return p.phase == .downloading ? "\(Int(p.fraction * 100))%" : "Preparing"
+            case .failed: return "Failed"
+            case nil: return library.installedBuild(id) != nil ? "Installed" : nil
+            }
+        }()
+        if let text {
+            Text(text).font(.caption2.weight(.bold))
+                .padding(.horizontal, 6).padding(.vertical, 3)
+                .background(Deck.accent, in: Capsule())
+                .padding(6)
+        }
+    }
+}
+
+/// One owned game: install, cancel, uninstall (stage 4c). Play arrives with 4d.
+struct SteamGameSheet: View {
+    let game: OwnedSteamGame
+    @ObservedObject var library: SteamLibrary
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack(alignment: .top, spacing: 16) {
+                        SteamCover(urls: library.artwork(game.id), title: game.name).frame(width: 120)
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(game.name).font(.title3.weight(.bold))
+                            Text("App ID \(game.id)").font(.caption).foregroundStyle(Deck.dim)
+                            if let size = library.installedSize(game.id), library.installedBuild(game.id) != nil {
+                                Text("Installed, \(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))")
+                                    .font(.caption).foregroundStyle(Deck.dim)
+                            }
+                        }
+                    }
+                    state
+                    Text("Games install into MYIOSDECK's Windows drive (C:\\Program Files (x86)\\Steam\\steamapps). Keep the app open while downloading: iOS pauses downloads in the background, and Install picks up where it stopped. Playing arrives in the next update.")
+                        .font(.caption).foregroundStyle(Deck.dim)
+                }
+                .padding(16)
+            }
+            .background(Deck.bg)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+    }
+
+    @ViewBuilder private var state: some View {
+        switch library.downloads[game.id] {
+        case .queued:
+            StatusRow(label: "Waiting", detail: "Another download is running.", level: .idle)
+            Button("Cancel") { library.cancel(game.id) }.buttonStyle(DeckButtonStyle())
+        case .active(let p):
+            VStack(alignment: .leading, spacing: 6) {
+                ProgressView(value: p.fraction)
+                Text(progressText(p)).font(.caption).foregroundStyle(Deck.dim)
+            }
+            Button("Cancel") { library.cancel(game.id) }.buttonStyle(DeckButtonStyle())
+        case .failed(let why):
+            StatusRow(label: "Download failed", detail: why, level: .bad)
+            Button("Retry") { library.install(game.id) }.buttonStyle(DeckButtonStyle())
+        case nil:
+            if library.installedBuild(game.id) != nil {
+                StatusRow(label: "Installed", detail: "Ready for Play (next update).", level: .good)
+                Button("Check for update / repair") { library.install(game.id) }.buttonStyle(DeckButtonStyle())
+                Button("Uninstall", role: .destructive) { library.uninstall(game.id) }
+            } else {
+                Button("Install") { library.install(game.id) }.buttonStyle(DeckButtonStyle())
+            }
+        }
+    }
+
+    private func progressText(_ p: SteamDownloadProgress) -> String {
+        let f = ByteCountFormatter()
+        switch p.phase {
+        case .preparing: return "Preparing (reading Steam's manifests)…"
+        case .finishing: return "Finishing…"
+        case .downloading:
+            let speed = p.bytesPerSecond > 0 ? " · \(f.string(fromByteCount: Int64(p.bytesPerSecond)))/s" : ""
+            return "\(f.string(fromByteCount: Int64(p.doneBytes))) of \(f.string(fromByteCount: Int64(p.totalBytes)))\(speed)"
         }
     }
 }

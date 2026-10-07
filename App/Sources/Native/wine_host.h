@@ -22,6 +22,10 @@ bool mid_wine_linked(void);
 /// be started once per app run. Returns false and fills err on failure.
 bool mid_wine_boot(const char *prefix, const char *exe, const char *args, char *err, size_t errlen);
 
+/// Create the prefix from the bundled template if it is new (idempotent), so
+/// files can be placed in drive_c before Wine first boots. No-op without Wine.
+void mid_wine_seed_prefix(const char *prefix);
+
 /// 1 while the Windows process runs.
 int mid_wine_running(void);
 

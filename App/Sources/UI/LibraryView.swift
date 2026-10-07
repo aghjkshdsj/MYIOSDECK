@@ -86,7 +86,7 @@ struct LibraryView: View {
         DeckCard(title: "Steam", icon: "gamecontroller.fill") {
             if let name = steam.accountName {
                 HStack {
-                    StatusRow(label: "Signed in as \(name)", detail: "Downloads and Play come next in stage 4.", level: .good)
+                    StatusRow(label: "Signed in as \(name)", detail: "Tap a game to install it. Play comes next in stage 4.", level: .good)
                     Button("Sign out") { steam.signOut() }
                         .buttonStyle(DeckButtonStyle())
                         .frame(width: 110)

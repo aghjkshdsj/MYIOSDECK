@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
+import UIKit
 
 /// One game the signed-in account owns that has a Windows build.
 struct OwnedSteamGame: Codable, Identifiable, Hashable, Sendable {
@@ -62,6 +63,9 @@ final class SteamLibrary: ObservableObject {
         account = name
         games = []; updated = nil; error = nil
         guard let name else {
+            queue.removeAll()
+            active?.task.cancel()
+            downloads = [:]
             session.logoff()
             try? FileManager.default.removeItem(at: Self.cacheURL)
             dlog("[steam-library] signed out: list cleared")
@@ -100,6 +104,114 @@ final class SteamLibrary: ObservableObject {
     }
 
     func game(_ id: Int) -> OwnedSteamGame? { games.first { $0.id == id } }
+
+    // MARK: Downloads (stage 4c)
+    //
+    // Into the Wine prefix's C:\Program Files (x86)\Steam\steamapps as
+    // common/<installdir> plus appmanifest_<appid>.acf (written last by
+    // DepotDownloader), the layout Valve's client reads. One at a time; chunks
+    // are journaled, so a cancelled or interrupted download resumes.
+
+    enum DownloadState: Equatable {
+        case queued
+        case active(SteamDownloadProgress)
+        case failed(String)
+    }
+
+    @Published private(set) var downloads: [Int: DownloadState] = [:]
+    /// Bumped when an install finishes or is removed, so views re-read disk state.
+    @Published private(set) var installGeneration = 0
+    private var queue: [Int] = []
+    private var active: (id: Int, task: Task<Void, Never>)?
+    private lazy var downloader = DepotDownloader(session: session)
+
+    static var prefix: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("wine-prefix")
+    }
+    static var drive: URL { prefix.appendingPathComponent("drive_c", isDirectory: true) }
+    static var steamApps: URL { SteamInstallPaths.steamApps(drive: drive) }
+
+    /// The installed build, or nil when Steam's install record is absent.
+    func installedBuild(_ appID: Int) -> Int? {
+        _ = installGeneration
+        return SteamInstallFiles.buildID(appID: appID, steamApps: Self.steamApps)
+    }
+
+    func installedSize(_ appID: Int) -> Int64? {
+        SteamInstallFiles.sizeOnDisk(appID: appID, steamApps: Self.steamApps)
+    }
+
+    func install(_ appID: Int) {
+        guard account != nil else { return }
+        switch downloads[appID] {
+        case nil, .failed: break        // new, or a retry
+        default: return                 // already queued or running
+        }
+        downloads[appID] = .queued
+        queue.append(appID)
+        dlog("[steam-depot] queued app=\(appID)")
+        pump()
+    }
+
+    func cancel(_ appID: Int) {
+        queue.removeAll { $0 == appID }
+        if active?.id == appID { active?.task.cancel() } else { downloads[appID] = nil }
+    }
+
+    func uninstall(_ appID: Int) {
+        guard downloads[appID] == nil, let game = game(appID) else { return }
+        let folder = game.installDir.isEmpty ? "app_\(appID)" : game.installDir, apps = Self.steamApps
+        Task.detached(priority: .utility) {
+            SteamInstallFiles.delete(appID: appID, folderName: folder, steamApps: apps)
+            await MainActor.run { self.installGeneration += 1 }
+        }
+        dlog("[steam-depot] uninstalled app=\(appID)")
+    }
+
+    private func pump() {
+        guard active == nil, !queue.isEmpty else { return }
+        let appID = queue.removeFirst()
+        let task = Task { @MainActor [weak self] in await self?.run(appID) }
+        active = (appID, task)
+    }
+
+    private func run(_ appID: Int) async {
+        // Keep the screen awake and ask iOS for background time: a download
+        // only advances while the app runs.
+        UIApplication.shared.isIdleTimerDisabled = true
+        let bg = UIApplication.shared.beginBackgroundTask(withName: "steam-download")
+        defer {
+            UIApplication.shared.endBackgroundTask(bg)
+            UIApplication.shared.isIdleTimerDisabled = false
+        }
+        downloads[appID] = .active(SteamDownloadProgress())
+        do {
+            guard let info = try await fetcher.fetchInstallInfo(appID: UInt32(appID)) else {
+                throw SteamError.appInfoNotFound(UInt32(appID))
+            }
+            Self.prefix.path.withCString { mid_wine_seed_prefix($0) }
+            try FileManager.default.createDirectory(at: SteamInstallPaths.common(drive: Self.drive), withIntermediateDirectories: true)
+            _ = try await downloader.install(info, steamApps: Self.steamApps,
+                                             ownedDepots: { [weak self] in try? await self?.fetcher.ownedDepotIDs() }) { [weak self] progress in
+                Task { @MainActor in
+                    if case .active = self?.downloads[appID] { self?.downloads[appID] = .active(progress) }
+                }
+            }
+            downloads[appID] = nil
+            installGeneration += 1
+            dlog("[steam-depot] installed app=\(appID) build=\(info.buildID)")
+        } catch {
+            if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled {
+                downloads[appID] = nil
+                dlog("[steam-depot] cancelled app=\(appID) (finished chunks are kept; Install resumes)")
+            } else {
+                downloads[appID] = .failed(SteamSignIn.message(error))
+                dlog("[steam-depot] failed app=\(appID) reason=\(SteamSignIn.reason(error))")
+            }
+        }
+        active = nil
+        pump()
+    }
 
     // MARK: Artwork (Steam's public store images, no account data)
 

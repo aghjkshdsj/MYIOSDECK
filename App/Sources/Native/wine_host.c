@@ -121,6 +121,9 @@ extern void winios_screen_size(int *w, int *h);
 extern void winios_set_compositor_frame(double x, double y, double w, double h);
 extern void winios_set_desktop_rect(double x, double y, double w, double h, int set);
 
+extern void madeira_seed_prefix_if_needed(const char *prefix_path);
+void mid_wine_seed_prefix(const char *prefix) { madeira_seed_prefix_if_needed(prefix); }
+
 void mid_display_set_layer(void *metal_layer) { madeira_display_set_layer(metal_layer); }
 void mid_display_screen_size(int *w, int *h) { winios_screen_size(w, h); }
 void mid_display_layout(double fx, double fy, double fw, double fh,
@@ -194,6 +197,7 @@ bool mid_wine_boot(const char *prefix, const char *exe, const char *args, char *
 
 #else
 
+void mid_wine_seed_prefix(const char *prefix) { (void)prefix; }
 void mid_display_set_layer(void *metal_layer) { (void)metal_layer; }
 void mid_display_screen_size(int *w, int *h) { *w = 1024; *h = 768; }
 void mid_display_layout(double fx, double fy, double fw, double fh,
