@@ -42,7 +42,7 @@ sideload edition (FEX, ~90% of native) stays the full-speed option, from the sam
   Madeira's FEX fork at `...\claude\fex` (ARM64EC frontend: `Source/Windows/ARM64EC/Module.S`,
   `Module.cpp` = the reference for Wine's emulator interface).
 
-## State (2026-10-07, build 60)
+## State (2026-10-07, build 61)
 - **FXI**: no-JIT x86-64 interpreter (`engine/fxi`), 8.1% of native on device. Since build 57 it
   also has a Windows mode (`fxi_win.c`): FS/GS segment slots (r[17]/r[18], `gs:[0x30]` = TEB),
   a thread-safe shared block cache, cached `ec_exit` blocks for jumps into native ARM64EC code.
@@ -87,12 +87,19 @@ sideload edition (FEX, ~90% of native) stays the full-speed option, from the sam
   and lists unimplemented instructions with counts. Result: hello, fib, clocktest, heap, fileio,
   calltest, fpconf, child-test, d3d12-cube decode 100%; cube-x64 needs x87 (db/d9/dd: long-double
   printf in the mingw CRT). Use it on any game exe/DLL before a device round.
-- Branch `fxi-next` (not yet on main): shld/shrd, checked in fxi.yml. Merge with the next IPA.
+- **Build 60 result**: past `lock cmpxchg`; TLS callback stopped at `fninit` (`db e3`, mingw's FPU
+  reset, a leaf function without .pdata, so the first scanner missed it).
+- **Build 61 (FXI 0.3)**: x87 in `engine/fxi/fxi_x87.c` (values as double, 80-bit load/store,
+  rounding control, fcomi/fcmov/fxam, transcendentals, fnsave/fnstenv), 0F AE (fxsave/fxrstor,
+  ldmxcsr/stmxcsr, fences), fwait, shld/shrd; the CONTEXT's FltSave now loads the x87 state. Guest
+  `engine/guest/x87.c` matches native. The scanner now also follows call/jmp targets from the entry
+  point (leaf functions): all 10 Madeira x64 test programs, cube-x64 included, decode 100%.
+  `fxi-next` is the side branch for FXI work between device builds (`gh workflow run fxi.yml --ref fxi-next`).
 
 ## Next steps (in order)
 1. FXI instructions for real Windows x64 code, driven by the STOP lines and `fxi --scan-pe`.
-   Atomics done (build 60), shld/shrd on `fxi-next`. Known FXI gaps: no 32-bit addressing, no x87
-   (cube-x64 needs it), few SSE3+/SSSE3/SSE4, no AVX, no self-modifying-code invalidation, no x64
+   Atomics (build 60), x87 + shld/shrd + 0F AE (build 61) done. Known FXI gaps: no 32-bit addressing, no x87
+   , few SSE3+/SSSE3/SSE4, no AVX, no self-modifying-code invalidation, no x64
    exceptions (int3, guest faults -> SEH).
    Rebuild loop for FXI alone: `fxi.yml` (Linux checksums) before the IPA.
 2. Until hello-x64 prints: x64 SEH/unwinding and guest faults inside FXI (a host SIGSEGV while
