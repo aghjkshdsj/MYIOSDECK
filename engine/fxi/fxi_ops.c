@@ -367,16 +367,19 @@ const OpFn fxi_imul3_tab[2][4] = { { 0, imul3_R_16, imul3_R_32, imul3_R_64 }, { 
 #define CHAIN(c, slot, rip_)                                                               \
     do {                                                                                   \
         Block *b_ = (slot);                                                                \
-        if (FXI_UNLIKELY(!b_)) { b_ = fxi_lookup((c), (rip_)); if (b_ != fxi_stop) (slot) = b_; } \
+        if (FXI_UNLIKELY(!b_)) { b_ = fxi_lookup((c), (rip_)); if (b_ != fxi_stop) __atomic_store_n(&(slot), b_, __ATOMIC_RELEASE); } \
         FXI_GOTO_BLOCK((c), b_);                                                           \
     } while (0)
-// Indirect target with a one-entry inline cache (imm = cached rip, link = block).
+// Indirect target with a one-entry inline cache: link = the last target's block, checked by
+// the block's own (immutable) rip. One pointer, written atomically: threads sharing the uop
+// can never pair one target with another target's block.
 #define INDIRECT(c, u, target)                                                             \
     do {                                                                                   \
         uint64_t t_ = (target);                                                            \
-        if (FXI_LIKELY(t_ == (u)->imm && (u)->link)) FXI_GOTO_BLOCK((c), (u)->link);       \
+        Block *l_ = __atomic_load_n(&(u)->link, __ATOMIC_RELAXED);                         \
+        if (FXI_LIKELY(l_ && l_->rip == t_)) FXI_GOTO_BLOCK((c), l_);                      \
         Block *b_ = fxi_lookup((c), t_);                                                   \
-        if (b_ != fxi_stop) { (u)->imm = t_; (u)->link = b_; }                             \
+        if (b_ != fxi_stop) __atomic_store_n(&(u)->link, b_, __ATOMIC_RELEASE);            \
         FXI_GOTO_BLOCK((c), b_);                                                           \
     } while (0)
 
