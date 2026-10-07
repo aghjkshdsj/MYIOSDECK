@@ -45,6 +45,12 @@ void mid_display_set_layer(void *metal_layer);
 void mid_display_layout(double fx, double fy, double fw, double fh,
                         double rx, double ry, double rw, double rh);
 
+/// Publish one XInput controller slot (0-3) to Wine's iOS driver; XINPUT_GAMEPAD_*
+/// button bits, 0-255 triggers, full-range signed sticks (+y up). connected=0
+/// unplugs the slot. No-op without Wine.
+void mid_pad_set(int slot, int connected, uint16_t buttons, uint8_t lt, uint8_t rt,
+                 int16_t lx, int16_t ly, int16_t rx, int16_t ry);
+
 /// The guest's virtual monitor in pixels (1024x768 unless a program changes it).
 void mid_display_screen_size(int *w, int *h);
 

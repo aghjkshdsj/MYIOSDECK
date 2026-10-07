@@ -17,10 +17,20 @@ final class GameHostView: UIView {
     override class var layerClass: AnyClass { CAMetalLayer.self }
     var metalLayer: CAMetalLayer { layer as! CAMetalLayer }
 
+    /// The in-game menu button lives on this view because nothing SwiftUI draws
+    /// can be above it; the app sets what it does.
+    static var onMenu: (() -> Void)?
+    private let menuButton = UIButton(type: .system)
+
     override init(frame: CGRect) {
         super.init(frame: frame)
-        isUserInteractionEnabled = false
         isHidden = true
+        menuButton.setImage(UIImage(systemName: "ellipsis.circle.fill",
+                                    withConfiguration: UIImage.SymbolConfiguration(pointSize: 26)), for: .normal)
+        menuButton.tintColor = UIColor.white.withAlphaComponent(0.55)
+        menuButton.frame = CGRect(x: 6, y: 6, width: 44, height: 44)
+        menuButton.addAction(UIAction { _ in GameHostView.onMenu?() }, for: .touchUpInside)
+        addSubview(menuButton)
         backgroundColor = .black
         contentScaleFactor = UIScreen.main.scale
         metalLayer.device = MTLCreateSystemDefaultDevice()
@@ -35,6 +45,12 @@ final class GameHostView: UIView {
         metalLayer.drawableSize = CGSize(width: 800, height: 600)
     }
     required init?(coder: NSCoder) { fatalError() }
+
+    /// Only the menu button takes touches; the rest fall through to the views below.
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        let hit = super.hitTest(point, with: event)
+        return hit === self ? nil : hit
+    }
 
     /// Hand the layer to DXMT. Must happen before a Direct3D program starts.
     static func register() {

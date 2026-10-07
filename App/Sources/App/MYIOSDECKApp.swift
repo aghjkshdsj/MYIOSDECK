@@ -41,6 +41,7 @@ struct MYIOSDECKApp: App {
                 .onAppear {
                     crashes.sceneActive(true)
                     crashes.offerPreviousCrash()
+                    ControllerBridge.shared.start()
                     jit.resumeIfDebugged(poolMB: settings.jitPoolMB) { engine.start(settings: settings) }
                 }
         }

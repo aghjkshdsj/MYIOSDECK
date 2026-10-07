@@ -64,34 +64,34 @@ struct LibraryView: View {
         }
     }
 
-    /// Full-screen surface for a Windows program's Direct3D window. The bar sits
-    /// outside the surface because the Metal host view is above all other views.
+    /// Full-screen surface for a Windows program's Direct3D window, edge to edge.
+    /// The menu button is drawn by GameHostView (the Metal host is above every
+    /// SwiftUI view); while the menu is open the host is hidden so it shows.
     private var gameSurface: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                Text(surfaceTitle).font(.headline).lineLimit(1)
-                Spacer()
-                Button("Hide") { showSurface = false }
-                    .frame(width: 60)
-                Button("Quit game") { confirmQuit = true }
-                    .buttonStyle(DeckButtonStyle())
-                    .frame(width: 120)
+        GameSurfaceView()
+            .ignoresSafeArea()
+            .background(Color.black)
+            .statusBarHidden()
+            .persistentSystemOverlays(.hidden)
+            .onAppear {
+                GameHostView.onMenu = {
+                    GameHostView.shared.isHidden = true
+                    showGameMenu = true
+                }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .background(Deck.panel)
-            GameSurfaceView()
-                .ignoresSafeArea(edges: [.bottom, .horizontal])
-        }
-        .background(Color.black)
-        .confirmationDialog("Quit \(surfaceTitle)?", isPresented: $confirmQuit, titleVisibility: .visible) {
-            Button("Quit game and close MYIOSDECK", role: .destructive) { CrashReporter.shared.quitApp() }
-        } message: {
-            Text("A Windows game can only be stopped by closing MYIOSDECK. Unsaved progress is lost. Open MYIOSDECK again to play another game.")
-        }
+            .confirmationDialog(surfaceTitle, isPresented: $showGameMenu, titleVisibility: .visible) {
+                Button("Resume") {}
+                Button("Hide game (keeps running)") { showSurface = false }
+                Button("Quit game and close MYIOSDECK", role: .destructive) { CrashReporter.shared.quitApp() }
+            } message: {
+                Text("A Windows game can only be stopped by closing MYIOSDECK; unsaved progress is lost.")
+            }
+            .onChange(of: showGameMenu) { _, open in
+                if !open, showSurface { GameHostView.shared.isHidden = false }
+            }
     }
 
-    @State private var confirmQuit = false
+    @State private var showGameMenu = false
 
     /// Stage 4: Steam account (SwiftSteam, from Madeira). The owned library and
     /// downloads build on this sign-in.

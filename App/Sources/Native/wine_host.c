@@ -121,6 +121,20 @@ extern void winios_screen_size(int *w, int *h);
 extern void winios_set_compositor_frame(double x, double y, double w, double h);
 extern void winios_set_desktop_rect(double x, double y, double w, double h, int set);
 
+#include "Winios/WiniosGamepad.h"
+
+void mid_pad_set(int slot, int connected, uint16_t buttons, uint8_t lt, uint8_t rt,
+                 int16_t lx, int16_t ly, int16_t rx, int16_t ry) {
+    if (slot < 0 || slot >= WINIOS_GAMEPAD_MAX) return;
+    if (!connected) { winios_gamepad_set_state(slot, NULL); return; }
+    struct winios_gamepad s = {0};
+    s.connected = 1;
+    s.buttons = buttons;
+    s.left_trigger = lt; s.right_trigger = rt;
+    s.lx = lx; s.ly = ly; s.rx = rx; s.ry = ry;
+    winios_gamepad_set_state(slot, &s);
+}
+
 extern void madeira_seed_prefix_if_needed(const char *prefix_path);
 void mid_wine_seed_prefix(const char *prefix) { madeira_seed_prefix_if_needed(prefix); }
 
@@ -198,6 +212,10 @@ bool mid_wine_boot(const char *prefix, const char *exe, const char *args, char *
 #else
 
 void mid_wine_seed_prefix(const char *prefix) { (void)prefix; }
+void mid_pad_set(int slot, int connected, uint16_t buttons, uint8_t lt, uint8_t rt,
+                 int16_t lx, int16_t ly, int16_t rx, int16_t ry) {
+    (void)slot; (void)connected; (void)buttons; (void)lt; (void)rt; (void)lx; (void)ly; (void)rx; (void)ry;
+}
 void mid_display_set_layer(void *metal_layer) { (void)metal_layer; }
 void mid_display_screen_size(int *w, int *h) { *w = 1024; *h = 768; }
 void mid_display_layout(double fx, double fy, double fw, double fh,

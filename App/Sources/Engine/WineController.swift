@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
+import UIKit
 
 /// Stage 2: runs Windows x86-64 programs through Wine ARM64EC + FEX (xtajit64)
 /// in-process, using a slice of the JIT pool. One Wine session per app run.
@@ -55,7 +56,16 @@ final class WineController: ObservableObject, @unchecked Sendable {
         }
         state = .booting(program.title)
         // DXMT takes the layer when the program creates its swapchain.
-        if program.graphics { GameHostView.register() }
+        if program.graphics {
+            GameHostView.register()
+            // The virtual monitor takes the phone's landscape shape, so a game that
+            // runs at the desktop resolution fills the screen (win32u reads these
+            // once per session; the default 1024x768 is letterboxed).
+            let (w, h) = Self.monitorSize()
+            setenv("MADEIRA_SCREEN_W", String(w), 1)
+            setenv("MADEIRA_SCREEN_H", String(h), 1)
+            dlog("[display] virtual monitor \(w)x\(h) for \(program.title)")
+        }
         let prefix = prefixURL.path
         dlog("[wine] booting \(program.id) in \(prefix)")
         queue.async {
@@ -68,6 +78,17 @@ final class WineController: ObservableObject, @unchecked Sendable {
             }
             if ok { self.watch(program.title) }
         }
+    }
+
+    /// 720 lines high, as wide as the screen's landscape aspect (a multiple of 8):
+    /// 1560x720 on an iPhone 15 Pro Max. Light enough for the GPU at 60 fps.
+    static func monitorSize() -> (Int, Int) {
+        let b = UIScreen.main.nativeBounds
+        let long = max(b.width, b.height), short = min(b.width, b.height)
+        guard short > 0 else { return (1280, 720) }
+        let h = 720
+        let w = Int((CGFloat(h) * long / short / 8).rounded()) * 8
+        return (w, h)
     }
 
     /// Poll until the Windows program exits, then report how it ended.
