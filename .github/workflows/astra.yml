@@ -62,6 +62,30 @@ jobs:
         with:
           name: astra-results-${{ matrix.os }}
           path: ${{ runner.temp }}/astra-results
+  sanitizers:
+    needs: guest-fixtures
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: astra-x86-fixtures
+          path: ${{ runner.temp }}/astra-guests
+      - name: Build with address and undefined-behavior sanitizers
+        env:
+          ASTRA_EXTRA_FLAGS: -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer
+        run: bash engine/astra/build.sh "$RUNNER_TEMP/astra-sanitized"
+      - name: Exercise loader errors, instructions and all kernel paths
+        run: |
+          "$RUNNER_TEMP/astra-sanitized/safety"
+          "$RUNNER_TEMP/astra-sanitized/astra" "$RUNNER_TEMP/astra-guests/astra-probe.elf" > "$RUNNER_TEMP/astra-sanitized-probe.txt"
+          diff -u "$RUNNER_TEMP/astra-guests/astra-probe-native.txt" "$RUNNER_TEMP/astra-sanitized-probe.txt"
+          "$RUNNER_TEMP/astra-sanitized/astra" "$RUNNER_TEMP/astra-guests/hello.elf"
+          for kernel in integer float memory branch simd; do
+            "$RUNNER_TEMP/astra-sanitized/astra" "$RUNNER_TEMP/astra-guests/bench_sse2.elf" "$kernel" 1
+            ASTRA_NO_FUSION=1 "$RUNNER_TEMP/astra-sanitized/astra" "$RUNNER_TEMP/astra-guests/bench_sse2.elf" "$kernel" 1
+          done
   iphone-compile:
     runs-on: macos-latest
     steps:

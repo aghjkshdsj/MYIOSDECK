@@ -130,6 +130,8 @@ Op decode(Cpu *c,U &pc) {
         p.kind=SSE; p.aux=(d.prefix<<8)|op;
         if(!select_sse(p) || op==0x22 || op==0x36)fault(c,pc,"unimplemented opcode");
         unsigned m=d.byte(); p.a=d.reg(((m>>3)&7)+((d.rex&4)?8:0),8); p.b=d.rm(m,8);
+        if((op==0x17 || ((op==0x12||op==0x16) && d.prefix==1)) && p.b.mode!=MEM)
+            fault(c,pc,"invalid vector memory form");
         if(op==0x70 || op==0xc6) p.imm=d.byte();
         if(op==0x71 || op==0x72 || op==0x73) {
             if(p.b.mode!=REG)fault(c,pc,"invalid vector shift");

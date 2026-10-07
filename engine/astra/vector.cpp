@@ -173,6 +173,19 @@ template<int C> Handler pref(const Op &p) {
     }
 }
 Handler select_sse(const Op &p) {
+    unsigned code=p.aux&255,prefix=p.aux>>8;
+    bool valid=false;
+    switch(code) {
+    case 0x10:case 0x11:case 0x58:case 0x59:case 0x5a:case 0x5c:case 0x5e:valid=true;break;
+    case 0x12:case 0x14:case 0x15:case 0x16:case 0x17:case 0x28:case 0x29:
+    case 0x2e:case 0x2f:case 0x54:case 0x55:case 0x56:case 0x57:case 0xc6:valid=prefix<=1;break;
+    case 0x2a:case 0x2c:case 0x2d:valid=prefix>=2;break;
+    case 0x5b:valid=prefix<=2;break;
+    case 0x6f:case 0x7e:case 0x7f:valid=prefix==1||prefix==2;break;
+    case 0x70:valid=prefix!=0;break;
+    default:valid=prefix==1;break;
+    }
+    if(!valid)return nullptr;
     switch(p.aux&255) {
 #define V(code) case code:return pref<code>(p)
     V(0x10);V(0x11);V(0x12);V(0x14);V(0x15);V(0x16);V(0x17);V(0x28);V(0x29);

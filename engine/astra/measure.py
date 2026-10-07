@@ -95,9 +95,10 @@ for kernel, row in data["trials"].items():
     lines.append(f"| {kernel} | {row['scale']} | {med['native']} | {med['astra']} | {pct['astra']:.2f}% | {med['fxi']} | {pct['fxi']:.2f}% | {checksum} |")
 means = {k: statistics.mean(v) if len(v) == 5 else None for k, v in percentages.items()}
 data["mean_percent"] = means
-data["performance_gate"] = arm and not data["errors"] and means["astra"] is not None and means["astra"] >= 12
+data["performance_gate"] = (not data["errors"] and means["astra"] is not None and means["astra"] >= 12) if arm else None
+gate_label = str(data["performance_gate"]) if arm else "not applicable (gate runs on ARM64)"
 lines += ["", f"Arithmetic means: {means}", "",
-          f"ARM64 performance gate (approved hello field rules): **{data['performance_gate']}**.",
+          f"ARM64 performance gate (approved hello field rules): **{gate_label}**.",
           "Hello: exact greeting, labels, formatting and line count; printable nonempty CPU identity (12-byte vendor), SSE2=yes, Astra SSE4.2/AVX=no, positive loop time, exit=0."]
 for engine, raw in hello_outputs.items():
     lines += ["", f"### Raw hello: {engine}", "```text", raw.rstrip("\n"), "```"]

@@ -67,7 +67,10 @@ template<Kind K> ASTRA_CC void control(Cpu *c,Op *p) {
         c->r[0]=a;c->r[3]=b;c->r[1]=cc;c->r[2]=d; NEXT();
     }
     if constexpr(K==SYSCALL) {
-        ++c->out->syscalls; c->r[1]=p->end; c->r[11]=2;
+        ++c->out->syscalls; c->r[1]=p->end;
+        c->r[11]=0x202|U(condition(c,2))|U(condition(c,10))*4|
+            (c->f.kind==SSE?0:((c->f.a^c->f.b^c->f.r)&16))|U(condition(c,4))*64|
+            U(condition(c,8))*128|U(condition(c,0))*2048;
         if(c->r[0]==60 || c->r[0]==231) { c->out->ok=1;c->out->exit_code=(int)c->r[7];return; }
         if(c->r[0]==1) {
             if(c->r[7]!=1 && c->r[7]!=2)c->r[0]=(U)-9;
