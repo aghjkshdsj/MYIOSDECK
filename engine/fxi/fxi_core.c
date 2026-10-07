@@ -31,6 +31,17 @@ void fxi_fail(FxiCpu *c, const char *fmt, ...) {
     }
 }
 
+void fxi_raise(FxiCpu *c, uint64_t rip, uint32_t code, uint32_t flags, uint32_t nparams, uint64_t i0, uint64_t i1) {
+    c->rip = rip;
+    if (!c->vm->windows) {
+        fxi_fail(c, "CPU exception %#x at %#llx (int3/ud2/hlt/int n/divide error)", code, (unsigned long long)rip);
+        return;
+    }
+    c->exc_code = code; c->exc_flags = flags; c->exc_nparams = nparams;
+    c->exc_info[0] = i0; c->exc_info[1] = i1;
+    c->stop = FXI_STOP_EXCEPTION;
+}
+
 // ---- block cache: open addressing on the guest rip ----
 // Lookups are lock-free; translation and insertion take g_translate_lock (Windows guests
 // run several threads on one cache). A grown table replaces the old one, which is never
@@ -88,6 +99,11 @@ Block *fxi_lookup(FxiCpu *c, uint64_t rip) {
     Block *b = table_find(__atomic_load_n(&vm->table, __ATOMIC_ACQUIRE), rip);
     if (b) return b;
     if (c->stop) return fxi_stop;
+    // Translation reads the guest code: a host fault from here on is an execute fault at rip.
+    // Touch it before taking the translation lock, which a fault would leave held.
+    c->cur = NULL;
+    c->rip = rip;
+    if (vm->windows) (void)*(volatile const uint8_t *)(uintptr_t)rip;
     if (!vm->windows &&
         (rip < (uint64_t)(uintptr_t)vm->image || rip >= (uint64_t)(uintptr_t)vm->image + vm->image_size)) {
         c->rip = rip;

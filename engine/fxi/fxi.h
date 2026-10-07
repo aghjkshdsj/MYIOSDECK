@@ -46,6 +46,16 @@ void fxi_win_set_teb(FxiCpu *c, uint64_t teb);   // GS base
 uint64_t fxi_win_rip(FxiCpu *c);
 /// Load an AMD64 CONTEXT into the CPU.
 void fxi_win_load_context(FxiCpu *c, const void *amd64_context);
+/// The CPU state as an AMD64 CONTEXT (0x4d0 bytes written) with the given rip.
+void fxi_win_save_context(FxiCpu *c, void *amd64_context, uint64_t rip);
+
+/// A CPU exception the x64 code raised (int3, ud2, divide error, ...): fxi_win_run returned 0
+/// and this returns 1 with the exception (the CPU state is as before the instruction).
+typedef struct { uint32_t code, flags, nparams; uint64_t info[2]; uint64_t rip; } fxi_win_exc;
+int fxi_win_exception(FxiCpu *c, fxi_win_exc *e);
+/// A host fault (SIGSEGV/SIGBUS) during fxi_win_run: the x64 instruction that faulted.
+/// *is_fetch = 1 when it happened fetching code (an execute fault at that address).
+uint64_t fxi_win_fault_rip(FxiCpu *c, int *is_fetch);
 
 #ifdef __cplusplus
 }

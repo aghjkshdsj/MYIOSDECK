@@ -268,7 +268,8 @@ const OpFn fxi_setcc_tab[2] = { setcc_R, setcc_M };
 // ---------------------------------------------------------------------------
 // MUL IMUL DIV IDIV (one operand, rDX:rAX), IMUL two/three operand
 // ---------------------------------------------------------------------------
-static void fxi_div0(FxiCpu *c, Uop *u) { c->rip = u->aux; fxi_fail(c, "divide error (#DE) at %#llx", (unsigned long long)u->aux); }
+// #DE: INT_DIVIDE_BY_ZERO, or INT_OVERFLOW when the quotient does not fit.
+static void fxi_div0(FxiCpu *c, Uop *u, int zero) { fxi_raise(c, u->rip, zero ? 0xC0000094 : 0xC0000095, 0, 0, 0, 0); }
 
 #define MD_SRC_R(S) rd##S(c, u->src)
 #define MD_SRC_M(S) ld##S(fxi_ea(c, u))
@@ -305,37 +306,37 @@ static void fxi_div0(FxiCpu *c, Uop *u) { c->rip = u->aux; fxi_fail(c, "divide e
         c->lf_op = LF(LF_MUL, 3); c->lf_res = (uint64_t)r; c->lf_cin = r != (int64_t)r; FXI_NEXT(c, u); } \
     static void div_##FORM##_8(FxiCpu *c, Uop *u) {                                        \
         uint64_t d = MD_SRC_##FORM(8), n = (uint16_t)c->r[R_AX];                           \
-        if (FXI_UNLIKELY(!d || n / d > 0xff)) { fxi_div0(c, u); return; }                  \
+        if (FXI_UNLIKELY(!d || n / d > 0xff)) { fxi_div0(c, u, !d); return; }                  \
         wr8(c, R_AX * 8, n / d); wr8(c, R_AX * 8 + 1, n % d); FXI_NEXT(c, u); }            \
     static void div_##FORM##_16(FxiCpu *c, Uop *u) {                                       \
         uint64_t d = MD_SRC_##FORM(16), n = (uint64_t)(uint16_t)c->r[R_DX] << 16 | (uint16_t)c->r[R_AX]; \
-        if (FXI_UNLIKELY(!d || n / d > 0xffff)) { fxi_div0(c, u); return; }                \
+        if (FXI_UNLIKELY(!d || n / d > 0xffff)) { fxi_div0(c, u, !d); return; }                \
         wr16(c, R_AX * 8, n / d); wr16(c, R_DX * 8, n % d); FXI_NEXT(c, u); }              \
     static void div_##FORM##_32(FxiCpu *c, Uop *u) {                                       \
         uint64_t d = MD_SRC_##FORM(32), n = (uint64_t)(uint32_t)c->r[R_DX] << 32 | (uint32_t)c->r[R_AX]; \
-        if (FXI_UNLIKELY(!d || n / d > 0xffffffffull)) { fxi_div0(c, u); return; }         \
+        if (FXI_UNLIKELY(!d || n / d > 0xffffffffull)) { fxi_div0(c, u, !d); return; }         \
         wr32(c, R_AX * 8, n / d); wr32(c, R_DX * 8, n % d); FXI_NEXT(c, u); }              \
     static void div_##FORM##_64(FxiCpu *c, Uop *u) {                                       \
         uint64_t d = MD_SRC_##FORM(64);                                                    \
         unsigned __int128 n = (unsigned __int128)c->r[R_DX] << 64 | c->r[R_AX];            \
-        if (FXI_UNLIKELY(!d || (n / d) >> 64)) { fxi_div0(c, u); return; }                 \
+        if (FXI_UNLIKELY(!d || (n / d) >> 64)) { fxi_div0(c, u, !d); return; }                 \
         c->r[R_AX] = (uint64_t)(n / d); c->r[R_DX] = (uint64_t)(n % d); FXI_NEXT(c, u); }  \
     static void idiv_##FORM##_8(FxiCpu *c, Uop *u) {                                       \
         int64_t d = (int8_t)MD_SRC_##FORM(8), n = (int16_t)c->r[R_AX];                     \
-        if (FXI_UNLIKELY(!d || n / d > 127 || n / d < -128)) { fxi_div0(c, u); return; }   \
+        if (FXI_UNLIKELY(!d || n / d > 127 || n / d < -128)) { fxi_div0(c, u, !d); return; }   \
         wr8(c, R_AX * 8, (uint64_t)(n / d)); wr8(c, R_AX * 8 + 1, (uint64_t)(n % d)); FXI_NEXT(c, u); } \
     static void idiv_##FORM##_16(FxiCpu *c, Uop *u) {                                      \
         int64_t d = (int16_t)MD_SRC_##FORM(16), n = (int32_t)((uint32_t)(uint16_t)c->r[R_DX] << 16 | (uint16_t)c->r[R_AX]); \
-        if (FXI_UNLIKELY(!d || n / d > 32767 || n / d < -32768)) { fxi_div0(c, u); return; } \
+        if (FXI_UNLIKELY(!d || n / d > 32767 || n / d < -32768)) { fxi_div0(c, u, !d); return; } \
         wr16(c, R_AX * 8, (uint64_t)(n / d)); wr16(c, R_DX * 8, (uint64_t)(n % d)); FXI_NEXT(c, u); } \
     static void idiv_##FORM##_32(FxiCpu *c, Uop *u) {                                      \
         int64_t d = (int32_t)MD_SRC_##FORM(32), n = (int64_t)((uint64_t)(uint32_t)c->r[R_DX] << 32 | (uint32_t)c->r[R_AX]); \
-        if (FXI_UNLIKELY(!d || n / d > 2147483647ll || n / d < -2147483648ll)) { fxi_div0(c, u); return; } \
+        if (FXI_UNLIKELY(!d || n / d > 2147483647ll || n / d < -2147483648ll)) { fxi_div0(c, u, !d); return; } \
         wr32(c, R_AX * 8, (uint64_t)(n / d)); wr32(c, R_DX * 8, (uint64_t)(n % d)); FXI_NEXT(c, u); } \
     static void idiv_##FORM##_64(FxiCpu *c, Uop *u) {                                      \
         int64_t d = (int64_t)MD_SRC_##FORM(64);                                            \
         __int128 n = (__int128)((unsigned __int128)c->r[R_DX] << 64 | c->r[R_AX]);         \
-        if (FXI_UNLIKELY(!d || n / d > INT64_MAX || n / d < INT64_MIN)) { fxi_div0(c, u); return; } \
+        if (FXI_UNLIKELY(!d || n / d > INT64_MAX || n / d < INT64_MIN)) { fxi_div0(c, u, !d); return; } \
         c->r[R_AX] = (uint64_t)(n / d); c->r[R_DX] = (uint64_t)(n % d); FXI_NEXT(c, u); }
 DEF_MULDIV(R) DEF_MULDIV(M)
 #define TAB_MD(OPN) { { OPN##_R_8, OPN##_R_16, OPN##_R_32, OPN##_R_64 }, { OPN##_M_8, OPN##_M_16, OPN##_M_32, OPN##_M_64 } }
@@ -384,23 +385,27 @@ static void op_jcc(FxiCpu *c, Uop *u) {
     if (fxi_cond(c, u->cc)) CHAIN(c, u->link, u->imm);
     CHAIN(c, u->link2, u->aux);
 }
+// Stack accesses record the uop (FXI_TOUCH) and change RSP only after the access, so a
+// fault (a stack overflow) leaves the instruction's state exact.
+#define PUSH64(c, u, v) do { uint64_t sp_ = (c)->r[R_SP] - 8; FXI_TOUCH(c, u); st64(sp_, (v)); (c)->r[R_SP] = sp_; } while (0)
 static void op_call(FxiCpu *c, Uop *u) {
-    c->r[R_SP] -= 8; st64(c->r[R_SP], u->aux);
+    PUSH64(c, u, u->aux);
     CHAIN(c, u->link, u->imm);
 }
 static void op_call_R(FxiCpu *c, Uop *u) {
     uint64_t t = c->r[u->src >> 3];
-    c->r[R_SP] -= 8; st64(c->r[R_SP], u->aux);
+    PUSH64(c, u, u->aux);
     INDIRECT(c, u, t);
 }
 static void op_call_M(FxiCpu *c, Uop *u) {
     uint64_t t = ld64(fxi_ea(c, u));
-    c->r[R_SP] -= 8; st64(c->r[R_SP], u->aux);
+    PUSH64(c, u, u->aux);
     INDIRECT(c, u, t);
 }
 static void op_jmp_R(FxiCpu *c, Uop *u) { INDIRECT(c, u, c->r[u->src >> 3]); }
 static void op_jmp_M(FxiCpu *c, Uop *u) { INDIRECT(c, u, ld64(fxi_ea(c, u))); }
 static void op_ret(FxiCpu *c, Uop *u) {
+    FXI_TOUCH(c, u);
     uint64_t t = ld64(c->r[R_SP]);
     c->r[R_SP] += 8 + u->aux;   // aux: ret imm16
     INDIRECT(c, u, t);
@@ -414,7 +419,18 @@ static void op_fail_ud(FxiCpu *c, Uop *u) {
     c->rip = u->aux;
     fxi_fail(c, "unimplemented instruction at %#llx: %s", (unsigned long long)u->aux, (const char *)(uintptr_t)u->imm);
 }
-static void op_hlt(FxiCpu *c, Uop *u) { c->rip = u->aux; fxi_fail(c, "hlt/ud2/int3 at %#llx", (unsigned long long)u->aux); }
+// int3, int n, hlt, ud2 as the exceptions Windows reports for them. The context's rip is the
+// instruction itself (as x64 Windows gives it for int3).
+static void op_trap(FxiCpu *c, Uop *u) {
+    switch (u->imm) {
+    case 3: case 0x2d: fxi_raise(c, u->rip, 0x80000003, 0, 1, 0, 0); break;              // EXCEPTION_BREAKPOINT
+    case 0x106: fxi_raise(c, u->rip, 0xC000001D, 0, 0, 0, 0); break;                     // ILLEGAL_INSTRUCTION
+    case 0x100: fxi_raise(c, u->rip, 0xC0000096, 0, 0, 0, 0); break;                     // PRIVILEGED_INSTRUCTION
+    case 0x29: fxi_raise(c, u->rip, 0xC0000409, 1, 1, c->r[R_CX], 0); break;             // __fastfail: STACK_BUFFER_OVERRUN, noncontinuable
+    case 0x2c: fxi_raise(c, u->rip, 0xC0000420, 0, 0, 0, 0); break;                      // ASSERTION_FAILURE
+    default: fxi_raise(c, u->rip, 0xC0000005, 0, 2, 0, ~0ull); break;                    // int n: #GP -> ACCESS_VIOLATION
+    }
+}
 
 static void op_syscall(FxiCpu *c, Uop *u) {
     c->rip = u->aux;
@@ -476,14 +492,20 @@ const OpFn fxi_fjcc_tab[2][2][2][16] = { TAB_FJ(cmp), TAB_FJ(test) };
 // ---------------------------------------------------------------------------
 // Stack, misc
 // ---------------------------------------------------------------------------
-static void op_push_R(FxiCpu *c, Uop *u) { uint64_t v = c->r[u->src >> 3]; c->r[R_SP] -= 8; st64(c->r[R_SP], v); FXI_NEXT(c, u); }
-static void op_push_I(FxiCpu *c, Uop *u) { c->r[R_SP] -= 8; st64(c->r[R_SP], u->imm); FXI_NEXT(c, u); }
-static void op_push_M(FxiCpu *c, Uop *u) { uint64_t v = ld64(fxi_ea(c, u)); c->r[R_SP] -= 8; st64(c->r[R_SP], v); FXI_NEXT(c, u); }
-static void op_pop_R(FxiCpu *c, Uop *u) { uint64_t v = ld64(c->r[R_SP]); c->r[R_SP] += 8; c->r[u->dst >> 3] = v; FXI_NEXT(c, u); }
-static void op_pop_M(FxiCpu *c, Uop *u) { uint64_t v = ld64(c->r[R_SP]); c->r[R_SP] += 8; st64(fxi_ea(c, u), v); FXI_NEXT(c, u); }
-static void op_leave(FxiCpu *c, Uop *u) { c->r[R_SP] = c->r[R_BP]; c->r[R_BP] = ld64(c->r[R_SP]); c->r[R_SP] += 8; FXI_NEXT(c, u); }
-static void op_pushf(FxiCpu *c, Uop *u) { c->r[R_SP] -= 8; st64(c->r[R_SP], fxi_rflags(c)); FXI_NEXT(c, u); }
-static void op_popf(FxiCpu *c, Uop *u) { fxi_set_rflags(c, ld64(c->r[R_SP])); c->r[R_SP] += 8; FXI_NEXT(c, u); }
+static void op_push_R(FxiCpu *c, Uop *u) { uint64_t v = c->r[u->src >> 3]; PUSH64(c, u, v); FXI_NEXT(c, u); }
+static void op_push_I(FxiCpu *c, Uop *u) { PUSH64(c, u, u->imm); FXI_NEXT(c, u); }
+static void op_push_M(FxiCpu *c, Uop *u) { uint64_t v = ld64(fxi_ea(c, u)); PUSH64(c, u, v); FXI_NEXT(c, u); }
+static void op_pop_R(FxiCpu *c, Uop *u) { FXI_TOUCH(c, u); uint64_t v = ld64(c->r[R_SP]); c->r[R_SP] += 8; c->r[u->dst >> 3] = v; FXI_NEXT(c, u); }
+static void op_pop_M(FxiCpu *c, Uop *u) {
+    FXI_TOUCH(c, u);
+    uint64_t v = ld64(c->r[R_SP]);
+    st64(fxi_ea(c, u) + 8 * (u->base == R_SP), v);   // an rsp-based destination sees the popped rsp
+    c->r[R_SP] += 8;
+    FXI_NEXT(c, u);
+}
+static void op_leave(FxiCpu *c, Uop *u) { FXI_TOUCH(c, u); uint64_t bp = ld64(c->r[R_BP]); c->r[R_SP] = c->r[R_BP] + 8; c->r[R_BP] = bp; FXI_NEXT(c, u); }
+static void op_pushf(FxiCpu *c, Uop *u) { PUSH64(c, u, fxi_rflags(c)); FXI_NEXT(c, u); }
+static void op_popf(FxiCpu *c, Uop *u) { FXI_TOUCH(c, u); fxi_set_rflags(c, ld64(c->r[R_SP])); c->r[R_SP] += 8; FXI_NEXT(c, u); }
 static void op_nop(FxiCpu *c, Uop *u) { FXI_NEXT(c, u); }
 
 static void op_cbw(FxiCpu *c, Uop *u) { wr16(c, 0, (uint64_t)(int64_t)(int8_t)c->r[R_AX]); FXI_NEXT(c, u); }
@@ -559,7 +581,10 @@ static void op_rdtsc(FxiCpu *c, Uop *u) {
 }
 
 // String ops (rep and single): u->scale = element size index, u->cc = 1 for rep.
+// (A fault part-way through a rep string op reports the instruction with RCX/RSI/RDI as they
+// were before it: not exact, rare.)
 static void op_stos(FxiCpu *c, Uop *u) {
+    FXI_TOUCH(c, u);
     unsigned sz = 1u << u->scale;
     uint64_t n = u->cc ? c->r[R_CX] : 1, v = c->r[R_AX], di = c->r[R_DI];
     int64_t step = c->df ? -(int64_t)sz : (int64_t)sz;
@@ -570,6 +595,7 @@ static void op_stos(FxiCpu *c, Uop *u) {
     FXI_NEXT(c, u);
 }
 static void op_movs(FxiCpu *c, Uop *u) {
+    FXI_TOUCH(c, u);
     unsigned sz = 1u << u->scale;
     uint64_t n = u->cc ? c->r[R_CX] : 1, si = c->r[R_SI], di = c->r[R_DI];
     int64_t step = c->df ? -(int64_t)sz : (int64_t)sz;
@@ -590,7 +616,7 @@ static void op_movs(FxiCpu *c, Uop *u) {
 static const struct { const char *name; OpFn fn; } kNamed[] = {
     { "jmp", op_jmp }, { "jcc", op_jcc }, { "call", op_call }, { "call_R", op_call_R }, { "call_M", op_call_M },
     { "jmp_R", op_jmp_R }, { "jmp_M", op_jmp_M }, { "ret", op_ret }, { "goto", op_goto }, { "stop", op_stop }, { "ec_exit", op_ec_exit },
-    { "fail_ud", op_fail_ud }, { "hlt", op_hlt }, { "syscall", op_syscall },
+    { "fail_ud", op_fail_ud }, { "trap", op_trap }, { "syscall", op_syscall },
     { "push_R", op_push_R }, { "push_I", op_push_I }, { "push_M", op_push_M }, { "pop_R", op_pop_R }, { "pop_M", op_pop_M },
     { "leave", op_leave }, { "pushf", op_pushf }, { "popf", op_popf }, { "nop", op_nop },
     { "cbw", op_cbw }, { "cwde", op_cwde }, { "cdqe", op_cdqe }, { "cwd", op_cwd }, { "cdq", op_cdq }, { "cqo", op_cqo },

@@ -67,6 +67,7 @@ FxiCpu *fxi_win_cpu_new(void) {
 
 uint64_t fxi_win_run(FxiCpu *c) {
     c->stop = 0;
+    c->cur = NULL;
     if (c->err) c->err[0] = 0;
     Block *b = fxi_lookup(c, c->rip);
     if (!c->stop) b->u[0].fn(c, b->u);   // returns when the chain stops
@@ -77,6 +78,35 @@ uint64_t fxi_win_run(FxiCpu *c) {
     if (c->err && !c->err[0])
         snprintf(c->err, 256, "dispatch chain left with stop=%d at %#llx", c->stop, (unsigned long long)c->rip);
     return 0;
+}
+
+int fxi_win_exception(FxiCpu *c, fxi_win_exc *e) {
+    if (c->stop != FXI_STOP_EXCEPTION) return 0;
+    e->code = c->exc_code; e->flags = c->exc_flags; e->nparams = c->exc_nparams;
+    e->info[0] = c->exc_info[0]; e->info[1] = c->exc_info[1];
+    e->rip = c->rip;
+    c->stop = 0;
+    return 1;
+}
+
+// A host fault while interpreting: the instruction whose memory access faulted (its state
+// is as before it ran), or the block being translated (an execute fault).
+uint64_t fxi_win_fault_rip(FxiCpu *c, int *is_fetch) {
+    if (is_fetch) *is_fetch = c->cur == NULL;
+    return c->cur ? c->cur->rip : c->rip;
+}
+
+// The CPU state as an AMD64 CONTEXT (CONTEXT_FULL | CONTEXT_FLOATING_POINT), rip given.
+void fxi_win_save_context(FxiCpu *c, void *ctx, uint64_t rip) {
+    uint8_t *p = ctx;
+    memset(p, 0, 0x4d0);
+    uint32_t flags = 0x10000b, eflags = (uint32_t)fxi_rflags(c);   // CONTEXT_AMD64 | CONTROL | INTEGER | FLOATING_POINT
+    memcpy(p + 0x30, &flags, 4);
+    memcpy(p + 0x34, &c->mxcsr, 4);
+    memcpy(p + 0x44, &eflags, 4);
+    memcpy(p + 0x78, c->r, 16 * 8);
+    memcpy(p + 0xf8, &rip, 8);
+    fxi_x87_fxsave(c, p + 0x100, 1);
 }
 
 const char *fxi_win_error(FxiCpu *c) { return c->err ? c->err : "?"; }

@@ -33,6 +33,8 @@ final class WineController: ObservableObject, @unchecked Sendable {
         Program(id: "hello-x64-nojit", title: "Windows Hello (x64, no JIT)",
                 detail: "x64 code interpreted by FXI inside Wine: the App Store path", noJIT: true,
                 exeName: "hello-x64.exe"),
+        Program(id: "suite-x64.exe", title: "x64 test suite (no JIT)",
+                detail: "FXI inside Wine: callbacks, threads, exceptions, C++ throw, longjmp, child process", noJIT: true),
         Program(id: "hello-x64.exe", title: "Windows Hello (x64)", detail: "Console hello world through Wine + FEX ARM64EC"),
         Program(id: "fib-x64.exe", title: "Fibonacci (x64)", detail: "Recursive CPU test: x86-64 call/ret through FEX"),
         Program(id: "clocktest-x64.exe", title: "Clock test (x64)", detail: "Windows timers and QueryPerformanceCounter"),

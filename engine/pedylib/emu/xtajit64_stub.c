@@ -24,7 +24,10 @@ __declspec(dllimport) unsigned long DbgPrint(const char *fmt, ...);
 EXPORT void **MyiosdeckFxiHost;
 
 enum { H_EXIT_TO_X64, H_DISPATCH_JUMP, H_RET_TO_ENTRY_THUNK, H_BEGIN_SIMULATION, H_PROCESS_INIT,
-       H_THREAD_INIT, H_FEATURE_PRESENT };
+       H_THREAD_INIT, H_FEATURE_PRESENT, H_RESET_TO_CONSISTENT };
+
+// The app raises x64 exceptions through ntdll's KiUserExceptionDispatcher (fxi_win_host.c).
+__declspec(dllimport) void KiUserExceptionDispatcher(void);
 
 #define DISPATCH(name, slot)                                       \
     __asm__(".text\n"                                              \
@@ -45,16 +48,30 @@ DISPATCH(BeginSimulation, 24);
 
 // Call a native app function (Apple arm64 ABI) with one argument. A plain blr: an ARM64EC
 // indirect call would go through __os_arm64x_check_icall, which treats non-EC code as x64.
-static long host_call(int slot, long arg) {
+static long host_call2(int slot, long arg0, long arg1) {
     if (!MyiosdeckFxiHost || !MyiosdeckFxiHost[slot]) return (long)0xC0000001;
-    register long x0 __asm__("x0") = arg;
+    register long x0 __asm__("x0") = arg0;
+    register long x1 __asm__("x1") = arg1;
     register void *x16 __asm__("x16") = MyiosdeckFxiHost[slot];
     __asm__ volatile("blr x16"
-                     : "+r"(x0), "+r"(x16)
+                     : "+r"(x0), "+r"(x1), "+r"(x16)
                      :
-                     : "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x15", "x17",
+                     : "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x15", "x17",
                        "x30", "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7", "memory", "cc");
     return x0;
+}
+static long host_call(int slot, long arg) { return host_call2(slot, arg, 0); }
+
+// ARM64EC exports are x64 "fast-forward" thunks (mov rax,rsp; mov [rax+20],rbx; push rbp;
+// pop rbp; jmp rel32) whose jmp leads to the native function: native callers follow it.
+static void *native_entry(void *export_addr) {
+    const volatile unsigned char *p = export_addr;
+    const volatile unsigned long long *q = (const volatile unsigned long long *)p;
+    if (q[0] == 0x5520588948c48b48ull && p[8] == 0x5d && p[9] == 0xe9) {
+        int rel = (int)((unsigned)p[10] | (unsigned)p[11] << 8 | (unsigned)p[12] << 16 | (unsigned)p[13] << 24);
+        return (void *)(p + 14 + rel);
+    }
+    return export_addr;
 }
 
 EXPORT NTSTATUS WINAPI ProcessInit(void) {
@@ -62,7 +79,7 @@ EXPORT NTSTATUS WINAPI ProcessInit(void) {
         DbgPrint("[xtajit64-fxi] no host table: this process cannot run x64 code without JIT\n");
         return (NTSTATUS)0xC0000001;
     }
-    return host_call(H_PROCESS_INIT, 0);
+    return host_call(H_PROCESS_INIT, (long)native_entry((void *)KiUserExceptionDispatcher));
 }
 EXPORT NTSTATUS WINAPI ThreadInit(void) { return host_call(H_THREAD_INIT, 0); }
 EXPORT unsigned char WINAPI BTCpu64IsProcessorFeaturePresent(unsigned int feature) {
@@ -94,8 +111,11 @@ EXPORT void WINAPI NotifyMemoryFree(void *addr, SIZE_T size, unsigned long type,
 EXPORT void WINAPI NotifyMemoryProtect(void *addr, SIZE_T size, unsigned long prot, int after, NTSTATUS st) {
     (void)addr; (void)size; (void)prot; (void)after; (void)st;
 }
-EXPORT NTSTATUS WINAPI ResetToConsistentState(void *ptrs, void *ctx, void *x64ctx) {
-    (void)ptrs; (void)ctx; (void)x64ctx;
+// Wine calls this for every exception before dispatching it: a fault inside FXI does not
+// return (the app re-raises it as an exception of the x64 instruction, on the guest stack).
+EXPORT NTSTATUS WINAPI ResetToConsistentState(void *rec, void *x64ctx, void *arm_ctx) {
+    (void)x64ctx;
+    host_call2(H_RESET_TO_CONSISTENT, (long)rec, (long)arm_ctx);
     return 0;
 }
 EXPORT void WINAPI UpdateProcessorInformation(void *info) { (void)info; }

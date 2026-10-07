@@ -35,6 +35,13 @@ jobs:
       - name: Spike result
         if: steps.spike.outcome != 'success'
         run: echo "::warning::The no-JIT spike DLLs did not build (see 'No-JIT spike DLLs'); this IPA has no DLL test."
+      - name: FXI static scan of the x64 test suite
+        if: steps.spike.outcome == 'success'
+        continue-on-error: true
+        run: |
+          sudo apt-get install -y -qq clang > /dev/null
+          bash engine/fxi/build.sh "$RUNNER_TEMP/fxi" > /dev/null
+          "$RUNNER_TEMP/fxi/fxi" --scan-pe "$RUNNER_TEMP/guests/pedylib/winepe/suite-x64.exe" | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v5
         with:
           name: guests
@@ -135,6 +142,7 @@ jobs:
           done
           # Wine runs bare-name programs from system32, which Madeira links to the farm.
           [ -f App/Generated/pedylib/winepe/hello-arm64ec.exe ] && cp App/Generated/pedylib/winepe/hello-arm64ec.exe "$FARM/"
+          [ -f App/Generated/pedylib/winepe/suite-x64.exe ] && cp App/Generated/pedylib/winepe/suite-x64.exe "$FARM/"
           echo "- No-JIT Wine: $ok PE files as signed dylibs, $skip not converted" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Build without Wine

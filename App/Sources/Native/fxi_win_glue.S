@@ -161,6 +161,13 @@ _fxi_win_begin_simulation:
     ldr x16, [x17, #0x30]
     b Lrun
 
+// fxi_win_jump_stack(sp, pc): continue at pc on a new stack, abandoning this one (an x64
+// exception: KiUserExceptionDispatcher on the guest stack, fxi_win_host.c raise_x64).
+    .globl _fxi_win_jump_stack
+_fxi_win_jump_stack:
+    mov sp, x0
+    br x1
+
 // No FxiCpu on this thread (ThreadInit did not run): report on the emulator stack.
 Lno_cpu:
     ldr x10, [x17, #0x8]

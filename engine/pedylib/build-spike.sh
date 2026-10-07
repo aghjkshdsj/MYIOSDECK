@@ -67,6 +67,11 @@ build_wine_extras() {
     for f in "$OUT/winepe/xtajit64.dll" "$OUT/winepe/hello-arm64ec.exe"; do
         python3 "$HERE/pe2dylib.py" convert --strict --keep-ext "$f" "$OUT/wine" | tail -3
     done
+    # The x64 test suite for FXI inside Wine (step D): plain x86-64, its code is interpreted.
+    x86_64-w64-mingw32-clang -O2 -c -o "$B/suite-x64.o" "$HERE/hello/suite-x64.c"
+    x86_64-w64-mingw32-clang++ -O2 -c -o "$B/suite-x64-cxx.o" "$HERE/hello/suite-x64-cxx.cpp"
+    x86_64-w64-mingw32-clang++ -static -o "$OUT/winepe/suite-x64.exe" "$B/suite-x64.o" "$B/suite-x64-cxx.o"
+    llvm-readobj --coff-imports "$OUT/winepe/suite-x64.exe" | grep -E 'Name:' | sort -u | head -20 || true
 }
 ( set -e; build_wine_extras ) || { echo "::warning::Wine no-JIT extras failed"; fail=1; }
 ls -la "$OUT"

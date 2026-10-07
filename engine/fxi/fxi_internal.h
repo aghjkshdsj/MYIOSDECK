@@ -61,13 +61,16 @@ struct FxiCpu {
     uint32_t fpu_tags;       // bit p set: physical register p is empty
     uint16_t fcw, fsw;       // control word; status word condition bits (top lives in fpu_top)
     // Run state
+    Uop *cur;                // last uop that touched guest memory: a host fault's exact rip (fxi_ea)
+    uint32_t exc_code, exc_flags, exc_nparams;   // FXI_STOP_EXCEPTION: the Windows exception
+    uint64_t exc_info[2];
     int stop;                // nonzero: leave the dispatch chain
     long long exit_code;
     char *err;               // fxi_result.error
     struct Fxi *vm;
 };
 
-// One decoded instruction (or fused pair). 56 bytes.
+// One decoded instruction (or fused pair). 64 bytes.
 struct Uop {
     OpFn fn;
     Block *link;             // chained successor (taken / call target / inline-cache block)
@@ -77,6 +80,7 @@ struct Uop {
     Block *link2;            // fallthrough successor of a conditional branch
     uint16_t dst, src;       // register byte offsets (GPR) or XMM indices
     uint8_t base, index, scale, cc;
+    uint64_t rip;            // the instruction's address (exceptions, faults)
 };
 
 struct Block {
@@ -86,7 +90,7 @@ struct Block {
 };
 
 // c->stop values: why the dispatch chain was left.
-enum { FXI_STOP_ERROR = 1, FXI_STOP_EXIT = 2, FXI_STOP_EC = 3 };
+enum { FXI_STOP_ERROR = 1, FXI_STOP_EXIT = 2, FXI_STOP_EC = 3, FXI_STOP_EXCEPTION = 4 };
 
 // Open-addressed rip -> Block. Replaced (never freed) when it grows, so readers on other
 // threads can keep using the table they loaded.
@@ -130,10 +134,14 @@ FXI_INLINE void st16(uint64_t a, uint64_t v) { uint16_t x = (uint16_t)v; memcpy(
 FXI_INLINE void st32(uint64_t a, uint64_t v) { uint32_t x = (uint32_t)v; memcpy((void *)(uintptr_t)a, &x, 4); }
 FXI_INLINE void st64(uint64_t a, uint64_t v) { memcpy((void *)(uintptr_t)a, &v, 8); }
 
-// Branchless effective address: base/index are register slots (16 = zero).
+// Branchless effective address: base/index are register slots (16 = zero). Every guest memory
+// operand goes through here, so it also records the uop: a host fault on the access that
+// follows is reported at that instruction (Windows mode, docs/NO_JIT_WINDOWS.md).
 FXI_INLINE uint64_t fxi_ea(FxiCpu *c, const Uop *u) {
+    c->cur = (Uop *)u;
     return c->r[u->base] + (c->r[u->index] << u->scale) + (uint64_t)u->disp;
 }
+#define FXI_TOUCH(c, u) ((c)->cur = (u))   // implicit memory operands (stack, strings)
 
 // ---- Lazy flags ----
 uint64_t fxi_flag_cf(FxiCpu *c);
@@ -162,6 +170,9 @@ void fxi_x87_fxrstor(FxiCpu *c, const uint8_t *p, int with_xmm);
 double fxi_f80_load(const uint8_t *p);
 void fxi_f80_store(uint8_t *p, double v);
 void fxi_fail(FxiCpu *c, const char *fmt, ...); // set c->stop and the error text
+// A CPU exception at rip (#BP, #UD, #DE, ...): a Windows exception in Windows mode
+// (FXI_STOP_EXCEPTION, raised by the host), an error in ELF mode.
+void fxi_raise(FxiCpu *c, uint64_t rip, uint32_t code, uint32_t flags, uint32_t nparams, uint64_t i0, uint64_t i1);
 long fxi_syscall(FxiCpu *c);                    // Linux syscall in RAX/RDI/...; returns result
 struct Fxi *fxi_vm_new(void);                   // empty block cache, stop block ready
 // Windows mode (fxi_win.c): nonzero when rip is native ARM64EC code (PEB->EcCodeBitMap).

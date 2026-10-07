@@ -42,6 +42,7 @@ static Uop *emit(Dec *d, OpFn fn) {
     memset(&d->m[d->n], 0, sizeof d->m[0]);
     u->fn = fn;
     u->base = R_ZERO; u->index = R_ZERO;
+    u->rip = d->rip;
     d->n++;
     return u;
 }
@@ -158,11 +159,11 @@ static void emit_jcc(Dec *d, unsigned cc, uint64_t target) {
     uint64_t fall = next_rip(d);
     if (d->fuse_at == d->n - 1 && d->fuse_at >= 0) {
         Uop *p = &d->u[d->fuse_at];
-        uint16_t dst = p->dst, src = p->src; uint64_t imm = p->imm;
+        uint16_t dst = p->dst, src = p->src; uint64_t imm = p->imm, rip = p->rip;
         OpFn f = fxi_fjcc_tab[d->fuse_op == ALU_TEST][d->fuse_form == F_RI][d->fuse_si][cc];
         memset(p, 0, sizeof *p);
         memset(&d->m[d->fuse_at], 0, sizeof d->m[0]);
-        p->fn = f; p->dst = dst; p->src = src; p->disp = (int64_t)imm;
+        p->fn = f; p->dst = dst; p->src = src; p->disp = (int64_t)imm; p->rip = rip;
         p->base = R_ZERO; p->index = R_ZERO;
         p->imm = target; p->aux = fall;
         return;
@@ -527,7 +528,10 @@ static int decode_one_inner(Dec *d) {
         meta(d)->reads = 1;   // fcmov reads flags, fcomi writes some
         return 0;
     }
-    case 0xcc: case 0xf4: { Uop *u = emit(d, named("hlt")); u->aux = d->rip; return 1; }
+    // CPU exceptions (fxi_ops.c op_trap): u->imm = interrupt vector, 0x100 = hlt, 0x106 = ud2
+    case 0xcc: emit(d, named("trap"))->imm = 3; return 1;
+    case 0xcd: { uint64_t n = rd_u8(d); emit(d, named("trap"))->imm = n; return 1; }
+    case 0xf4: emit(d, named("trap"))->imm = 0x100; return 1;
     case 0xe8: {
         int64_t rel = rd_s32(d);
         Uop *u = emit(d, named("call")); u->aux = next_rip(d); u->imm = next_rip(d) + (uint64_t)rel;
@@ -628,7 +632,7 @@ static int decode_one_inner(Dec *d) {
     }
     switch (op) {
     case 0x05: { Uop *u = emit(d, named("syscall")); u->aux = next_rip(d); meta(d)->reads = 1; return 1; }
-    case 0x0b: { Uop *u = emit(d, named("hlt")); u->aux = d->rip; return 1; }
+    case 0x0b: emit(d, named("trap"))->imm = 0x106; return 1;   // ud2
     case 0x0d: case 0x18: case 0x19: case 0x1a: case 0x1b: case 0x1c: case 0x1d: case 0x1e: case 0x1f:
         modrm(d); emit(d, named("nop")); return 0;   // prefetch, hint nops, endbr64
     case 0x3a: {   // SSE4.1 subset: pinsrd/q, pextrd/q (66 prefix)
