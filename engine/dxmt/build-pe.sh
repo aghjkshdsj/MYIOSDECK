@@ -55,13 +55,19 @@ step_wine() {
     find "$crt" dlls/ntdll dlls/dbghelp -name '*.a' | xargs ls -la
 }
 
+# Bump when the link options change: the build directory is cached and meson keeps the options
+# it was set up with.
+DXMT_BUILD="build-arm64ec-16k-v2"
+
 step_dxmt() {
-    local D="$M/dxmt" B="$M/dxmt/build-arm64ec-16k"
+    local D="$M/dxmt" B="$M/dxmt/$DXMT_BUILD"
     # The cross file names the toolchain under @GLOBAL_SOURCE_ROOT@/toolchains; add the 16 KB
-    # section alignment for every link.
+    # section alignment for every link, and -static: the C++ DLLs (d3d11, dxgi) must carry libc++
+    # and libunwind inside them, the Wine prefix has no libc++.dll (build 70: d3d11 failed to load).
     ln -sfn "$M/toolchains" "$D/toolchains"
     sed "s#llvm-mingw-20260421-ucrt-macos-universal#$LLVM_MINGW#g" "$D/build-arm64ec-win.txt" > "$D/build-arm64ec-16k.txt"
-    printf "\n[built-in options]\nc_link_args = ['%s']\ncpp_link_args = ['%s']\n" "$ALIGN" "$ALIGN" >> "$D/build-arm64ec-16k.txt"
+    printf "\n[built-in options]\nc_link_args = ['-static', '%s']\ncpp_link_args = ['-static', '%s']\n" "$ALIGN" "$ALIGN" \
+        >> "$D/build-arm64ec-16k.txt"
     if [ ! -f "$B/build.ninja" ]; then
         meson setup "$B" "$D" -Dbuildtype=release -Dwine_build_path="$W/build-arm64ec" \
             --cross-file="$D/build-arm64ec-16k.txt"
@@ -73,7 +79,7 @@ step_dxmt() {
 
 step_d3d12() {
     # Madeira build/madeira-d3d12/build-pe.sh, with the 16 KB alignment and our paths.
-    local S="$M/madeira-d3d12/src/pe" B="$M/dxmt/build-arm64ec-16k"
+    local S="$M/madeira-d3d12/src/pe" B="$M/dxmt/$DXMT_BUILD"
     mkdir -p "$OUT"
     python3 "$S/gen_vtables.py" "$M/toolchains/$LLVM_MINGW/generic-w64-mingw32/include/d3d12.h" \
         "$S/madeira_d3d12_stubs.h" > /dev/null
@@ -85,10 +91,19 @@ step_d3d12() {
 
 step_collect() {
     mkdir -p "$OUT"
+    local bad=0
     for f in "$OUT"/*.dll; do
         llvm-readobj --file-headers "$f" | grep -E 'SectionAlignment' | sed "s#^#$(basename "$f"): #"
+        # Every import must be a DLL the Wine prefix has: no toolchain runtime DLLs.
+        imps=$(llvm-readobj --coff-imports "$f" | sed -n 's/^ *Name: \(.*\.dll\)$/\1/Ip' | sort -u | tr '\n' ' ')
+        echo "$(basename "$f"): imports $imps"
+        if grep -qiE 'libc\+\+|libunwind|libwinpthread|libgcc' <<<"$imps"; then
+            echo "error: $(basename "$f") imports a toolchain runtime DLL the Wine prefix does not have" >&2
+            bad=1
+        fi
     done
     ls -la "$OUT"
+    return $bad
 }
 
 case "${1:-all}" in

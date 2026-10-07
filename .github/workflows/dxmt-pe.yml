@@ -55,10 +55,13 @@ jobs:
         continue-on-error: true
         run: bash engine/dxmt/build-pe.sh d3d12
 
-      - name: Collect
-        if: always()
+      # Fails when a DLL imports a toolchain runtime DLL (libc++, libunwind) the prefix lacks.
+      - name: Collect and check imports
+        id: collect
+        if: steps.dxmt.outcome == 'success'
         run: |
-          bash engine/dxmt/build-pe.sh collect | tee -a "$GITHUB_STEP_SUMMARY" || true
+          set -o pipefail
+          bash engine/dxmt/build-pe.sh collect 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Save checkout
         if: always()
@@ -68,7 +71,7 @@ jobs:
           key: dxmt-pe-${{ hashFiles('engine/wine/PIN', 'engine/dxmt/PIN') }}-v1-${{ github.run_id }}
 
       - uses: actions/upload-artifact@v5
-        if: steps.dxmt.outcome == 'success'
+        if: steps.collect.outcome == 'success'
         with:
           name: d3d-pe-dlls
           path: engine/dxmt/out-pe
@@ -79,11 +82,11 @@ jobs:
           name: d3d-pe-logs
           path: |
             engine/wine/madeira/wine/build-arm64ec/*.log
-            engine/wine/madeira/dxmt/build-arm64ec-16k/meson-logs/*.txt
+            engine/wine/madeira/dxmt/build-arm64ec-16k*/meson-logs/*.txt
           if-no-files-found: ignore
 
       - name: Rebuild the IPA with these DLLs
-        if: steps.dxmt.outcome == 'success'
+        if: steps.collect.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow run build-ipa.yml -R "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME"
