@@ -9,11 +9,14 @@ struct PerformanceView: View {
     @State private var stats = FrameStats()
     @State private var stageOn = false
     @State private var noJITAction: (() -> Void)?
+    @State private var peBusy = false
+    @State private var peResult: (ok: Bool, text: String)?
 
     var body: some View {
         ScrollView {
             VStack(spacing: 14) {
                 cpuCard
+                noJITWindowsCard
                 gpuCard
                 featuresCard
             }
@@ -113,6 +116,42 @@ struct PerformanceView: View {
     }
 
     private func ms(_ ns: UInt64) -> String { String(format: "%.0f ms", Double(ns) / 1e6) }
+
+    // MARK: Windows code without JIT (milestone A spike, docs/NO_JIT_WINDOWS.md)
+
+    private var noJITWindowsCard: some View {
+        DeckCard(title: "Windows code without JIT (test)", icon: "lock.shield") {
+            Text("Runs small Windows DLLs (ARM64EC, the kind Wine uses, and ARM64) straight from signed app files, with no JIT memory, then times the benchmark kernels inside them. For the real proof, open MYIOSDECK without StikDebug (JIT off).")
+                .font(.footnote).foregroundStyle(Deck.dim)
+            HStack(spacing: 10) {
+                Button("Run DLL test", action: runPETest)
+                    .buttonStyle(DeckButtonStyle())
+                    .disabled(peBusy)
+                if peBusy { ProgressView() }
+            }
+            if let r = peResult {
+                Text(r.text).font(.caption.monospaced())
+                    .foregroundStyle(r.ok ? Deck.good : Deck.bad)
+                Text("Details: Logs tab, lines starting with [pe-dylib].")
+                    .font(.caption).foregroundStyle(Deck.dim)
+            }
+        }
+    }
+
+    private func runPETest() {
+        peBusy = true
+        peResult = nil
+        let dir = Bundle.main.bundlePath + "/PE"
+        DispatchQueue.global(qos: .userInitiated).async {
+            var buf = [CChar](repeating: 0, count: 1024)
+            let ok = mid_pe_dylib_spike(dir, &buf, buf.count)
+            let text = String(cString: buf)
+            DispatchQueue.main.async {
+                peResult = (ok, text)
+                peBusy = false
+            }
+        }
+    }
 
     // MARK: GPU
 

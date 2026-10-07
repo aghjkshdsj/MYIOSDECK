@@ -49,6 +49,11 @@ targets:
       # @DXMT_SOURCES@
       - path: App/Resources
         buildPhase: resources
+      # No-JIT spike: Windows DLLs wrapped as signed dylibs (engine/pedylib/link-dylibs.sh).
+      - path: App/Generated/PE
+        type: folder
+        buildPhase: resources
+        optional: true
       - path: App/Assets.xcassets
       - path: App/Info.plist
         buildPhase: none

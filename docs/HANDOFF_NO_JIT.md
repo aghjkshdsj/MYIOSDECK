@@ -52,8 +52,9 @@ with extreme performance as the priority. Read `docs/HANDOFF_NO_JIT.md`, `docs/F
 - App bridge: `App/Sources/Native/fxi_bridge.c` (`mid_fxi_run_elf`); `EngineController` runs no-JIT work
   with FXI, Performance tab shows FEX / FXI / Blink.
 - CI numbers (x86-64 Linux host): integer 10.8%, float 6.7%, memory 7.5%, branch 10.2%, SIMD 5.3% of
-  native, all checksums match. Blink on the A17 Pro: 0.5-1.5%. **Device numbers for FXI not measured
-  yet**: ask me to run Performance -> Run benchmark on build 39+ and send the report.
+  native, all checksums match. **A17 Pro (build 39): FXI 8.1% of native on average** (integer 10.4%,
+  float 7.8%, memory 8.0%, branch 7.6%, SIMD 6.5%); Blink 0.8%, FEX JIT 90%.
+- No-JIT Windows work is tracked in `docs/NO_JIT_WINDOWS.md` (milestone A spike: `engine/pedylib`).
 - Gaps: no FS/GS segment overrides (Windows uses GS for the TEB), no 32-bit addressing, no x87, only a
   few SSE3/SSSE3/SSE4 ops (`pinsrd/q`, `pextrd/q`), no AVX, no shld/shrd/cmpxchg/xadd, no self-modifying
   code invalidation, no threads. An unimplemented instruction stops the guest and names its bytes.

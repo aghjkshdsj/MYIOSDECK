@@ -1,0 +1,8 @@
+; Functions the app exports to the spike DLL (resolved by App/Sources/Native/pe_dylib.c).
+LIBRARY myiosdeck.dll
+EXPORTS
+host_log
+host_twice
+memset
+memcpy
+memmove

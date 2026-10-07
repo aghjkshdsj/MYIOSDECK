@@ -1,0 +1,45 @@
+# Windows games without JIT
+
+Goal: Windows games on iPhone with JIT off (no StikDebug), as fast as possible.
+First milestone: **Windows Hello (x64) runs with JIT off**.
+
+## Why it needs JIT today
+
+Without a debugger iOS executes only code that is signed and mapped from a file. Madeira's
+Wine copies every PE image (168 ARM64EC DLLs, 158 MB) into the debugger-prepared JIT pool,
+patches it there (x18 → TEB trampolines, `RtlPcToFileHeader`, hand-written TEB reads),
+writes runtime thunks into the pool, and runs the game's x86-64 code through FEX
+(`xtajit64.dll`), a JIT.
+
+## The plan
+
+| | Step | What it takes |
+|---|---|---|
+| A | Wine's ARM64EC DLLs run from **signed dylibs** | Rebuild the PE side with 16 KB section alignment; each image wrapped by `engine/pedylib/pe2dylib.py` in `__TEXT` of a dylib; at load, data pages become RW copies in place, code pages are never written. Everything Madeira patches in `.text` at load has to be done at build time instead (x18 sites → trampolines inside the image, syscall-stub literal pools → data). |
+| B | ntdll's unix loader maps those images | `loader_ios.c` / `virtual_ios.c`: when JIT is off, take the image from the dylib instead of copying it into the pool. |
+| C | No runtime-generated code | Every pool trampoline/thunk becomes fixed code compiled into the app. |
+| D | **FXI** as the x86-64 CPU | Replaces FEX/xtajit64 behind the ARM64EC emulator interface (`__os_arm64x_*` dispatch, `BTCpu*` exports): GS → TEB, x64 ⇄ ARM64EC calling convention transitions, exceptions/unwinding, threads. |
+| E | FXI speed | Phase 4 of docs/FAST_INTERPRETER.md: NEON SSE, superinstructions, `preserve_none` dispatch, SSE4/AVX coverage driven by real game code. |
+
+Only the game's own x86-64 code is interpreted. Wine, the D3D → Metal path (DXMT) and
+everything else stay native ARM64, so a game's speed sits between FXI's (8% of native on
+the A17 Pro, build 39) and native, depending on how much time it spends in its own code.
+
+## Step A spike (build 40)
+
+`engine/pedylib`:
+- `spike/spike.c` is a small DLL built like Wine's (llvm-mingw, `-nostdlib`, 16 KB
+  sections), for ARM64EC and ARM64. It reaches `.data`/`.rdata`/`.bss` with ADRP, has
+  relocated pointer tables, imports from the app through the IAT, makes ARM64EC indirect
+  calls through `__os_arm64x_check_icall`, and contains the Performance tab's benchmark
+  kernels.
+- `build-spike.sh` (Linux CI) builds it and converts each DLL with `pe2dylib.py convert --strict`.
+- `link-dylibs.sh` (macOS CI) links the dylibs; the IPA step signs them into `PE/`.
+- `App/Sources/Native/pe_dylib.c` loads them (see its header comment) and runs the checks
+  and the kernels; Performance → *Windows code without JIT* → **Run DLL test**.
+- `pe2dylib.py audit` runs on Madeira's real DLL farm in every IPA build and puts the
+  blockers in the job summary (code/data page conflicts, relocations inside code, x18
+  sites, TSD reads): the to-do list for rebuilding the real DLLs.
+
+What the spike does not cover yet: x18/TEB (the spike DLL never touches the TEB), x64 code
+(no emulator), and Wine itself.

@@ -23,6 +23,18 @@ jobs:
       - uses: actions/checkout@v5
       - name: Build hello + bench (static-PIE x86-64)
         run: bash engine/guest/build.sh "$RUNNER_TEMP/guests"
+      - name: Cache llvm-mingw
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/llvm-mingw
+          key: llvm-mingw-20260421-ucrt-ubuntu-x86_64
+      - name: No-JIT spike DLLs (ARM64EC + ARM64, 16 KB aligned)
+        id: spike
+        continue-on-error: true
+        run: bash engine/pedylib/build-spike.sh "$RUNNER_TEMP/guests/pedylib" "$RUNNER_TEMP/llvm-mingw"
+      - name: Spike result
+        if: steps.spike.outcome != 'success'
+        run: echo "::warning::The no-JIT spike DLLs did not build (see 'No-JIT spike DLLs'); this IPA has no DLL test."
       - uses: actions/upload-artifact@v5
         with:
           name: guests
@@ -96,6 +108,14 @@ jobs:
           gh run download "$RUN" -R "$GITHUB_REPOSITORY" -n wine-unix-libs -D engine/wine/out
           bash engine/wine/stage-app.sh
 
+      - name: Audit Wine DLLs for the no-JIT scheme (signed dylibs)
+        if: steps.wine.outcome == 'success'
+        continue-on-error: true
+        run: |
+          mkdir -p build
+          python3 engine/pedylib/pe2dylib.py audit engine/wine/madeira/app/Madeira/arm64ec-windows/*.dll \
+            --md "$GITHUB_STEP_SUMMARY" --json build/pe-audit.json | head -30
+
       - name: Build without Wine
         if: steps.wine.outcome != 'success'
         run: |
@@ -122,6 +142,12 @@ jobs:
           git checkout -- Config/DXMT.xcconfig
           rm -f App/Generated/dxmt_version.h
 
+      - name: Link no-JIT spike dylibs
+        run: |
+          mkdir -p App/Generated/PE
+          bash engine/pedylib/link-dylibs.sh App/Generated/pedylib ||
+            echo "::warning::Spike dylibs did not link; this IPA has no DLL test."
+
       - name: Generate Xcode project
         run: xcodegen generate
 
@@ -145,6 +171,13 @@ jobs:
           # DXMT's D3D12 path dlopens the loose shader-converter dylib, so it needs its own signature.
           MSC=Payload/MYIOSDECK.app/d3d12/libmetalirconverter.dylib
           [ ! -f "$MSC" ] || codesign --force --sign - --timestamp=none "$MSC"
+          # No-JIT spike: Windows DLLs as signed dylibs (engine/pedylib).
+          PEDYLIBS=0
+          for f in Payload/MYIOSDECK.app/PE/*.dylib; do
+            [ -f "$f" ] || continue
+            codesign --force --sign - --timestamp=none "$f"
+            PEDYLIBS=$((PEDYLIBS + 1))
+          done
           codesign --force --sign - --entitlements App/MYIOSDECK.entitlements --timestamp=none Payload/MYIOSDECK.app
           codesign -d --entitlements - Payload/MYIOSDECK.app || true
           FLAVOR=""
@@ -165,6 +198,7 @@ jobs:
             echo "- Blink (no-JIT interpreter): ${{ steps.blink.outcome }}"
             echo "- Wine (stage 2): ${{ steps.wine.outcome }}"
             echo "- DXMT (stage 3): ${{ steps.dxmt.outcome }}"
+            echo "- No-JIT spike DLLs (signed dylibs): $PEDYLIBS"
             echo "- Size: $(du -h "$NAME" | cut -f1)"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -177,7 +211,9 @@ jobs:
         if: always()
         with:
           name: build-logs
-          path: build/xcodebuild.log
+          path: |
+            build/xcodebuild.log
+            build/pe-audit.json
           if-no-files-found: ignore
 
       - name: Publish release

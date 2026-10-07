@@ -51,7 +51,9 @@ return or syscall.
 - CI host (x86-64 Linux, clang), FXI as a share of native: integer 10.8%, float 6.7%, memory 7.5%,
   branch 10.2%, SIMD 5.3%. Blink on an A17 Pro measured 0.5–1.5% on the same kernels.
 - In the app since build 39: no-JIT runs use FXI; the Performance tab shows FEX, FXI and Blink.
-- Next: device numbers, then phase 4 (profile-driven: SSE on NEON intrinsics, superinstructions
+- **iPhone 15 Pro Max (A17 Pro), iOS 27.0.1, build 39**: FXI integer 10.4%, float 7.8%, memory
+  8.0%, branch 7.6%, SIMD 6.5%; **average 8.1% of native** (Blink 0.8%, FEX JIT 90%).
+- Next: phase 4 (profile-driven: SSE on NEON intrinsics, superinstructions
   for the hottest pairs, `preserve_none` dispatch).
 
 ## Honest expectations
