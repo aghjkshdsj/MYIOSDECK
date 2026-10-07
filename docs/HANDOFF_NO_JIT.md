@@ -42,7 +42,7 @@ sideload edition (FEX, ~90% of native) stays the full-speed option, from the sam
   Madeira's FEX fork at `...\claude\fex` (ARM64EC frontend: `Source/Windows/ARM64EC/Module.S`,
   `Module.cpp` = the reference for Wine's emulator interface).
 
-## State (2026-10-07, build 63)
+## State (2026-10-07, build 64)
 - **FXI**: no-JIT x86-64 interpreter (`engine/fxi`), 8.1% of native on device. Since build 57 it
   also has a Windows mode (`fxi_win.c`): FS/GS segment slots (r[17]/r[18], `gs:[0x30]` = TEB),
   a thread-safe shared block cache, cached `ec_exit` blocks for jumps into native ARM64EC code.
@@ -109,6 +109,20 @@ sideload edition (FEX, ~90% of native) stays the full-speed option, from the sam
   New Library entry **"x64 test suite (no JIT)"** (`engine/pedylib/hello/suite-x64.c`, built
   in the guests job, scanned by fxi --scan-pe: 47k instructions, 100% decoded): callbacks,
   float, threads, raise, int3, divide, fault, c++, longjmp, child; `[suite]` lines in the log.
+
+- **Build 63 result**: every Windows program died in ProcessInit (AV 0xC0000005 at
+  `host_process_init+0x14`): the emulator DLL passed KiUserExceptionDispatcher's address as a
+  Windows `long` (32 bits). Following the ffwd thunk itself was right (x9 held the real address,
+  first word d11343ff). **Build 64** passes 64-bit values (`hostarg`) and the app rejects a
+  dispatcher below 4 GB or not starting with d11343ff (x64 exceptions disabled, logged).
+- **D3D DLLs (step 5) findings**: the 6 D3D/Metal DLLs fail because 4 KB sections put the tail of
+  `.text` and the start of `.rdata` (lld puts the IAT there, written by Wine's loader) in one 16 KB
+  page; signed code pages cannot be written, so they must be rebuilt with 16 KB alignment.
+  `madeira_d3d12.dll` / `d3d12.dll` / `d3d12core.dll`: plain llvm-mingw (Madeira
+  `build/madeira-d3d12/build-pe.sh`; needs a winemetal import lib, e.g. llvm-dlltool from a .def
+  of the prebuilt winemetal.dll) -> easy in the guests job. `d3d11` / `d3d10core` / `winemetal`:
+  DXMT's meson PE build (`-Dwine_build_path=` Wine's ARM64EC PE build tree, cross file
+  `build-arm64ec-win.txt`, Madeira docs/BUILDING.md step 4) -> needs Wine's PE side in CI.
 
 ## Next steps (in order)
 1. FXI instructions for real Windows x64 code, driven by the STOP lines and `fxi --scan-pe`.
