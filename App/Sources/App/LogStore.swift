@@ -16,7 +16,9 @@ final class LogStore: ObservableObject, @unchecked Sendable {
     private init() {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         fileURL = docs.appendingPathComponent("myiosdeck-log.txt")
+        let crashed = CrashReporter.preservePreviousLogIfCrashed(log: fileURL)
         FileManager.default.createFile(atPath: fileURL.path, contents: nil)
+        if crashed { CrashReporter.shared.noteCrashedLastTime() }
         handle = try? FileHandle(forWritingTo: fileURL)
         mid_set_log_sink { cLine in
             guard let cLine else { return }

@@ -79,6 +79,12 @@ final class WineController: ObservableObject, @unchecked Sendable {
         let secs = String(format: "%.1f s", Date().timeIntervalSince(started))
         let how = crashed ? String(format: "ended with error 0x%08X after %@", status, secs) : "exited normally after \(secs)"
         dlog("[wine] \(title) \(how)")
-        DispatchQueue.main.async { self.state = .finished(title, how) }
+        DispatchQueue.main.async {
+            self.state = .finished(title, how)
+            // After the game surface has closed (LibraryView closes it on an error).
+            if crashed {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { CrashReporter.shared.programCrashed(title, how: how) }
+            }
+        }
     }
 }

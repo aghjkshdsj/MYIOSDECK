@@ -58,6 +58,10 @@ struct LibraryView: View {
         }
         .jitGate(pending: $noJITAction)
         .fullScreenCover(isPresented: $showSurface) { gameSurface }
+        .onChange(of: wine.state) { _, state in
+            // A crashed program: close the surface so the crash report can show.
+            if case .finished(_, let how) = state, how.contains("error") { showSurface = false }
+        }
     }
 
     /// Full-screen surface for a Windows program's Direct3D window. The bar sits
