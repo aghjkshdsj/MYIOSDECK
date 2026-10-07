@@ -8,6 +8,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 IN="${1:?dir}"
 DST="${2:-$ROOT/App/Generated/PE}"
 mkdir -p "$DST"
+DST="$(cd "$DST" && pwd)"   # the links run from inside $IN
 shopt -s nullglob
 n=0
 for s in "$IN"/*.S; do
