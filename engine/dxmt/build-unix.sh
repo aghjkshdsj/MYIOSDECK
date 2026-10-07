@@ -68,6 +68,21 @@ step_llvm() {
     ls "$B"/lib/*.a | wc -l
 }
 
+# airconv_context.cpp embeds three AIR modules (air_msad.h, air_samplepos.h,
+# air_tessellation.h). DXMT's meson makes them with metalir_generator +
+# hexdump_generator (src/airconv/meson.build); Madeira's build.sh doesn't, so
+# do the same here: .metal -> .air -> xxd C array named after the file.
+airconv_shader_headers() {
+    local H="$1" S="$M/dxmt/src/airconv/shaders" n
+    mkdir -p "$H"
+    for n in air_msad air_samplepos air_tessellation; do
+        xcrun -sdk macosx metal -std=metal3.1 --target=air64-apple-macos14.0 \
+            -o "$H/$n.air" -c "$S/$n.metal"
+        (cd "$H" && xxd -n "$n" -i "$n.air" "$n.h")
+        echo "  $n.h OK"
+    done
+}
+
 step_metal() {
     xcrun -sdk macosx metal --version 2>/dev/null || xcodebuild -downloadComponent MetalToolchain
     xcrun -sdk macosx metal --version
@@ -75,6 +90,7 @@ step_metal() {
 
 step_dxmt() {
     local D="$M/build/dxmt-ios"
+    airconv_shader_headers "$D/shader-headers"
     bash "$D/build.sh"
     rm -f "$D/libdxmt_combined.a"
     xcrun -sdk iphoneos libtool -static -o "$D/libdxmt_combined.a" "$D"/obj/*.o "$T"/llvm-ios-build/lib/*.a
