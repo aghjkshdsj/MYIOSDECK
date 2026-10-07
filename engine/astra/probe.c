@@ -47,6 +47,19 @@ int guest_main(int argc,char **argv) {
         number(idx);number(old);
     }
     for(unsigned i=0;i<256;i++)number(bytes[i]);
+    for(unsigned length=1;length<200;length+=17) {
+        unsigned char *cursor=bytes,*end=bytes+length;
+        unsigned long long sum=123,temporary;
+        __asm__ volatile("1: movzbl (%0),%k2\naddq $1,%0\naddq %2,%1\ncmpq %3,%0\njne 1b"
+                         :"+r"(cursor),"+r"(sum),"=&r"(temporary):"r"(end):"cc","memory");
+        number(sum);number(temporary);number(cursor-bytes);
+    }
+    {
+        unsigned long long *cursor=a,*end=a+64,sum=17,temporary;
+        __asm__ volatile("1: movq (%0),%2\naddq $32,%0\nxorq -8(%0),%2\naddq %2,%1\ncmpq %0,%3\njne 1b"
+                         :"+r"(cursor),"+r"(sum),"=&r"(temporary):"r"(end):"cc","memory");
+        number(sum);number(temporary);number(cursor-a);
+    }
     // COMISD equal/unordered flag results (including ZF as seen by JLE).
     unsigned long long nan=0x7ff8000000000001ull;
     for(unsigned i=0;i<2;i++) {

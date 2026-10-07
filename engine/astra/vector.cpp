@@ -8,13 +8,13 @@ template<int Code,int Prefix,bool Memory> ASTRA_CC void vector_op(Cpu *c,Op *p) 
     constexpr bool scalar_fp=Prefix>=2;
     constexpr bool dbl=Prefix==1 || Prefix==3;
     constexpr int lane=dbl?8:4;
-    constexpr bool store=Code==0x11 || Code==0x29 || Code==0x7f || Code==0xd6 || Code==0x7e || Code==0x17;
+    constexpr bool store=Code==0x11 || Code==0x29 || Code==0x7f || Code==0xd6 || (Code==0x7e && Prefix!=2) || Code==0x17;
     constexpr bool gpr=Code==0x2a || Code==0x6e || Code==0x122;
     constexpr bool shiftimm=Code==0x71 || Code==0x72 || Code==0x73;
     if constexpr(!store && !shiftimm && !gpr && Code!=0x116 && Code!=0x50 && Code!=0xd7) {
         if constexpr(Memory) {
             constexpr int n=(Code==0x2e || Code==0x2f)?lane:
-                Code==0x12 || Code==0x16?8 : scalar_fp && (Code==0x10 || Code==0x51 || (Code>=0x58 && Code<=0x5f) || Code==0x2c || Code==0x2d)?lane:16;
+                Code==0x12 || Code==0x16 || (Code==0x7e && Prefix==2)?8 : scalar_fp && (Code==0x10 || Code==0x51 || (Code>=0x58 && Code<=0x5f) || Code==0x2c || Code==0x2d)?lane:16;
             std::memcpy(&b,checked(c,ea(c,p->b),n,p->pc),n);
         } else b=c->x[p->b.reg];
     }
@@ -24,6 +24,7 @@ template<int Code,int Prefix,bool Memory> ASTRA_CC void vector_op(Cpu *c,Op *p) 
             if constexpr(dbl) v.sd[0]=b.sd[0]; else v.sf[0]=b.sf[0];
         } else v=b;
     }
+    if constexpr(Code==0x7e && Prefix==2) { v={};v.uq[0]=b.uq[0]; }
     if constexpr(store) {
         constexpr int n=(Code==0xd6 || Code==0x17)?8:Code==0x7e?0:(Code==0x11 && scalar_fp)?lane:16;
         if constexpr(Code==0x7e) {

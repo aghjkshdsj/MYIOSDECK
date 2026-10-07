@@ -79,7 +79,7 @@ Op decode(Cpu *c,U &pc) {
         p.kind=MOV; if(!(b&1))p.width=1; modrm(p.width,b&2); break;
     case 0x8d: p.kind=LEA; modrm(p.width,true); if(p.b.mode!=MEM)fault(c,pc,"invalid lea"); break;
     case 0x8f: p.kind=POP; p.width=d.word?2:8; if(modrm(p.width)!=0)fault(c,pc,"unsupported pop"); break;
-    case 0x90: p.kind=NOP; break;
+    case 0x90: if(d.rex&1)fault(c,pc,"unsupported xchg form");p.kind=NOP; break;
     case 0x98:case 0x99: p.kind=SIGNEXT; p.aux=b; break;
     case 0xa8:case 0xa9: p.kind=TEST; if(b==0xa8)p.width=1; p.a=d.reg(0,p.width); p.b=d.immediate(d.imm(p.width==8?4:p.width,true)); break;
     case 0xc0:case 0xc1:case 0xd0:case 0xd1:case 0xd2:case 0xd3: {
@@ -136,8 +136,6 @@ Op decode(Cpu *c,U &pc) {
             p.source_width=(m>>3)&7; p.a=p.b; p.imm=d.byte();
             if(p.source_width!=2 && p.source_width!=4 && p.source_width!=6 && !(op==0x73 && (p.source_width==3||p.source_width==7))) fault(c,pc,"unsupported vector shift");
         }
-        // F3 0F 7E is MOVQ xmm,xmm/m64, not MOVD r/m,xmm.
-        if(op==0x7e && d.prefix==2) { p.aux=(3<<8)|0x10; }
         break;
     }
     default: break;
@@ -151,6 +149,7 @@ static bool reads_flags(const Op &p) {
     return p.kind==JCC||p.kind==SETCC||p.kind==CMOV||p.kind==ADC||p.kind==SBB||p.kind==INC||p.kind==DEC;
 }
 static bool full_flags(const Op &p) {
+    if((p.kind==SHL||p.kind==SHR||p.kind==SAR) && p.b.mode==IMM && (p.b.disp&(p.width==8?63:31)))return true;
     return p.kind==ADD||p.kind==SUB||p.kind==CMP||p.kind==TEST||p.kind==AND||p.kind==OR||p.kind==XOR||p.kind==NEG;
 }
 Op *block(Cpu *c,U pc) {
@@ -166,9 +165,11 @@ Op *block(Cpu *c,U pc) {
     // Only discard flags when a later full writer dominates every read.
     bool live=true;
     for(auto it=ops.rbegin();it!=ops.rend();++it) {
+        it->flags=live;
         if(full_flags(*it)) { it->flags=live; live=false; }
         if(reads_flags(*it))live=true;
-        if(it->kind>=SHL && it->kind<=ROR)live=true; // variable zero counts preserve flags
+        // Variable/zero-count shifts and rotations leave incoming flags live
+        // only if a later consumer needs them. They are not full flag writers.
     }
     Op *result=new Op[ops.size()]; c->allocations.push_back(result);
     for(size_t i=0;i<ops.size();i++) {

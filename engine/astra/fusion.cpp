@@ -57,6 +57,53 @@ template<int Code,bool ExtraAdd> ASTRA_CC void vector_map(Cpu *c,Op *p) {
 template<int Code> Handler vector_map_form(bool extra) {
     return extra?vector_map<Code,true>:vector_map<Code,false>;
 }
+template<int LoadWidth,bool WithXor> ASTRA_CC void sum_loop(Cpu *c,Op *p) {
+    constexpr int add=WithXor?3:2,cmp=add+1,jcc=cmp+1;
+    unsigned temporary=p[0].a.reg,counter_reg=p[1].a.reg,accumulator=p[add].a.reg;
+    U counter=c->r[counter_reg],step=p[1].b.disp,sum=c->r[accumulator];
+    bool reverse=p[cmp].a.reg!=counter_reg;
+    U limit=read_compare(c,reverse?p[cmp].a:p[cmp].b);
+    U src=ea(c,p[0].b),srcstep=step_address(p[0].b,counter_reg,step);
+    // The optional XOR load occurs after the counter increment.
+    U other=0,otherstep=0;
+    if constexpr(WithXor) {otherstep=step_address(p[2].b,counter_reg,step);other=ea(c,p[2].b)+otherstep;}
+    U value=0;
+    do {
+        value=0;std::memcpy(&value,checked(c,src,LoadWidth,p[0].pc),LoadWidth);
+        counter+=step;
+        if constexpr(WithXor) {U rhs;std::memcpy(&rhs,checked(c,other,8,p[2].pc),8);value^=rhs;other+=otherstep;}
+        sum+=value;src+=srcstep;
+    } while(counter!=limit);
+    c->r[counter_reg]=counter;c->r[accumulator]=sum;c->r[temporary]=value;
+    U a=reverse?limit:counter,b=reverse?counter:limit;
+    setflags<CMP,8>(c,a,b,a-b);
+    GO(target(c,p+jcc,p[jcc].end,0));
+}
+static bool sum_pattern(Op *p,size_t n) {
+    if(n!=5 && n!=6)return false;
+    bool with_xor=n==6;int add=with_xor?3:2,cmp=add+1,jcc=cmp+1;
+    if(p[0].a.mode!=REG || p[0].b.mode!=MEM || p[0].a.high)return false;
+    if(with_xor) {if(!simple(p[0],MOV,8,REG,MEM) || !simple(p[2],XOR,8,REG,MEM) || p[2].a.reg!=p[0].a.reg)return false;}
+    else if(p[0].kind!=MOVZX || p[0].width<4 || p[0].source_width>4)return false;
+    if(!simple(p[1],ADD,8,REG,IMM) || !simple(p[add],ADD,8,REG,REG) || p[add].b.reg!=p[0].a.reg)return false;
+    unsigned tmp=p[0].a.reg,counter=p[1].a.reg,acc=p[add].a.reg;
+    if(tmp==counter || tmp==acc || counter==acc)return false;
+    if(p[cmp].kind!=CMP || p[cmp].width!=8 || p[cmp].a.mode!=REG || (p[cmp].b.mode!=REG && p[cmp].b.mode!=IMM))return false;
+    bool reverse=p[cmp].a.reg!=counter;
+    if(reverse && (p[cmp].b.mode!=REG || p[cmp].b.reg!=counter))return false;
+    Arg limit=reverse?p[cmp].a:p[cmp].b;
+    if(limit.mode==REG && (limit.reg==tmp || limit.reg==acc || limit.reg==counter))return false;
+    for(int i:{0,2}) {
+        if(i==2 && !with_xor)continue;
+        if(p[i].b.reg==tmp || p[i].b.reg==acc || p[i].b.index==tmp || p[i].b.index==acc)return false;
+    }
+    if(p[jcc].kind!=JCC || p[jcc].aux!=5 || p[jcc].imm!=p[0].pc)return false;
+    if(with_xor)p[0].fn=sum_loop<8,true>;
+    else if(p[0].source_width==1)p[0].fn=sum_loop<1,false>;
+    else if(p[0].source_width==2)p[0].fn=sum_loop<2,false>;
+    else p[0].fn=sum_loop<4,false>;
+    return true;
+}
 // MOV r32,r32; ADD r32,r32; MOV byte [base+index],imm; CMP r32,imm; JBE back.
 // A common strided byte-store loop, also valid for arbitrary steps and bytes.
 // The index is copied BEFORE the increment, including 32-bit wraparound.
@@ -99,6 +146,7 @@ static bool packed_store(const Op &p) {
 void optimize_block(Cpu *,Op *p,size_t n) {
     if(n>=2 && p[n-1].kind==JCC && (p[n-2].kind==CMP || p[n-2].kind==TEST))
         p[n-2].fn=p[n-2].kind==CMP?compare_size<CMP>(p[n-2]):compare_size<TEST>(p[n-2]);
+    if(sum_pattern(p,n))return;
     if((n==6 || n==7) && counted(p,n,n-3)) {
         bool extra=n==7;size_t store=extra?3:2;
         unsigned xmm=p[0].a.reg;
