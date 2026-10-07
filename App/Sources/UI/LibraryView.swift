@@ -11,6 +11,8 @@ struct LibraryView: View {
     @State private var noJITAction: (() -> Void)?
     @State private var surfaceTitle = ""
     @State private var showSurface = false
+    @State private var showSteamSignIn = false
+    @ObservedObject private var steam = SteamSignInModel.shared
 
     private struct Stage: Identifiable {
         let id: Int
@@ -42,10 +44,7 @@ struct LibraryView: View {
                     }
                 }
                 windowsCard
-                DeckCard(title: "Steam library", icon: "gamecontroller.fill") {
-                    Text("Steam sign-in and your owned games arrive with stage 4. Wine (stage 2) and Direct3D on Metal (stage 3) are ready for them.")
-                        .font(.subheadline).foregroundStyle(Deck.dim)
-                }
+                steamCard
                 DeckCard(title: "Road to Steam games", icon: "map.fill") {
                     ForEach(stages) { s in
                         StatusRow(label: "Stage \(s.id): \(s.title)", detail: s.detail, level: s.done ? .good : .idle)
@@ -78,6 +77,24 @@ struct LibraryView: View {
                 .ignoresSafeArea(edges: [.bottom, .horizontal])
         }
         .background(Color.black)
+    }
+
+    /// Stage 4: Steam account (SwiftSteam, from Madeira). The owned library and
+    /// downloads build on this sign-in.
+    private var steamCard: some View {
+        DeckCard(title: "Steam", icon: "gamecontroller.fill") {
+            if let name = steam.accountName {
+                StatusRow(label: "Signed in as \(name)", detail: "Your owned games and downloads come next in stage 4.", level: .good)
+                Button("Sign out") { steam.signOut() }
+                    .buttonStyle(DeckButtonStyle())
+            } else {
+                Text("Sign in with your Steam account name and password (Steam Guard supported) or a QR code from the Steam app. The sign-in token stays in this device's Keychain; the password is never stored.")
+                    .font(.subheadline).foregroundStyle(Deck.dim)
+                Button("Sign in to Steam") { showSteamSignIn = true }
+                    .buttonStyle(DeckButtonStyle())
+            }
+        }
+        .sheet(isPresented: $showSteamSignIn) { SteamSignInView() }
     }
 
     private var windowsCard: some View {

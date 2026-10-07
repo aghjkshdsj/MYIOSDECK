@@ -72,6 +72,7 @@ targets:
           - "$(MYIOSDECK_WINE_LIBS)"
           - "$(MYIOSDECK_DXMT_LIBS)"
           - "-lc++"
+          - "-lz"
         # Signing happens at sideload time (iloader / SideStore / AltStore).
         CODE_SIGN_STYLE: Manual
         CODE_SIGN_IDENTITY: ""
