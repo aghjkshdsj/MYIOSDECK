@@ -42,7 +42,7 @@ sideload edition (FEX, ~90% of native) stays the full-speed option, from the sam
   Madeira's FEX fork at `...\claude\fex` (ARM64EC frontend: `Source/Windows/ARM64EC/Module.S`,
   `Module.cpp` = the reference for Wine's emulator interface).
 
-## State (2026-10-07, build 71)
+## State (2026-10-07, build 73)
 - **FXI**: no-JIT x86-64 interpreter (`engine/fxi`), 8.1% of native on device. Since build 57 it
   also has a Windows mode (`fxi_win.c`): FS/GS segment slots (r[17]/r[18], `gs:[0x30]` = TEB),
   a thread-safe shared block cache, cached `ec_exit` blocks for jumps into native ARM64EC code.
@@ -154,6 +154,9 @@ sideload edition (FEX, ~90% of native) stays the full-speed option, from the sam
   link options change: the cached dir keeps old options), and `build-pe.sh collect` fails when a
   DLL imports a toolchain runtime DLL (only api-ms-win-crt-*, kernel32, ntdll, user32, gdi32,
   advapi32, winemetal, dxgi/d3d11 remain).
+- **Build 73 result: Direct3D 11 cube runs with JIT off** (~58 FPS, 16 DLLs from signed dylibs,
+  d3d11 included; cube-x64.exe's code in FXI). D3D12 cube and the suite still pass. All of
+  milestone "D3D without JIT" is done; next is a real game.
 - **FXR in the app**: `engine/fxr` (from `claude/fxr`, another session's work) is FXI with the 16
   guest GPRs, an EA temporary and the lazy-flag words passed as `preserve_none` arguments (host
   registers) between musttail handlers; hot forms specialised per register, everything else via
