@@ -33,6 +33,19 @@ const char *fxi_version(void);
 /// When set, guest writes to fd 1/2 also go to this host fd (the CLI uses 1).
 void fxi_set_echo_fd(int fd);
 
+// ---- Windows mode (fxi_win.c): FXI as the x64 CPU of Wine's ARM64EC processes ----
+typedef struct FxiCpu FxiCpu;
+/// One per thread; all share the process's block cache. Layout: GPRs at 0x00 (x86 order,
+/// slot 18 = GS base = TEB), rip at 0x98, xmm at 0xa0 (the transition glue relies on it).
+FxiCpu *fxi_win_cpu_new(void);
+/// Interpret from the CPU's rip until control reaches native ARM64EC code; returns that
+/// address, or 0 on an error (fxi_win_error).
+uint64_t fxi_win_run(FxiCpu *c);
+const char *fxi_win_error(FxiCpu *c);
+uint64_t fxi_win_rip(FxiCpu *c);
+/// Load an AMD64 CONTEXT into the CPU.
+void fxi_win_load_context(FxiCpu *c, const void *amd64_context);
+
 #ifdef __cplusplus
 }
 #endif

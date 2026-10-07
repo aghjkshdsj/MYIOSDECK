@@ -23,7 +23,7 @@ typedef struct {
 typedef struct {
     const uint8_t *p, *start;
     uint64_t rip;              // start of the current instruction
-    int rex, rexw, rexr, rexx, rexb, opsize16, rep, repne, seg, addr32;
+    int rex, rexw, rexr, rexx, rexb, opsize16, rep, repne, seg, addr32, seg_bad;
     // ModRM
     int mod, reg, rm, is_mem, riprel;
     uint8_t base, index, scale;
@@ -83,6 +83,14 @@ static void modrm(Dec *d) {
     }
     if (d->mod == 1) d->disp += rd_s8(d);
     else if (d->mod == 2) d->disp += rd_s32(d);
+    // FS/GS override: the segment base (register slot 17/18) takes the EA's free base or
+    // index slot, so `mov rax, gs:[0x30]` (the Windows TEB) costs nothing extra.
+    if (d->seg) {
+        uint8_t s = d->seg == 0x64 ? R_FS : R_GS;
+        if (d->base == R_ZERO) d->base = s;
+        else if (d->index == R_ZERO) { d->index = s; d->scale = 0; }
+        else d->seg_bad = 1;
+    }
 }
 
 // Copy the decoded memory operand into a uop. Call once all immediates are read
@@ -288,9 +296,9 @@ static int decode_sse(Dec *d, uint8_t op) {
 }
 
 // ---- one instruction; returns 1 when it ended the block ----
-static int decode_one(Dec *d) {
+static int decode_one_inner(Dec *d) {
     d->start = d->p;
-    d->rex = d->rexw = d->rexr = d->rexx = d->rexb = d->opsize16 = d->rep = d->repne = d->seg = d->addr32 = 0;
+    d->rex = d->rexw = d->rexr = d->rexx = d->rexb = d->opsize16 = d->rep = d->repne = d->seg = d->addr32 = d->seg_bad = 0;
     uint8_t b;
     for (;;) {   // legacy prefixes
         b = *d->p;
@@ -308,7 +316,6 @@ static int decode_one(Dec *d) {
         d->p++; b = *d->p;
     }
     d->p++;
-    if (d->seg) return unimplemented(d, "fs/gs segment override");
     if (d->addr32) return unimplemented(d, "32-bit addressing");
     int bits = vsize(d);
     int prev_fuse = d->fuse_at;
@@ -639,6 +646,19 @@ static int decode_one(Dec *d) {
         op == 0xc2 || op == 0xc6 || op >= 0xd0)
         return decode_sse(d, op);
     return unimplemented(d, "two-byte opcode");
+}
+
+// A segment override on an operand that already uses both base and index has no free slot
+// for the segment base: drop what the instruction emitted and fail it (only if executed).
+static int decode_one(Dec *d) {
+    int n0 = d->n;
+    int ended = decode_one_inner(d);
+    if (d->seg_bad) {
+        d->n = n0;
+        d->fuse_at = -1;
+        return unimplemented(d, "fs/gs override with base and index");
+    }
+    return ended;
 }
 
 Block *fxi_translate(struct Fxi *vm, uint64_t rip) {

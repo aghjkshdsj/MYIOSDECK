@@ -32,8 +32,9 @@ typedef union {
 typedef void (*OpFn)(FxiCpu *c, Uop *u);
 
 // Register slots. GPRs 0-15 in x86 order (RAX RCX RDX RBX RSP RBP RSI RDI R8-R15);
-// slot 16 is always zero, so a missing base or index costs nothing in an EA.
-enum { R_AX, R_CX, R_DX, R_BX, R_SP, R_BP, R_SI, R_DI, R_ZERO = 16 };
+// slot 16 is always zero, so a missing base or index costs nothing in an EA. Slots 17/18
+// hold the FS/GS segment bases: a segment override becomes the EA's free base or index.
+enum { R_AX, R_CX, R_DX, R_BX, R_SP, R_BP, R_SI, R_DI, R_ZERO = 16, R_FS = 17, R_GS = 18, R_COUNT = 19 };
 
 // Lazy flag kinds (combined with the size index 0-3 for 8/16/32/64 bits).
 enum {
@@ -42,16 +43,17 @@ enum {
 };
 #define LF(kind, szi) ((kind) << 2 | (szi))
 
+// The first three members have fixed offsets: the Windows transition glue
+// (App/Sources/Native/fxi_win_glue.S) saves and restores them directly.
 struct FxiCpu {
-    uint64_t r[17];          // GPRs + zero slot; 8-bit regs are byte offsets into this
-    uint64_t rip;            // only exact at block boundaries and on errors
+    uint64_t r[R_COUNT];     // 0x00: GPRs, zero slot, FS/GS base; 8-bit regs are byte offsets into this
+    uint64_t rip;            // 0x98: only exact at block boundaries and on errors
+    _Alignas(16) X128 xmm[16];   // 0xa0
     // Lazy flags: the last flag-writing operation's inputs and result.
     uint64_t lf_res, lf_a, lf_b;
     uint32_t lf_op;          // LF(kind, size index)
     uint32_t lf_cin;         // carry in (ADC/SBB/INC/DEC), CF=OF for MUL, raw RFLAGS for LF_RAW
     uint32_t df;             // direction flag
-    uint64_t fs_base, gs_base;
-    _Alignas(16) X128 xmm[16];
     uint32_t mxcsr;
     // Run state
     int stop;                // nonzero: leave the dispatch chain
@@ -78,11 +80,22 @@ struct Block {
     Uop u[];                 // flexible array
 };
 
-// Interpreter instance (one guest).
+// c->stop values: why the dispatch chain was left.
+enum { FXI_STOP_ERROR = 1, FXI_STOP_EXIT = 2, FXI_STOP_EC = 3 };
+
+// Open-addressed rip -> Block. Replaced (never freed) when it grows, so readers on other
+// threads can keep using the table they loaded.
+typedef struct BlockTable {
+    uint64_t mask, count;
+    Block *slot[];
+} BlockTable;
+
+// Interpreter instance: one guest program (ELF mode), or one Windows process whose threads
+// each have their own FxiCpu (Windows mode, fxi_win.c).
 struct Fxi {
     FxiCpu cpu;
-    Block **table;           // open-addressed rip -> Block
-    uint64_t table_mask, table_count;
+    BlockTable *table;
+    int windows;             // Windows mode: no image bounds, native ARM64EC code ends a run
     unsigned long long blocks, syscalls;
     fxi_result *out;
     // Guest image
@@ -137,6 +150,10 @@ Block *fxi_lookup(FxiCpu *c, uint64_t rip);     // translate on miss; fxi_stop o
 Block *fxi_translate(struct Fxi *vm, uint64_t rip);
 void fxi_fail(FxiCpu *c, const char *fmt, ...); // set c->stop and the error text
 long fxi_syscall(FxiCpu *c);                    // Linux syscall in RAX/RDI/...; returns result
+struct Fxi *fxi_vm_new(void);                   // empty block cache, stop block ready
+// Windows mode (fxi_win.c): nonzero when rip is native ARM64EC code (PEB->EcCodeBitMap).
+int fxi_win_is_ec(FxiCpu *c, uint64_t rip);
+Block *fxi_win_exit_block(uint64_t rip);        // one uop: c->rip = rip, stop = FXI_STOP_EC
 
 // Handler tables the decoder picks from (fxi_ops.c).
 enum { F_RR, F_RI, F_RM, F_MR, F_MI, F_COUNT };           // operand forms

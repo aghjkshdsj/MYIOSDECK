@@ -22,7 +22,7 @@ const char *fxi_version(void) { return FXI_VERSION; }
 void fxi_set_echo_fd(int fd) { g_echo_fd = fd; }
 
 void fxi_fail(FxiCpu *c, const char *fmt, ...) {
-    c->stop = 1;
+    c->stop = FXI_STOP_ERROR;
     if (c->err && !c->err[0]) {
         va_list ap;
         va_start(ap, fmt);
@@ -32,41 +32,76 @@ void fxi_fail(FxiCpu *c, const char *fmt, ...) {
 }
 
 // ---- block cache: open addressing on the guest rip ----
+// Lookups are lock-free; translation and insertion take g_translate_lock (Windows guests
+// run several threads on one cache). A grown table replaces the old one, which is never
+// freed, so a reader that loaded the old pointer still reads valid memory.
+static pthread_mutex_t g_translate_lock = PTHREAD_MUTEX_INITIALIZER;
 static uint64_t hash_rip(uint64_t rip) { return (rip * 0x9E3779B97F4A7C15ull) >> 20; }
 
-static void table_insert(struct Fxi *vm, Block *b) {
-    if ((vm->table_count + 1) * 2 > vm->table_mask + 1) {
-        uint64_t old_mask = vm->table_mask;
-        Block **old = vm->table;
-        vm->table_mask = old_mask * 2 + 1;
-        vm->table = calloc(vm->table_mask + 1, sizeof(Block *));
-        for (uint64_t i = 0; i <= old_mask; i++) {
-            if (!old[i]) continue;
-            uint64_t h = hash_rip(old[i]->rip) & vm->table_mask;
-            while (vm->table[h]) h = (h + 1) & vm->table_mask;
-            vm->table[h] = old[i];
-        }
-        free(old);
+static BlockTable *table_new(uint64_t slots) {
+    BlockTable *t = calloc(1, sizeof *t + slots * sizeof(Block *));
+    t->mask = slots - 1;
+    return t;
+}
+
+static Block *table_find(BlockTable *t, uint64_t rip) {
+    uint64_t h = hash_rip(rip) & t->mask;
+    for (Block *b; (b = __atomic_load_n(&t->slot[h], __ATOMIC_ACQUIRE)); h = (h + 1) & t->mask)
+        if (b->rip == rip) return b;
+    return NULL;
+}
+
+static void table_put(BlockTable *t, Block *b) {
+    uint64_t h = hash_rip(b->rip) & t->mask;
+    while (t->slot[h]) h = (h + 1) & t->mask;
+    __atomic_store_n(&t->slot[h], b, __ATOMIC_RELEASE);
+    t->count++;
+}
+
+static void table_insert(struct Fxi *vm, Block *b) {   // under g_translate_lock
+    BlockTable *t = vm->table;
+    if ((t->count + 1) * 2 > t->mask + 1) {
+        BlockTable *n = table_new((t->mask + 1) * 2);
+        for (uint64_t i = 0; i <= t->mask; i++)
+            if (t->slot[i]) table_put(n, t->slot[i]);
+        __atomic_store_n(&vm->table, n, __ATOMIC_RELEASE);
+        t = n;
     }
-    uint64_t h = hash_rip(b->rip) & vm->table_mask;
-    while (vm->table[h]) h = (h + 1) & vm->table_mask;
-    vm->table[h] = b;
-    vm->table_count++;
+    table_put(t, b);
+}
+
+struct Fxi *fxi_vm_new(void) {
+    pthread_mutex_lock(&g_translate_lock);
+    if (!fxi_stop) {
+        fxi_stop = calloc(1, sizeof(Block) + sizeof(Uop));
+        fxi_stop->n = 1;
+        fxi_stop->u[0].fn = fxi_named("stop");
+    }
+    pthread_mutex_unlock(&g_translate_lock);
+    struct Fxi *vm = calloc(1, sizeof *vm);
+    vm->table = table_new(4096);
+    return vm;
 }
 
 Block *fxi_lookup(FxiCpu *c, uint64_t rip) {
     struct Fxi *vm = c->vm;
-    uint64_t h = hash_rip(rip) & vm->table_mask;
-    for (Block *b; (b = vm->table[h]); h = (h + 1) & vm->table_mask)
-        if (b->rip == rip) return b;
+    Block *b = table_find(__atomic_load_n(&vm->table, __ATOMIC_ACQUIRE), rip);
+    if (b) return b;
     if (c->stop) return fxi_stop;
-    if (rip < (uint64_t)(uintptr_t)vm->image || rip >= (uint64_t)(uintptr_t)vm->image + vm->image_size) {
+    if (!vm->windows &&
+        (rip < (uint64_t)(uintptr_t)vm->image || rip >= (uint64_t)(uintptr_t)vm->image + vm->image_size)) {
         c->rip = rip;
         fxi_fail(c, "jump outside the guest image to %#llx", (unsigned long long)rip);
         return fxi_stop;
     }
-    Block *b = fxi_translate(vm, rip);
-    table_insert(vm, b);
+    pthread_mutex_lock(&g_translate_lock);
+    if (!(b = table_find(vm->table, rip))) {
+        // Windows: a jump into native ARM64EC code (an import, a return into an exit thunk)
+        // becomes a cached one-uop block that leaves the run for the transition glue.
+        b = (vm->windows && fxi_win_is_ec(c, rip)) ? fxi_win_exit_block(rip) : fxi_translate(vm, rip);
+        table_insert(vm, b);
+    }
+    pthread_mutex_unlock(&g_translate_lock);
     return b;
 }
 
@@ -91,7 +126,7 @@ long fxi_syscall(FxiCpu *c) {
         return -EBADF;
     case 60: case 231:   // exit, exit_group
         c->exit_code = (long long)(int)a0;
-        c->stop = 2;
+        c->stop = FXI_STOP_EXIT;
         return 0;
     case 228: {   // clock_gettime
         struct timespec ts;
@@ -102,8 +137,8 @@ long fxi_syscall(FxiCpu *c) {
     }
     case 12: return (long)vm->brk;   // brk: report, never grow
     case 158: {  // arch_prctl
-        if (a0 == 0x1002) { c->fs_base = a1; return 0; }   // ARCH_SET_FS
-        if (a0 == 0x1001) { c->gs_base = a1; return 0; }
+        if (a0 == 0x1002) { c->r[R_FS] = a1; return 0; }   // ARCH_SET_FS
+        if (a0 == 0x1001) { c->r[R_GS] = a1; return 0; }
         return -EINVAL;
     }
     default:
@@ -179,15 +214,8 @@ static double now_s(void) {
 int fxi_run_elf(const uint8_t *elf, size_t len, int argc, const char *const *argv, fxi_result *out) {
     memset(out, 0, sizeof *out);
     pthread_mutex_lock(&g_run_lock);
-    if (!fxi_stop) {
-        fxi_stop = calloc(1, sizeof(Block) + sizeof(Uop));
-        fxi_stop->n = 1;
-        fxi_stop->u[0].fn = fxi_named("stop");
-    }
-    struct Fxi *vm = calloc(1, sizeof *vm);
+    struct Fxi *vm = fxi_vm_new();
     vm->out = out;
-    vm->table_mask = 4095;
-    vm->table = calloc(vm->table_mask + 1, sizeof(Block *));
     double t0 = now_s();
     uint64_t entry;
     if (!load_elf(vm, elf, len, &entry, out->error)) { pthread_mutex_unlock(&g_run_lock); return 0; }
@@ -203,7 +231,7 @@ int fxi_run_elf(const uint8_t *elf, size_t len, int argc, const char *const *arg
     if (!c->stop) b->u[0].fn(c, b->u);    // returns only when the guest stops
     if (!c->stop) fxi_fail(c, "dispatch chain returned unexpectedly");
 
-    out->ok = c->stop == 2;
+    out->ok = c->stop == FXI_STOP_EXIT;
     out->exit_code = c->exit_code;
     out->seconds = now_s() - t0;
     out->syscalls = vm->syscalls;

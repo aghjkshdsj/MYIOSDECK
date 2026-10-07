@@ -382,6 +382,8 @@ static void op_ret(FxiCpu *c, Uop *u) {
 // Block ended without a branch (length cap or before a syscall): continue at aux.
 static void op_goto(FxiCpu *c, Uop *u) { CHAIN(c, u->link, u->aux); }
 static void op_stop(FxiCpu *c, Uop *u) { (void)c; (void)u; }
+// Windows mode: the next block is native ARM64EC code; leave for the transition glue.
+static void op_ec_exit(FxiCpu *c, Uop *u) { c->rip = u->imm; c->stop = FXI_STOP_EC; }
 static void op_fail_ud(FxiCpu *c, Uop *u) {
     c->rip = u->aux;
     fxi_fail(c, "unimplemented instruction at %#llx: %s", (unsigned long long)u->aux, (const char *)(uintptr_t)u->imm);
@@ -572,7 +574,7 @@ static void op_movs(FxiCpu *c, Uop *u) {
 // ---------------------------------------------------------------------------
 static const struct { const char *name; OpFn fn; } kNamed[] = {
     { "jmp", op_jmp }, { "jcc", op_jcc }, { "call", op_call }, { "call_R", op_call_R }, { "call_M", op_call_M },
-    { "jmp_R", op_jmp_R }, { "jmp_M", op_jmp_M }, { "ret", op_ret }, { "goto", op_goto }, { "stop", op_stop },
+    { "jmp_R", op_jmp_R }, { "jmp_M", op_jmp_M }, { "ret", op_ret }, { "goto", op_goto }, { "stop", op_stop }, { "ec_exit", op_ec_exit },
     { "fail_ud", op_fail_ud }, { "hlt", op_hlt }, { "syscall", op_syscall },
     { "push_R", op_push_R }, { "push_I", op_push_I }, { "push_M", op_push_M }, { "pop_R", op_pop_R }, { "pop_M", op_pop_M },
     { "leave", op_leave }, { "pushf", op_pushf }, { "popf", op_popf }, { "nop", op_nop },
