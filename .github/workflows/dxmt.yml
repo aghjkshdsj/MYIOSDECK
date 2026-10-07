@@ -5,7 +5,7 @@ name: Stage 3 - DXMT (Direct3D on Metal)
 on:
   push:
     branches: [main]
-    paths: ["engine/dxmt/**", ".github/workflows/dxmt.yml"]
+    paths: ["engine/dxmt/**", "!engine/dxmt/stage-app.sh", ".github/workflows/dxmt.yml"]
   workflow_dispatch:
 
 permissions:
@@ -73,3 +73,9 @@ jobs:
             engine/dxmt/madeira/toolchains/llvm-ios-ninja.log
             engine/dxmt/madeira/build/dxmt-ios/obj/*.err
           if-no-files-found: ignore
+
+      - name: Rebuild the IPA with this library
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run build-ipa.yml -R "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME"

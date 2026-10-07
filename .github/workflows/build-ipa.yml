@@ -103,6 +103,25 @@ jobs:
           git checkout -- Config/Wine.xcconfig project.yml
           rm -rf engine/wine/madeira App/Generated/wine_version.h
 
+      - name: Stage DXMT (stage 3) from the latest DXMT build
+        id: dxmt
+        if: steps.wine.outcome == 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RUN=$(gh run list -R "$GITHUB_REPOSITORY" --workflow dxmt.yml --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+          if [ -z "$RUN" ]; then echo "No successful DXMT build yet"; exit 1; fi
+          gh run download "$RUN" -R "$GITHUB_REPOSITORY" -n dxmt-libs -D engine/dxmt/out
+          bash engine/dxmt/stage-app.sh
+
+      - name: Build without DXMT
+        if: steps.wine.outcome == 'success' && steps.dxmt.outcome != 'success'
+        run: |
+          echo "::notice::No DXMT in this IPA (stage 3 builds in the 'Stage 3 - DXMT' workflow); Direct3D returns STATUS_NOT_IMPLEMENTED."
+          git checkout -- Config/DXMT.xcconfig
+          rm -f App/Generated/dxmt_version.h
+
       - name: Generate Xcode project
         run: xcodegen generate
 
@@ -123,12 +142,16 @@ jobs:
           rm -rf Payload && mkdir Payload && cp -R "$APP" Payload/
           # Ad-hoc signature carrying our entitlements, so the sideloader knows to
           # request get-task-allow and the increased memory limit when it re-signs.
+          # DXMT's D3D12 path dlopens the loose shader-converter dylib, so it needs its own signature.
+          MSC=Payload/MYIOSDECK.app/d3d12/libmetalirconverter.dylib
+          [ ! -f "$MSC" ] || codesign --force --sign - --timestamp=none "$MSC"
           codesign --force --sign - --entitlements App/MYIOSDECK.entitlements --timestamp=none Payload/MYIOSDECK.app
           codesign -d --entitlements - Payload/MYIOSDECK.app || true
           FLAVOR=""
           [ "${{ steps.fex.outcome }}" = success ] && FLAVOR="fex"
           [ "${{ steps.blink.outcome }}" = success ] && FLAVOR="${FLAVOR:+$FLAVOR-}interp"
           [ "${{ steps.wine.outcome }}" = success ] && FLAVOR="${FLAVOR:+$FLAVOR-}wine"
+          [ "${{ steps.dxmt.outcome }}" = success ] && FLAVOR="${FLAVOR:+$FLAVOR-}dxmt"
           [ -n "$FLAVOR" ] || FLAVOR=uionly
           NAME="MYIOSDECK-0.1.0-build${{ github.run_number }}-${FLAVOR}.ipa"
           zip -qry "$NAME" Payload
@@ -141,6 +164,7 @@ jobs:
             echo "- FEXCore (JIT): ${{ steps.fex.outcome }}"
             echo "- Blink (no-JIT interpreter): ${{ steps.blink.outcome }}"
             echo "- Wine (stage 2): ${{ steps.wine.outcome }}"
+            echo "- DXMT (stage 3): ${{ steps.dxmt.outcome }}"
             echo "- Size: $(du -h "$NAME" | cut -f1)"
           } >> "$GITHUB_STEP_SUMMARY"
 

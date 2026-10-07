@@ -8,6 +8,9 @@
 #if __has_include("wine_version.h")
 #include "wine_version.h"
 #endif
+#if __has_include("dxmt_version.h")
+#include "dxmt_version.h"
+#endif
 
 #if MYIOSDECK_WITH_WINE && !MYIOSDECK_WITH_DXMT
 
