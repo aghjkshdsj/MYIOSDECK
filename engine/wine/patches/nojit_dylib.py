@@ -9,9 +9,9 @@ Wine without JIT); with JIT, nothing changes. Three hooks in build/ntdll-unix/vi
   virtual_map_image   an image whose file name has <PE dir>/lib<name>.dylib is dlopen'ed
                       and registered as a view at the dylib's address (like Wine's own
                       virtual_create_builtin_view), with section protections and ARM64EC
-                      code ranges set as map_image_into_view would. ntdll.dll is relocated
-                      here (Wine's PE loader never relocates ntdll); every other image is
-                      relocated once by the PE loader's perform_relocations, since the
+                      code ranges set as map_image_into_view would. Relocation is left to
+                      Wine (the server reports STATUS_IMAGE_NOT_AT_BASE): virtual_relocate_module
+                      for ntdll, perform_relocations for the rest, once each, since the
                       read-only header keeps its preferred ImageBase.
   mprotect_exec       inside those images, code pages (signed __TEXT) are already r-x and
                       cannot change: requests for them are no-ops. Data pages (__DATA) get
@@ -225,37 +225,12 @@ static NTSTATUS ios_nojit_map_view( struct file_view **view_ret, struct ios_noji
         (dir = get_data_dir( nt, total_size, IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG )))
         update_arm64ec_ranges( view, nt, dir, &image_info->entry_point );
 
-    /* ntdll is the one image Wine's PE loader never relocates (build_ntdll_module): do it
-     * here, on its data pages. Every other image is relocated once by perform_relocations. */
-    if (!strcmp( im->name, "ntdll.dll" ))
-    {
-        INT_PTR delta = (INT_PTR)(base - (char *)nt->OptionalHeader.ImageBase);
-        IMAGE_DATA_DIRECTORY *relocs = get_data_dir( nt, total_size, IMAGE_DIRECTORY_ENTRY_BASERELOC );
-        unsigned int count = 0, refused = 0;
-        if (delta && relocs)
-        {
-            char *p = base + relocs->VirtualAddress, *rend = p + relocs->Size;
-            while (p + 8 <= rend)
-            {
-                IMAGE_BASE_RELOCATION *blk = (IMAGE_BASE_RELOCATION *)p;
-                USHORT *e = (USHORT *)(blk + 1);
-                unsigned int k, nrel;
-                if (blk->SizeOfBlock < 8) break;
-                nrel = (blk->SizeOfBlock - 8) / 2;
-                for (k = 0; k < nrel; k++)
-                {
-                    char *t = base + blk->VirtualAddress + (e[k] & 0xfff);
-                    if ((e[k] >> 12) != IMAGE_REL_BASED_DIR64) continue;
-                    if (t < im->data) { refused++; continue; }
-                    *(ULONG_PTR *)t += delta;
-                    count++;
-                }
-                p += blk->SizeOfBlock;
-            }
-        }
-        ios_nojit_trace( "[nojit] ntdll.dll relocated in place: %u pointers, delta %#lx%s\n", count,
-                 (unsigned long)delta, refused ? " (SOME TARGETS IN CODE REFUSED)" : "" );
-    }
+    /* No relocation here. The wineserver answers this view with STATUS_IMAGE_NOT_AT_BASE
+     * (it is not at the preferred base), and Wine relocates exactly once from the read-only
+     * header's ImageBase: load_ntdll calls virtual_relocate_module for ntdll, the PE
+     * loader's perform_relocations does every other image. Relocating here as well applied
+     * ntdll's pointers twice (build 49). Both paths change protections through
+     * mprotect_exec, where code pages are no-ops and data pages are writable. */
 
     set_vprot( view, base, ROUND_SIZE( 0, nt->OptionalHeader.SizeOfHeaders, page_mask ),
                VPROT_COMMITTED | VPROT_READ );
