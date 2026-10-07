@@ -11,19 +11,20 @@
 
 // Binary/unary op on XMM dst with source S (a copy, so D == S is safe). The
 // memory form reads W bytes (16 packed, 4 or 8 scalar).
-#define DEF_X(NAME, W, BODY)                                                               \
+// Variadic body: bodies may contain commas (declarations, initialisers).
+#define DEF_X(NAME, W, ...)                                                                \
     static void NAME##_RR(FxiCpu *c, Uop *u) {                                             \
         X128 *D = XR(u->dst); X128 t = c->xmm[u->src]; const X128 *S = &t; (void)D; (void)S; \
-        BODY; FXI_NEXT(c, u);                                                              \
+        __VA_ARGS__; FXI_NEXT(c, u);                                                       \
     }                                                                                      \
     static void NAME##_RM(FxiCpu *c, Uop *u) {                                             \
         X128 *D = XR(u->dst); X128 t; memset(&t, 0, sizeof t);                             \
         memcpy(&t, (const void *)(uintptr_t)fxi_ea(c, u), (W)); const X128 *S = &t; (void)D; (void)S; \
-        BODY; FXI_NEXT(c, u);                                                              \
+        __VA_ARGS__; FXI_NEXT(c, u);                                                       \
     }
 
-#define LANES4(EXPR) for (int i = 0; i < 4; i++) { EXPR; }
-#define LANES2(EXPR) for (int i = 0; i < 2; i++) { EXPR; }
+#define LANES4(...) for (int i = 0; i < 4; i++) { __VA_ARGS__; }
+#define LANES2(...) for (int i = 0; i < 2; i++) { __VA_ARGS__; }
 
 // ---- float arithmetic ----
 DEF_X(addps, 16, LANES4(D->f[i] += S->f[i]))
@@ -181,7 +182,7 @@ static void movmskpd_RR(FxiCpu *c, Uop *u) {
 }
 
 // ---- shifts by immediate (register forms only) ----
-#define DEF_XSH(NAME, BODY) static void NAME##_RI(FxiCpu *c, Uop *u) { X128 *D = XR(u->dst); unsigned n = (unsigned)u->imm; BODY; FXI_NEXT(c, u); }
+#define DEF_XSH(NAME, ...) static void NAME##_RI(FxiCpu *c, Uop *u) { X128 *D = XR(u->dst); unsigned n = (unsigned)u->imm; __VA_ARGS__; FXI_NEXT(c, u); }
 DEF_XSH(psllw, for (int i = 0; i < 8; i++) D->w[i] = n > 15 ? 0 : (uint16_t)(D->w[i] << n))
 DEF_XSH(pslld, LANES4(D->d[i] = n > 31 ? 0 : D->d[i] << n))
 DEF_XSH(psllq, LANES2(D->q[i] = n > 63 ? 0 : D->q[i] << n))

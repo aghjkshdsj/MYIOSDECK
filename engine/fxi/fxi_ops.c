@@ -113,6 +113,7 @@ const OpFn fxi_lea_tab[4] = { 0, lea_16, lea_32, lea_64 };
 #define DEF_SHIFT(OPN, KIND, EXPR, FORM, S)                                                \
     static void sh_##OPN##_##FORM##_##S(FxiCpu *c, Uop *u) {                               \
         unsigned n = SH_COUNT(S);                                                          \
+        const unsigned sbits = (S); (void)sbits;                                           \
         SH_LOAD_##FORM(S)                                                                  \
         if (FXI_UNLIKELY(n == 0)) FXI_NEXT(c, u);                                          \
         uint64_t res = (EXPR) & M##S;                                                      \
@@ -126,7 +127,7 @@ const OpFn fxi_lea_tab[4] = { 0, lea_16, lea_32, lea_64 };
 
 DEF_SHIFT_ALL(shl, LF_SHL, n >= 64 ? 0 : a << n)
 DEF_SHIFT_ALL(shr, LF_SHR, n >= 64 ? 0 : a >> n)
-DEF_SHIFT_ALL(sar, LF_SAR, (uint64_t)((((int64_t)(a << (64 - S))) >> (64 - S)) >> (n > 63 ? 63 : n)))
+DEF_SHIFT_ALL(sar, LF_SAR, (uint64_t)((((int64_t)(a << (64 - sbits))) >> (64 - sbits)) >> (n > 63 ? 63 : n)))
 
 // Rotates touch only CF/OF: materialise the other flags, then set those two.
 #define DEF_ROT(OPN, IS_LEFT, FORM, S)                                                     \
