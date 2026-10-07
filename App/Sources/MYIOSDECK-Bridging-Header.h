@@ -6,6 +6,7 @@
 #import "Native/interp_engine.h"
 #import "Native/wine_host.h"
 #import "Native/fxi_bridge.h"
+#import "Native/fxr_bridge.h"
 #import "Native/pe_dylib.h"
 // Steam content decoders (liblzma shim, zstd decoder, zip chunks) for SwiftSteam's downloads.
 #import "Steam/SwiftSteam/lzma_shim.h"

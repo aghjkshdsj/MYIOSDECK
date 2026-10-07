@@ -1,0 +1,74 @@
+name: FXR interpreter (experimental)
+
+# FXR = FXI with the guest registers pinned in host registers (engine/fxr). Guests built once
+# on x86, then FXR, FXI and native compared on the ARM64 and x86 runners with the same clang;
+# plus an iOS compile check (the app links FXR next to FXI, so no global fxi_* symbols).
+on:
+  push:
+    branches: ["main", "claude/**"]
+    paths: ["engine/fxr/**", ".github/workflows/fxr.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fxr-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq xxd > /dev/null
+      - run: bash engine/guest/build.sh "$RUNNER_TEMP/guests"
+      - uses: actions/upload-artifact@v5
+        with:
+          name: fxr-guests
+          path: ${{ runner.temp }}/guests/*.elf
+
+  compare:
+    needs: guests
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04-arm, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
+        with:
+          name: fxr-guests
+          path: guests
+      - name: clang 19 (preserve_none on ARM64)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang-19 > /dev/null || (wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh && sudo bash /tmp/llvm.sh 19 > /dev/null)
+          clang-19 --version | head -1
+      - name: Build FXR, FXI and the native driver
+        run: |
+          chmod +x guests/*.elf
+          CC=clang-19 bash engine/fxr/build.sh "$RUNNER_TEMP/fxr"
+          CC=clang-19 bash engine/fxi/build.sh "$RUNNER_TEMP/fxi"
+          gcc -O2 -ffp-contract=off -o "$RUNNER_TEMP/native" engine/fxr/native.c
+      - name: FXR vs FXI vs native
+        run: |
+          if [ "$(uname -m)" = x86_64 ]; then N=elf; else N="$RUNNER_TEMP/native"; fi
+          bash engine/fxr/compare.sh "$PWD/guests" "$RUNNER_TEMP/fxr/fxr" "$RUNNER_TEMP/fxi/fxi" "$N"
+
+  ios:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v5
+      - name: Compile FXR for iOS arm64
+        run: |
+          cd engine/fxr
+          for f in fxi_core.c fxi_decode.c fxi_flags.c fxi_ops.c fxi_sse.c fxi_atomic.c fxi_x87.c fxi_win.c fxr_pin.c; do
+            xcrun -sdk iphoneos clang -arch arm64 -O2 -std=gnu11 -ffp-contract=off -miphoneos-version-min=17.0 -c "$f" -o "/tmp/${f%.c}.o"
+          done
+          echo "preserve_none: $(echo '__attribute__((preserve_none)) void f(void){}' | xcrun -sdk iphoneos clang -arch arm64 -x c -c - -o /dev/null 2>&1 && echo supported || echo NOT supported)"
+          ls -la /tmp/fxr_pin.o
+          clash=$(for f in /tmp/fxi_*.o /tmp/fxr_pin.o; do nm -g -U "$f"; done | awk '{print $NF}' | grep -E '^_fxi_' || true)
+          if [ -n "$clash" ]; then echo "FXR defines FXI's global names (add them to engine/fxr/fxr_rename.h):"; echo "$clash"; exit 1; fi
+          echo "no global fxi_* symbols"

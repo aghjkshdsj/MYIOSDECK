@@ -28,7 +28,8 @@ struct HomeView: View {
         if engine.state == .ready {
             engine.runHello(mode: .jit)
         } else {
-            noJITAction = { engine.runHello(mode: .interpreter) }
+            let mode = settings.linuxNoJITMode
+            noJITAction = { engine.runHello(mode: mode) }
         }
     }
 

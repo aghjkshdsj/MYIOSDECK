@@ -35,7 +35,7 @@ struct LibraryView: View {
             VStack(spacing: 14) {
                 DeckCard(title: "Installed (built-in x86-64 programs)", icon: "square.grid.2x2.fill") {
                     programRow(name: "x86-64 Hello", detail: "Prints the CPU the guest sees (CPUID) and times a loop") {
-                        gated(jit: { engine.runHello(mode: .jit) }, noJIT: { engine.runHello(mode: .interpreter) })
+                        gated(jit: { engine.runHello(mode: .jit) }, noJIT: { engine.runHello(mode: settings.linuxNoJITMode) })
                     }
                     Divider().overlay(Deck.panelHi)
                     programRow(name: "CPU benchmark suite", detail: "Native vs FEX vs no-JIT, five kernels (also on Performance)") {

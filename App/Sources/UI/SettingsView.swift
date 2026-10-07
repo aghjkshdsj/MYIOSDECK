@@ -25,6 +25,12 @@ struct SettingsView: View {
                     Toggle("Verbose FEX log", isOn: $settings.verboseFEXLog).tint(Deck.accent)
                 }
 
+                DeckCard(title: "Without JIT", icon: "lock.shield") {
+                    Toggle("Use FXR for x86-64 Hello (experimental)", isOn: $settings.useFXR).tint(Deck.accent)
+                    Text("FXR is FXI with the x86 registers kept in ARM registers (\(engine.fxrPinned ? "pinned in this build" : "NOT pinned in this build")). It is here to test speed; Windows programs always use FXI. The Performance tab benchmark measures both.")
+                        .font(.footnote).foregroundStyle(Deck.dim)
+                }
+
                 DeckCard(title: "JIT", icon: "bolt.fill") {
                     Picker("JIT pool", selection: $settings.jitPoolMB) {
                         Text("256 MB").tag(256)

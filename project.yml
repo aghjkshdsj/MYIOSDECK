@@ -42,6 +42,11 @@ targets:
       - path: engine/fxi
         excludes: ["fxi_main.c", "*.sh"]
         compilerFlags: ["-O2", "-ffp-contract=off"]
+      # FXR, FXI with the guest registers pinned in host registers (experimental, Linux guests
+      # only). Its copy of the FXI sources is renamed to fxr_* (engine/fxr/fxr_rename.h).
+      - path: engine/fxr
+        excludes: ["fxi_main.c", "native.c", "*.sh", "*.inc", "*.h"]   # headers stay out of the header map: FXI has the same names
+        compilerFlags: ["-O2", "-ffp-contract=off"]
       # Stage 2 (Wine): engine/wine/stage-app.sh inserts Madeira's app-side sources
       # and the Windows side (DLL farm, NLS, prefix) here when it staged them.
       # @WINE_SOURCES@

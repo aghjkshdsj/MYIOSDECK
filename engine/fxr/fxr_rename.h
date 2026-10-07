@@ -1,0 +1,61 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// FXR's copy of the FXI sources links into the app next to FXI itself (engine/fxi), so every
+// external fxi_* name gets an fxr_ prefix here. fxi.h includes this first, so each FXR source
+// file sees it. CI (fxr.yml, iOS job) fails if an FXR object still defines a global fxi_ symbol.
+#ifndef FXR_RENAME_H
+#define FXR_RENAME_H
+#define fxi_alu_tab fxr_alu_tab
+#define fxi_atomic_named fxr_atomic_named
+#define fxi_cmov_tab fxr_cmov_tab
+#define fxi_cond fxr_cond
+#define fxi_ext_tab fxr_ext_tab
+#define fxi_f80_load fxr_f80_load
+#define fxi_f80_store fxr_f80_store
+#define fxi_fail fxr_fail
+#define fxi_fjcc_tab fxr_fjcc_tab
+#define fxi_flag_af fxr_flag_af
+#define fxi_flag_cf fxr_flag_cf
+#define fxi_flag_of fxr_flag_of
+#define fxi_flag_pf fxr_flag_pf
+#define fxi_flag_sf fxr_flag_sf
+#define fxi_flag_zf fxr_flag_zf
+#define fxi_imul2_tab fxr_imul2_tab
+#define fxi_imul3_tab fxr_imul3_tab
+#define fxi_insn_length fxr_insn_length
+#define fxi_lea_tab fxr_lea_tab
+#define fxi_lookup fxr_lookup
+#define fxi_mov_tab fxr_mov_tab
+#define fxi_muldiv_tab fxr_muldiv_tab
+#define fxi_named fxr_named
+#define fxi_probe fxr_probe
+#define fxi_raise fxr_raise
+#define fxi_rflags fxr_rflags
+#define fxi_run_elf fxr_run_elf
+#define fxi_set_echo_fd fxr_set_echo_fd
+#define fxi_set_rflags fxr_set_rflags
+#define fxi_setcc_tab fxr_setcc_tab
+#define fxi_shift_tab fxr_shift_tab
+#define fxi_sse_named fxr_sse_named
+#define fxi_stop fxr_stop
+#define fxi_syscall fxr_syscall
+#define fxi_translate fxr_translate
+#define fxi_unary_tab fxr_unary_tab
+#define fxi_version fxr_version
+#define fxi_vm_new fxr_vm_new
+#define fxi_win_cpu_new fxr_win_cpu_new
+#define fxi_win_error fxr_win_error
+#define fxi_win_exception fxr_win_exception
+#define fxi_win_exit_block fxr_win_exit_block
+#define fxi_win_fault_rip fxr_win_fault_rip
+#define fxi_win_is_ec fxr_win_is_ec
+#define fxi_win_load_context fxr_win_load_context
+#define fxi_win_rip fxr_win_rip
+#define fxi_win_run fxr_win_run
+#define fxi_win_save_context fxr_win_save_context
+#define fxi_win_set_teb fxr_win_set_teb
+#define fxi_x87_fxrstor fxr_x87_fxrstor
+#define fxi_x87_fxsave fxr_x87_fxsave
+#define fxi_x87_init fxr_x87_init
+#define fxi_x87_named fxr_x87_named
+#define fxi_div0 fxr_div0
+#endif

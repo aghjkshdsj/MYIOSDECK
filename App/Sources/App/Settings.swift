@@ -35,6 +35,11 @@ final class Settings: ObservableObject {
     }
     /// Performance tab: also measure the no-JIT interpreter when JIT is on.
     @Published var benchInterpreter: Bool { didSet { d.set(benchInterpreter, forKey: "benchInterpreter") } }
+    /// Without JIT, run the built-in x86-64 Linux programs with FXR instead of FXI (experimental).
+    /// Windows programs always use FXI.
+    @Published var useFXR: Bool { didSet { d.set(useFXR, forKey: "useFXR") } }
+    /// The no-JIT engine for the built-in x86-64 Linux programs.
+    var linuxNoJITMode: RunMode { useFXR ? .fxr : .interpreter }
     /// How Windows games see the controller: "xinput", "dinput" (XInput plus a
     /// DirectInput joystick) or "hid" (player 1 as a HID gamepad). Read at launch.
     @Published var controllerAPI: String { didSet { d.set(controllerAPI, forKey: "controllerAPI") } }
@@ -43,7 +48,7 @@ final class Settings: ObservableObject {
         // Wine copies every loaded DLL's code into the pool: give it room by default.
         d.register(defaults: ["jitPoolMB": mid_wine_linked() ? 1024 : 512, "fexPreset": FEXPreset.fast.rawValue, "multiblock": true,
                               "maxInst": 5000, "showHUD": true, "frameCap": 120, "verboseFEXLog": false,
-                              "benchInterpreter": true, "controllerAPI": "xinput"])
+                              "benchInterpreter": true, "useFXR": false, "controllerAPI": "xinput"])
         jitPoolMB = d.integer(forKey: "jitPoolMB")
         fexPreset = FEXPreset(rawValue: d.integer(forKey: "fexPreset")) ?? .fast
         multiblock = d.bool(forKey: "multiblock")
@@ -52,6 +57,7 @@ final class Settings: ObservableObject {
         frameCap = d.integer(forKey: "frameCap")
         verboseFEXLog = d.bool(forKey: "verboseFEXLog")
         benchInterpreter = d.bool(forKey: "benchInterpreter")
+        useFXR = d.bool(forKey: "useFXR")
         controllerAPI = d.string(forKey: "controllerAPI") ?? "xinput"
     }
 }

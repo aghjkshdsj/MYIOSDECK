@@ -63,7 +63,7 @@ struct PerformanceView: View {
             if !engine.bench.isEmpty {
                 Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
                     GridRow {
-                        Text("Kernel"); Text("Native"); Text("FEX JIT"); Text("FXI"); Text("Blink")
+                        Text("Kernel"); Text("Native"); Text("FEX JIT"); Text("FXI"); Text("FXR"); Text("Blink")
                     }
                     .font(.caption.weight(.bold)).foregroundStyle(Deck.dim)
                     ForEach(engine.bench) { r in
@@ -75,6 +75,7 @@ struct PerformanceView: View {
                             Text(ms(r.nativeNs)).monospacedDigit()
                             pct(r.fexEfficiency, time: r.fexNs, match: r.fexMatch, digits: 0)
                             pct(r.interpEfficiency, time: r.interpNs, match: r.interpMatch, digits: 1)
+                            pct(r.fxrEfficiency, time: r.fxrNs, match: r.fxrMatch, digits: 1)
                             pct(r.blinkEfficiency, time: r.blinkNs, match: r.blinkMatch, digits: 1)
                         }
                     }
@@ -85,6 +86,12 @@ struct PerformanceView: View {
                 }
                 if let avg = EngineController.average(engine.bench.compactMap(\.interpEfficiency)) {
                     Text(String(format: "No JIT (FXI interpreter): %.1f%% of native, about %.0f× slower.", avg, 100 / max(avg, 0.001)))
+                        .font(.subheadline.weight(.semibold)).foregroundStyle(Deck.warn)
+                }
+                if let avg = EngineController.average(engine.bench.compactMap(\.fxrEfficiency)) {
+                    let fxi = EngineController.average(engine.bench.compactMap(\.interpEfficiency)) ?? 0
+                    Text(String(format: "FXR (experimental, pinned registers): %.1f%% of native", avg) +
+                         (fxi > 0 ? String(format: ", %.2f× FXI.", avg / fxi) : "."))
                         .font(.subheadline.weight(.semibold)).foregroundStyle(Deck.warn)
                 }
                 if let avg = EngineController.average(engine.bench.compactMap(\.blinkEfficiency)) {
