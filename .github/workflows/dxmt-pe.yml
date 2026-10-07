@@ -1,0 +1,89 @@
+name: Stage 3b - D3D DLLs (16 KB aligned)
+
+# No-JIT step 5: DXMT's Windows side (winemetal, d3d11, d3d10core, dxgi) and Madeira's D3D12
+# DLLs rebuilt with 16 KB section alignment (engine/dxmt/build-pe.sh), so the IPA build can
+# wrap them as signed dylibs. build-ipa.yml puts the newest successful set into the DLL farm.
+on:
+  push:
+    branches: [main]
+    paths: ["engine/dxmt/build-pe.sh", "engine/dxmt/PIN", ".github/workflows/dxmt-pe.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: dxmt-pe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  d3d-pe:
+    runs-on: macos-26
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Host tools
+        run: |
+          brew install bison flex meson ninja || true
+          xcodebuild -version
+          xcodebuild -downloadComponent MetalToolchain > /dev/null 2>&1 || true
+
+      # The Wine stage's checkout (Madeira, its Wine fork, llvm-mingw) as a head start.
+      - name: Restore checkout
+        uses: actions/cache/restore@v4
+        with:
+          path: engine/wine/madeira
+          key: dxmt-pe-${{ hashFiles('engine/wine/PIN', 'engine/dxmt/PIN') }}-v1-${{ github.run_id }}
+          restore-keys: |
+            dxmt-pe-${{ hashFiles('engine/wine/PIN', 'engine/dxmt/PIN') }}-v1-
+            wine-unix-${{ hashFiles('engine/wine/PIN') }}-v1-
+
+      - name: Fetch Madeira, Wine fork, DXMT
+        run: bash engine/dxmt/build-pe.sh fetch
+
+      - name: Wine ARM64EC tree (winebuild, winecrt0, ntdll/dbghelp import libs)
+        run: bash engine/dxmt/build-pe.sh wine
+
+      - name: DXMT PE DLLs
+        id: dxmt
+        run: bash engine/dxmt/build-pe.sh dxmt
+
+      - name: Madeira D3D12 DLLs
+        id: d3d12
+        continue-on-error: true
+        run: bash engine/dxmt/build-pe.sh d3d12
+
+      - name: Collect
+        if: always()
+        run: |
+          bash engine/dxmt/build-pe.sh collect | tee -a "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Save checkout
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: engine/wine/madeira
+          key: dxmt-pe-${{ hashFiles('engine/wine/PIN', 'engine/dxmt/PIN') }}-v1-${{ github.run_id }}
+
+      - uses: actions/upload-artifact@v5
+        if: steps.dxmt.outcome == 'success'
+        with:
+          name: d3d-pe-dlls
+          path: engine/dxmt/out-pe
+
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: d3d-pe-logs
+          path: |
+            engine/wine/madeira/wine/build-arm64ec/*.log
+            engine/wine/madeira/dxmt/build-arm64ec-16k/meson-logs/*.txt
+          if-no-files-found: ignore
+
+      - name: Rebuild the IPA with these DLLs
+        if: steps.dxmt.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run build-ipa.yml -R "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME"

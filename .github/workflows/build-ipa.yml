@@ -118,7 +118,16 @@ jobs:
       - name: Audit Wine DLLs for the no-JIT scheme (signed dylibs)
         if: steps.wine.outcome == 'success'
         continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          # Step 5: the D3D/Metal DLLs rebuilt with 16 KB sections (dxmt-pe.yml) replace Madeira's
+          # 4 KB-aligned prebuilt ones, which cannot become signed dylibs.
+          D3D_RUN=$(gh run list -R "$GITHUB_REPOSITORY" --workflow dxmt-pe.yml --status success --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null || true)
+          if [ -n "$D3D_RUN" ] && gh run download "$D3D_RUN" -R "$GITHUB_REPOSITORY" -n d3d-pe-dlls -D "$RUNNER_TEMP/d3d-pe"; then
+            cp "$RUNNER_TEMP"/d3d-pe/*.dll engine/wine/madeira/app/Madeira/arm64ec-windows/
+            echo "- D3D DLLs: 16 KB-aligned rebuild from run $D3D_RUN ($(ls "$RUNNER_TEMP"/d3d-pe | tr '\n' ' '))" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
           mkdir -p build
           python3 engine/pedylib/pe2dylib.py audit engine/wine/madeira/app/Madeira/arm64ec-windows/*.dll \
             --md "$GITHUB_STEP_SUMMARY" --json build/pe-audit.json | head -30
