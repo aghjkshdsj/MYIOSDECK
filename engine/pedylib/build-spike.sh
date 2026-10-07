@@ -28,7 +28,8 @@ clang --version | head -1
 mkdir -p "$OUT"
 B="$OUT/obj"
 mkdir -p "$B"
-for arch in arm64ec aarch64; do
+build_one() {
+    local arch="$1"
     triple="$arch-w64-mingw32"
     m=$([ "$arch" = arm64ec ] && echo arm64ec || echo arm64)
     llvm-dlltool -m "$m" -d "$HERE/spike/myiosdeck.def" -l "$B/libmyiosdeck-$arch.a"
@@ -39,14 +40,18 @@ for arch in arm64ec aarch64; do
           -Wl,--image-base=0x6f0000000 "$B/libmyiosdeck-$arch.a")
     CFLAGS=(-target "$triple" -O2 -ffp-contract=off -fno-strict-aliasing -fno-stack-protector
             -I"$ROOT/engine/guest")
-    # ARM64EC images carry CHPE metadata through the load config (_load_config_used,
-    # __chpe_metadata) from mingw-w64's libmingw32; force them in.
-    EXTRA=()
-    [ "$arch" = arm64ec ] && EXTRA=(-Wl,--undefined=_load_config_used -lmingw32)
-    "$triple-clang" "${CFLAGS[@]}" -o "$B/spike-$arch.dll" "$HERE/spike/spike.c" "${LINK[@]}" "${EXTRA[@]}"
+    # arm64ec_crt.c: the CHPE metadata + load config Wine DLLs get from winecrt0/winebuild.
+    "$triple-clang" "${CFLAGS[@]}" -o "$B/spike-$arch.dll" "$HERE/spike/spike.c" "$HERE/spike/arm64ec_crt.c" "${LINK[@]}"
     llvm-readobj --file-headers --sections --coff-imports --coff-exports "$B/spike-$arch.dll" |
         grep -E 'Machine|SectionAlignment|Name:|VirtualAddress|Characteristics:|Symbol' | head -80 || true
     [ "$arch" = arm64ec ] && { llvm-readobj --coff-load-config "$B/spike-$arch.dll" | grep -iE 'CHPE|Arm64EC|dispatch|icall' | head -40 || true; }
     python3 "$HERE/pe2dylib.py" convert --strict "$B/spike-$arch.dll" "$OUT"
+}
+
+# Each variant on its own: plain ARM64 first (needs the least), then ARM64EC (what Wine uses).
+fail=0
+for arch in aarch64 arm64ec; do
+    ( set -e; build_one "$arch" ) || { echo "::warning::spike DLL for $arch failed"; fail=1; }
 done
 ls -la "$OUT"
+exit $fail
