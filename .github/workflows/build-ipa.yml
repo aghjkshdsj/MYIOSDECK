@@ -232,6 +232,14 @@ jobs:
           name: ${{ steps.pkg.outputs.name }}
           path: ${{ steps.pkg.outputs.name }}
 
+      # Symbols for the device's crash reports (.ips): atos -o <dSYM> -l <load address> <pc>.
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: dsym
+          path: build/dd/Build/Products/Release-iphoneos/MYIOSDECK.app.dSYM
+          if-no-files-found: ignore
+
       - uses: actions/upload-artifact@v5
         if: always()
         with:

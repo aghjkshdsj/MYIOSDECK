@@ -51,6 +51,30 @@ static int ios_nojit_enabled(void)
     return on;
 }
 
+/* Every [nojit] line goes to stderr AND is appended, unbuffered, to MYIOSDECK_NOJIT_TRACE
+ * (Documents), so it survives a crash: stderr reaches the app's log through a pipe whose
+ * tail is lost when the process dies (build 47). */
+static void __attribute__((format(printf, 1, 2))) ios_nojit_trace( const char *fmt, ... )
+{
+    static int fd = -2;
+    char line[512];
+    va_list ap;
+    int n;
+
+    va_start( ap, fmt );
+    n = vsnprintf( line, sizeof(line), fmt, ap );
+    va_end( ap );
+    if (n < 0) return;
+    if (n >= (int)sizeof(line)) n = sizeof(line) - 1;
+    write( 2, line, n );
+    if (fd == -2)
+    {
+        const char *path = getenv( "MYIOSDECK_NOJIT_TRACE" );
+        fd = path ? open( path, O_WRONLY | O_CREAT | O_APPEND, 0644 ) : -1;
+    }
+    if (fd >= 0) write( fd, line, n );
+}
+
 /* The no-JIT image containing addr, or NULL. Entries are only appended (lock-free read). */
 static const struct ios_nojit_image *ios_nojit_find( const void *addr )
 {
@@ -69,7 +93,24 @@ static int ios_nojit_mprotect( void *base, size_t size, int unix_prot, int *ret 
     const struct ios_nojit_image *im;
     char *p = base, *end = p + size;
 
-    if (!__atomic_load_n( &ios_nojit_count, __ATOMIC_ACQUIRE ) || !(im = ios_nojit_find( base ))) return 0;
+    if (!ios_nojit_enabled()) return 0;
+    {
+        static int announced;
+        if (!announced++) ios_nojit_trace( "[nojit] ntdll unix side: no-JIT mode active (first protection change)\n" );
+    }
+    if (!(im = ios_nojit_find( base )))
+    {
+        /* Executable memory outside the signed images would need the JIT pool, which a
+         * no-JIT session does not have: hand out the memory without PROT_EXEC and record
+         * where, so a later crash at that address is explained (step C: no runtime code). */
+        static int n;
+        if (!(unix_prot & PROT_EXEC)) return 0;
+        if (n++ < 64)
+            ios_nojit_trace( "[nojit] EXEC requested outside the signed images at %p+0x%lx (prot %d): "
+                             "given without execute permission\n", base, (unsigned long)size, unix_prot );
+        *ret = mprotect( base, size, unix_prot & ~PROT_EXEC );
+        return 1;
+    }
     *ret = 0;
     if (end > im->data)
     {
@@ -110,7 +151,7 @@ static struct ios_nojit_image *ios_nojit_load( const UNICODE_STRING *nt_name )
         pthread_mutex_unlock( &ios_nojit_lock );
         if (im->mapped)
         {
-            dprintf( 2, "[nojit] %s: mapped again; one signed image per DLL so far -- not supported yet\n", name );
+            ios_nojit_trace( "[nojit] %s: mapped again; one signed image per DLL so far -- not supported yet\n", name );
             return NULL;
         }
         return im;
@@ -119,7 +160,7 @@ static struct ios_nojit_image *ios_nojit_load( const UNICODE_STRING *nt_name )
     if (access( path, R_OK ) || ios_nojit_count >= (int)(sizeof(ios_nojit_images) / sizeof(ios_nojit_images[0])))
     {
         pthread_mutex_unlock( &ios_nojit_lock );
-        dprintf( 2, "[nojit] %s: no signed dylib (it would need the JIT pool)\n", name );
+        ios_nojit_trace( "[nojit] %s: no signed dylib (it would need the JIT pool)\n", name );
         return NULL;
     }
     h = dlopen( path, RTLD_NOW | RTLD_LOCAL );
@@ -130,7 +171,7 @@ static struct ios_nojit_image *ios_nojit_load( const UNICODE_STRING *nt_name )
     if (!img || !data || !end || !teb_off)
     {
         pthread_mutex_unlock( &ios_nojit_lock );
-        dprintf( 2, "[nojit] %s: dlopen %s failed: %s\n", name, path, h ? "missing symbols" : dlerror() );
+        ios_nojit_trace( "[nojit] %s: dlopen %s failed: %s\n", name, path, h ? "missing symbols" : dlerror() );
         return NULL;
     }
     *teb_off = ios_teb_tls_slot_offset;   /* x18 trampolines read the TEB from this TSD slot */
@@ -141,9 +182,9 @@ static struct ios_nojit_image *ios_nojit_load( const UNICODE_STRING *nt_name )
     im->size = end - img;
     __atomic_store_n( &ios_nojit_count, ios_nojit_count + 1, __ATOMIC_RELEASE );
     pthread_mutex_unlock( &ios_nojit_lock );
-    dprintf( 2, "[nojit] %s: signed image %p+0x%lx (code+headers 0x%lx), TEB slot offset 0x%x\n",
+    ios_nojit_trace( "[nojit] %s: signed image %p+0x%lx (code+headers 0x%lx), TEB slot offset 0x%x\n",
              name, img, (unsigned long)im->size, (unsigned long)(data - img), ios_teb_tls_slot_offset );
-    if (!ios_teb_tls_slot_offset) dprintf( 2, "[nojit] WARNING: TEB TSD slot not known yet\n" );
+    if (!ios_teb_tls_slot_offset) ios_nojit_trace( "[nojit] WARNING: TEB TSD slot not known yet\n" );
     return im;
 }
 
@@ -166,14 +207,14 @@ static NTSTATUS ios_nojit_map_view( struct file_view **view_ret, struct ios_noji
 
     if (total_size > im->size)
     {
-        dprintf( 2, "[nojit] %s: map size 0x%lx > signed image 0x%lx\n", im->name,
+        ios_nojit_trace( "[nojit] %s: map size 0x%lx > signed image 0x%lx\n", im->name,
                  (unsigned long)total_size, (unsigned long)im->size );
         return STATUS_INVALID_IMAGE_FORMAT;
     }
     if ((status = create_view( &view, base, total_size, SEC_IMAGE | SEC_FILE | VPROT_SYSTEM |
                                VPROT_COMMITTED | VPROT_READ | VPROT_WRITECOPY | VPROT_EXEC )))
     {
-        dprintf( 2, "[nojit] %s: create_view %p+0x%lx failed %x\n", im->name, base,
+        ios_nojit_trace( "[nojit] %s: create_view %p+0x%lx failed %x\n", im->name, base,
                  (unsigned long)total_size, (unsigned)status );
         return status;
     }
@@ -212,7 +253,7 @@ static NTSTATUS ios_nojit_map_view( struct file_view **view_ret, struct ios_noji
                 p += blk->SizeOfBlock;
             }
         }
-        dprintf( 2, "[nojit] ntdll.dll relocated in place: %u pointers, delta %#lx%s\n", count,
+        ios_nojit_trace( "[nojit] ntdll.dll relocated in place: %u pointers, delta %#lx%s\n", count,
                  (unsigned long)delta, refused ? " (SOME TARGETS IN CODE REFUSED)" : "" );
     }
 
@@ -235,7 +276,7 @@ static NTSTATUS ios_nojit_map_view( struct file_view **view_ret, struct ios_noji
     }
     im->mapped = 1;
     *view_ret = view;
-    dprintf( 2, "[nojit] %s: mapped from its signed dylib at %p (entry +0x%x)\n", im->name, base,
+    ios_nojit_trace( "[nojit] %s: mapped from its signed dylib at %p (entry +0x%x)\n", im->name, base,
              (unsigned)image_info->entry_point );
     return STATUS_SUCCESS;
 }

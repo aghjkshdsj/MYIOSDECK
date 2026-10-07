@@ -23,14 +23,25 @@ final class CrashReporter: ObservableObject {
     private static var docs: URL { FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0] }
     private static var marker: URL { docs.appendingPathComponent(".myiosdeck-session-active") }
     static var crashLogURL: URL { docs.appendingPathComponent("myiosdeck-crash-log.txt") }
+    static var nojitTraceURL: URL { docs.appendingPathComponent("myiosdeck-nojit-trace.txt") }
 
     /// Called by LogStore before it truncates the log. Returns true when the
     /// previous session ended unexpectedly (its log is then preserved).
     static func preservePreviousLogIfCrashed(log: URL) -> Bool {
         let fm = FileManager.default
+        // Wine's no-JIT trace (engine/wine/patches/nojit_dylib.py) is written straight to a file
+        // so it survives a crash; it belongs to the previous session only.
+        defer { try? fm.removeItem(at: nojitTraceURL) }
         guard fm.fileExists(atPath: marker.path) else { return false }
         try? fm.removeItem(at: crashLogURL)
         try? fm.copyItem(at: log, to: crashLogURL)
+        if let trace = try? Data(contentsOf: nojitTraceURL), !trace.isEmpty,
+           let h = try? FileHandle(forWritingTo: crashLogURL) {
+            h.seekToEndOfFile()
+            h.write(Data("==== Wine no-JIT trace (written directly, survives crashes) ====\n".utf8))
+            h.write(trace)
+            try? h.close()
+        }
         try? fm.removeItem(at: marker)
         return true
     }

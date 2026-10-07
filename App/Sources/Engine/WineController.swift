@@ -99,6 +99,7 @@ final class WineController: ObservableObject, @unchecked Sendable {
             setenv("MYIOSDECK_PE_DIR", Self.peWineDir, 1)
             setenv("MYIOSDECK_NOJIT_EMULATOR", Self.peWineDir + "/xtajit64.dll", 1)
             setenv("MADEIRA_USE_ARM64EC", "1", 1)
+            setenv("MYIOSDECK_NOJIT_TRACE", CrashReporter.nojitTraceURL.path, 1)
             dlog("[wine] no-JIT session: DLLs from \(Self.peWineDir)")
         } else {
             for k in ["WINE_IOS_NOJIT", "MYIOSDECK_PE_DIR", "MYIOSDECK_NOJIT_EMULATOR"] { unsetenv(k) }
