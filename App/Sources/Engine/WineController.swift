@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
+import GameController
 import UIKit
 
 /// Stage 2: runs Windows x86-64 programs through Wine ARM64EC + FEX (xtajit64)
@@ -55,6 +56,18 @@ final class WineController: ObservableObject, @unchecked Sendable {
         default: break
         }
         state = .booting(program.title)
+        // Controller API for this session (Settings › Controller). Must be in the
+        // environment before the wineserver starts: the HID device and the
+        // DirectInput joystick are created at session start.
+        let api = UserDefaults.standard.string(forKey: "controllerAPI") ?? "xinput"
+        unsetenv("MADEIRA_DINPUT_PAD"); unsetenv("MADEIRA_HIDPAD"); unsetenv("MADEIRA_HIDPAD_NAME")
+        if api == "dinput" { setenv("MADEIRA_DINPUT_PAD", "1", 1) }
+        if api == "hid" {
+            setenv("MADEIRA_HIDPAD", "generic", 1)
+            if let name = GCController.controllers().first?.vendorName { setenv("MADEIRA_HIDPAD_NAME", name, 1) }
+        }
+        ControllerBridge.shared.setHIDMode(api == "hid")
+        dlog("[xinput] controller API for this session: \(api)")
         // DXMT takes the layer when the program creates its swapchain.
         if program.graphics {
             GameHostView.register()

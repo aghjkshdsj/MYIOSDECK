@@ -135,6 +135,20 @@ void mid_pad_set(int slot, int connected, uint16_t buttons, uint8_t lt, uint8_t 
     winios_gamepad_set_state(slot, &s);
 }
 
+void mid_hidpad_set(int connected, uint16_t buttons, uint8_t lt, uint8_t rt,
+                    int16_t lx, int16_t ly, int16_t rx, int16_t ry) {
+    if (!connected) { winios_hidpad_set_state(NULL); return; }
+    struct winios_hidpad h = {0};
+    h.connected = 1;
+    h.buttons = buttons;
+    if (lt > 25) h.buttons |= WINIOS_HIDPAD_L2;
+    if (rt > 25) h.buttons |= WINIOS_HIDPAD_R2;
+    h.left_trigger = lt; h.right_trigger = rt;
+    h.lx = lx; h.ly = ly; h.rx = rx; h.ry = ry;
+    h.battery = WINIOS_HIDPAD_BATTERY_UNKNOWN;
+    winios_hidpad_set_state(&h);
+}
+
 extern void madeira_seed_prefix_if_needed(const char *prefix_path);
 void mid_wine_seed_prefix(const char *prefix) { madeira_seed_prefix_if_needed(prefix); }
 
@@ -215,6 +229,10 @@ void mid_wine_seed_prefix(const char *prefix) { (void)prefix; }
 void mid_pad_set(int slot, int connected, uint16_t buttons, uint8_t lt, uint8_t rt,
                  int16_t lx, int16_t ly, int16_t rx, int16_t ry) {
     (void)slot; (void)connected; (void)buttons; (void)lt; (void)rt; (void)lx; (void)ly; (void)rx; (void)ry;
+}
+void mid_hidpad_set(int connected, uint16_t buttons, uint8_t lt, uint8_t rt,
+                    int16_t lx, int16_t ly, int16_t rx, int16_t ry) {
+    (void)connected; (void)buttons; (void)lt; (void)rt; (void)lx; (void)ly; (void)rx; (void)ry;
 }
 void mid_display_set_layer(void *metal_layer) { (void)metal_layer; }
 void mid_display_screen_size(int *w, int *h) { *w = 1024; *h = 768; }

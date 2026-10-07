@@ -49,6 +49,17 @@ struct SettingsView: View {
                     Toggle("Performance overlay", isOn: $settings.showHUD).tint(Deck.accent)
                 }
 
+                DeckCard(title: "Controller", icon: "gamecontroller.fill") {
+                    Picker("Controller API", selection: $settings.controllerAPI) {
+                        Text("XInput").tag("xinput")
+                        Text("+ DirectInput").tag("dinput")
+                        Text("HID").tag("hid")
+                    }
+                    .pickerStyle(.segmented)
+                    Text("How Windows games see your controller. XInput suits most games. If a game ignores the controller, try + DirectInput (older games) or HID (player 1 as a USB gamepad, for engines that look for devices, such as Unity's old input system). Takes effect the next time a game starts.")
+                        .font(.footnote).foregroundStyle(Deck.dim)
+                }
+
                 DeckCard(title: "About", icon: "info.circle") {
                     let info = Bundle.main.infoDictionary
                     Text("MYIOSDECK \(info?["CFBundleShortVersionString"] as? String ?? "?") (build \(info?["CFBundleVersion"] as? String ?? "?"))")

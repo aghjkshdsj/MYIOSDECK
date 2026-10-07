@@ -16,6 +16,19 @@ final class ControllerBridge: @unchecked Sendable {
     private var pads: [GCExtendedGamepad?] = [nil, nil, nil, nil]
     private var owners: [GCController?] = [nil, nil, nil, nil]
     private var active = true
+    private var firstPress = [false, false, false, false]
+    /// HID sessions (Settings › Controller API: HID): player 1 feeds the HID
+    /// gamepad and leaves XInput, as a HID pad on Windows is not an XInput pad.
+    private var hidMode = false
+
+    /// Called before a Wine session starts; the mode holds for that session.
+    func setHIDMode(_ on: Bool) {
+        queue.async { [self] in
+            hidMode = on
+            if !on { mid_hidpad_set(0, 0, 0, 0, 0, 0, 0, 0) }
+            sample()
+        }
+    }
     private var timer: DispatchSourceTimer?
     private var started = false
 
@@ -91,8 +104,19 @@ final class ControllerBridge: @unchecked Sendable {
 
     private func sample() {
         for i in pads.indices {
-            guard let pad = pads[i] else { mid_pad_set(Int32(i), 0, 0, 0, 0, 0, 0, 0, 0); continue }
-            guard active else { mid_pad_set(Int32(i), 1, 0, 0, 0, 0, 0, 0, 0); continue }
+            let hid = i == 0 && hidMode
+            // One publisher per slot: XInput, or (player 1 in HID mode) the HID gamepad.
+            func publish(_ connected: Int32, _ b: UInt16, _ lt: UInt8, _ rt: UInt8,
+                         _ lx: Int16, _ ly: Int16, _ rx: Int16, _ ry: Int16) {
+                if hid {
+                    mid_pad_set(Int32(i), 0, 0, 0, 0, 0, 0, 0, 0)
+                    mid_hidpad_set(connected, b, lt, rt, lx, ly, rx, ry)
+                } else {
+                    mid_pad_set(Int32(i), connected, b, lt, rt, lx, ly, rx, ry)
+                }
+            }
+            guard let pad = pads[i] else { publish(0, 0, 0, 0, 0, 0, 0, 0); continue }
+            guard active else { publish(1, 0, 0, 0, 0, 0, 0, 0); continue }
             let map: [(GCControllerButtonInput?, UInt16)] = [
                 (pad.dpad.up, 0x0001), (pad.dpad.down, 0x0002), (pad.dpad.left, 0x0004), (pad.dpad.right, 0x0008),
                 (pad.buttonMenu, 0x0010), (pad.buttonOptions, 0x0020),
@@ -102,10 +126,14 @@ final class ControllerBridge: @unchecked Sendable {
             ]
             var buttons: UInt16 = 0
             for (b, mask) in map where b?.isPressed == true { buttons |= mask }
-            mid_pad_set(Int32(i), 1, buttons,
-                        Self.trigger(pad.leftTrigger.value), Self.trigger(pad.rightTrigger.value),
-                        Self.axis(pad.leftThumbstick.xAxis.value), Self.axis(pad.leftThumbstick.yAxis.value),
-                        Self.axis(pad.rightThumbstick.xAxis.value), Self.axis(pad.rightThumbstick.yAxis.value))
+            if buttons != 0, !firstPress[i] {
+                firstPress[i] = true
+                dlog("[xinput] slot=\(i) first press buttons=0x\(String(buttons, radix: 16)) published to \(hid ? "HID gamepad" : "XInput")")
+            }
+            publish(1, buttons,
+                    Self.trigger(pad.leftTrigger.value), Self.trigger(pad.rightTrigger.value),
+                    Self.axis(pad.leftThumbstick.xAxis.value), Self.axis(pad.leftThumbstick.yAxis.value),
+                    Self.axis(pad.rightThumbstick.xAxis.value), Self.axis(pad.rightThumbstick.yAxis.value))
         }
     }
 }
