@@ -31,7 +31,7 @@ process, the way Madeira proved works.
 |---|---|---|
 | 1 | JIT pool via StikDebug (iOS 26/27 TXM), FEXCore built in CI, host-feature tuning, presets, x86-64 test + native-vs-FEX benchmarks, Metal 120 Hz stage + HUD | **In this build** |
 | 2 | Wine ARM64EC: build `ntdll_unix`, `win32u_unix`, `wineserver` for iOS and the ARM64EC PE modules + `xtajit64.dll` (FEX ARM64EC) in CI; boot a prefix and run a console `.exe` | Next |
-| 3 | DXMT (D3D9–11 → Metal) and the D3D12 path; present into the Metal stage; first 3D game | Planned |
+| 3 | DXMT (D3D9–11 → Metal) and the D3D12 path; present into the Metal stage; first 3D game | In progress: DXMT + D3D12 converter linked into the IPA (build 20) |
 | 4 | Steam: native sign-in (QR / password + Steam Guard), owned library with artwork, depot downloads, cloud saves; launch through Valve's Windows client | Planned |
 | 5 | Deck UX: controller-driven Big Picture-style UI, per-game presets, touch controls, keyboard/mouse | Planned |
 | 6 | Performance: AOT code cache (persist FEX translations between runs), Metal shader cache, efficiency-core management, 40 Hz / 30 Hz caps | Planned |
