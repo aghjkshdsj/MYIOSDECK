@@ -13,6 +13,7 @@ struct LibraryView: View {
     @State private var showSurface = false
     @State private var showSteamSignIn = false
     @ObservedObject private var steam = SteamSignInModel.shared
+    @ObservedObject private var steamLibrary = SteamLibrary.shared
 
     private struct Stage: Identifiable {
         let id: Int
@@ -84,9 +85,14 @@ struct LibraryView: View {
     private var steamCard: some View {
         DeckCard(title: "Steam", icon: "gamecontroller.fill") {
             if let name = steam.accountName {
-                StatusRow(label: "Signed in as \(name)", detail: "Your owned games and downloads come next in stage 4.", level: .good)
-                Button("Sign out") { steam.signOut() }
-                    .buttonStyle(DeckButtonStyle())
+                HStack {
+                    StatusRow(label: "Signed in as \(name)", detail: "Downloads and Play come next in stage 4.", level: .good)
+                    Button("Sign out") { steam.signOut() }
+                        .buttonStyle(DeckButtonStyle())
+                        .frame(width: 110)
+                }
+                Divider().overlay(Deck.panelHi)
+                SteamGamesGrid(library: steamLibrary)
             } else {
                 Text("Sign in with your Steam account name and password (Steam Guard supported) or a QR code from the Steam app. The sign-in token stays in this device's Keychain; the password is never stored.")
                     .font(.subheadline).foregroundStyle(Deck.dim)
@@ -95,6 +101,7 @@ struct LibraryView: View {
             }
         }
         .sheet(isPresented: $showSteamSignIn) { SteamSignInView() }
+        .onAppear { steamLibrary.start() }
     }
 
     private var windowsCard: some View {
