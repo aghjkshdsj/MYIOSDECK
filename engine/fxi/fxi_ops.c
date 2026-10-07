@@ -171,6 +171,32 @@ DEF_ROT_S(ror, 0, 8) DEF_ROT_S(ror, 0, 16) DEF_ROT_S(ror, 0, 32) DEF_ROT_S(ror, 
 DEF_RC_S(rcl, 1, 8) DEF_RC_S(rcl, 1, 16) DEF_RC_S(rcl, 1, 32) DEF_RC_S(rcl, 1, 64)
 DEF_RC_S(rcr, 0, 8) DEF_RC_S(rcr, 0, 16) DEF_RC_S(rcr, 0, 32) DEF_RC_S(rcr, 0, 64)
 
+// SHLD/SHRD r/m, r, imm8|CL: u->cc = size index, u->aux = 0 shld / 1 shrd, | 2 when the
+// count is CL. Rare in compiled code: flags are materialised directly.
+static void shxd(FxiCpu *c, Uop *u, int mem) {
+    unsigned si = u->cc, bits = 8u << si, right = u->aux & 1;
+    unsigned n = ((u->aux & 2) ? (unsigned)c->r[R_CX] : (unsigned)u->imm) & (bits == 64 ? 63u : 31u);
+    if (!n) return;
+    uint64_t m = bits == 64 ? ~0ull : (1ull << bits) - 1, sb = 1ull << (bits - 1);
+    uint64_t addr = mem ? fxi_ea(c, u) : 0;
+    uint64_t a = mem ? (si == 1 ? ld16(addr) : si == 2 ? ld32(addr) : ld64(addr))
+                     : (si == 1 ? rd16(c, u->dst) : si == 2 ? rd32(c, u->dst) : rd64(c, u->dst));
+    uint64_t b = si == 1 ? rd16(c, u->src) : si == 2 ? rd32(c, u->src) : rd64(c, u->src);
+    uint64_t res, cf;
+    if (bits == 16 && n > 16) n &= 15;   // undefined on x86; keep it in range
+    if (right) { res = ((a >> n) | (n == bits ? 0 : b << (bits - n))) & m; cf = (a >> (n - 1)) & 1; }
+    else { res = ((a << n) | (n == bits ? 0 : b >> (bits - n))) & m; cf = (a >> (bits - n)) & 1; }
+    if (mem) { if (si == 1) st16(addr, res); else if (si == 2) st32(addr, res); else st64(addr, res); }
+    else { if (si == 1) wr16(c, u->dst, res); else if (si == 2) wr32(c, u->dst, res); else wr64(c, u->dst, res); }
+    uint64_t of = ((res ^ a) & sb) != 0;   // sign change (defined for a count of 1)
+    uint64_t f = fxi_rflags(c) & ~0x8d5ull;
+    f |= cf | (uint64_t)!__builtin_parity((unsigned)(res & 0xff)) << 2 | (uint64_t)(res == 0) << 6 |
+         (uint64_t)((res & sb) != 0) << 7 | of << 11;
+    fxi_set_rflags(c, f);
+}
+static void op_shxd_R(FxiCpu *c, Uop *u) { shxd(c, u, 0); FXI_NEXT(c, u); }
+static void op_shxd_M(FxiCpu *c, Uop *u) { shxd(c, u, 1); FXI_NEXT(c, u); }
+
 #define TAB_SH(OPN) { { sh_##OPN##_R_8, sh_##OPN##_R_16, sh_##OPN##_R_32, sh_##OPN##_R_64 }, \
                       { sh_##OPN##_M_8, sh_##OPN##_M_16, sh_##OPN##_M_32, sh_##OPN##_M_64 } }
 const OpFn fxi_shift_tab[8][2][4] = {
@@ -572,7 +598,7 @@ static const struct { const char *name; OpFn fn; } kNamed[] = {
     { "xchg_R_8", xchg_R_8 }, { "xchg_R_16", xchg_R_16 }, { "xchg_R_32", xchg_R_32 }, { "xchg_R_64", xchg_R_64 },
     { "bsf_R", bsf_R }, { "bsf_M", bsf_M }, { "bsr_R", bsr_R }, { "bsr_M", bsr_M },
     { "tzcnt_R", tzcnt_R }, { "tzcnt_M", tzcnt_M }, { "lzcnt_R", lzcnt_R }, { "lzcnt_M", lzcnt_M },
-    { "popcnt_R", popcnt_R }, { "popcnt_M", popcnt_M },
+    { "popcnt_R", popcnt_R }, { "popcnt_M", popcnt_M }, { "shxd_R", op_shxd_R }, { "shxd_M", op_shxd_M },
     { "cld", op_cld }, { "std", op_std }, { "clc", op_clc }, { "stc", op_stc }, { "cmc", op_cmc },
     { "lahf", op_lahf }, { "sahf", op_sahf }, { "cpuid", op_cpuid }, { "rdtsc", op_rdtsc },
     { "stos", op_stos }, { "movs", op_movs },

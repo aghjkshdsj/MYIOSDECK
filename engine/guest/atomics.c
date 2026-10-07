@@ -153,6 +153,23 @@ static void t_bitops(void) {
     report("bt reg imm", w, (f & 1), 0);
 }
 
+// Double-precision shifts (shld/shrd): not atomics, but the same "real Windows code" set.
+static void t_shxd(void) {
+    u64 f, r, m;
+    r = 0x8000000000000001ull;
+    __asm__ volatile("shldq $4, %[s], %[r]" GET_FLAGS : [r] "+r"(r), [f] "=&r"(f) : [s] "r"(0xf000000000000000ull) : "cc");
+    report("shld64 imm", r, 0, f & ~0x800ull);   // OF only defined for a count of 1
+    r = 0x12345678;
+    __asm__ volatile("shrdl %%cl, %k[s], %k[r]" GET_FLAGS : [r] "+r"(r), [f] "=&r"(f) : [s] "r"(0xabcdu), "c"(8) : "cc");
+    report("shrd32 cl", r, 0, f & ~0x800ull);
+    r = 0x8000000000000000ull;
+    __asm__ volatile("shldq $1, %[s], %[r]" GET_FLAGS : [r] "+r"(r), [f] "=&r"(f) : [s] "r"(0ull) : "cc");
+    report("shld64 1", r, 0, f);
+    m = 0x00000000ffff0000ull;
+    __asm__ volatile("shrdq $16, %[s], (%[p])" GET_FLAGS : [f] "=&r"(f) : [s] "r"(0x1111ull), [p] "r"(&m) : "memory", "cc");
+    report("shrd64 mem", m, 0, f & ~0x800ull);
+}
+
 int guest_main(int argc, char **argv) {
     (void)argc; (void)argv;
     t_cmpxchg();
@@ -160,6 +177,7 @@ int guest_main(int argc, char **argv) {
     t_lock_alu();
     t_cmpxchg8b16b();
     t_bitops();
+    t_shxd();
     g_puts("atomics hash ");
     g_putu(g_hash);
     g_puts("\n");

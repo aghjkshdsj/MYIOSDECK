@@ -646,6 +646,16 @@ static int decode_one_inner(Dec *d) {
         if ((d->reg & 7) < 4) return unimplemented(d, "0f ba /0-3");
         emit_bitop(d, d->reg & 3, bits, 1);
         return 0;
+    case 0xa4: case 0xa5: case 0xac: case 0xad: {  // shld/shrd r/m, r, imm8|cl
+        modrm(d);
+        uint64_t cnt = (op & 1) ? 0 : rd_u8(d);
+        Uop *u = emit(d, named(d->is_mem ? "shxd_M" : "shxd_R"));
+        u->cc = (uint8_t)si_of(bits); u->aux = (uint64_t)((op >= 0xac) | ((op & 1) << 1)); u->imm = cnt;
+        u->src = gpr(d, d->reg, bits);
+        if (d->is_mem) set_mem(d, u); else u->dst = gpr(d, d->rm, bits);
+        meta(d)->reads = 1;   // a zero count leaves the flags alone
+        return 0;
+    }
     case 0xb0: case 0xb1: case 0xc0: case 0xc1: {  // cmpxchg, xadd r/m, r
         int sz = (op & 1) ? bits : 8, is_xadd = op >= 0xc0;
         modrm(d);
