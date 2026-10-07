@@ -15,6 +15,7 @@ output.mkdir(parents=True, exist_ok=True)
 arm = platform.machine() == "aarch64"
 specs = {"integer": 3, "float": 16, "memory": 50, "branch": 6, "simd": 150}
 data = {"architecture": platform.machine(), "trials": {}, "errors": []}
+hello_outputs = {}
 
 def run(cmd):
     p = subprocess.run(cmd, text=True, capture_output=True, timeout=240)
@@ -24,21 +25,30 @@ def run(cmd):
 
 hello_guest = str(pathlib.Path(guests) / "hello.elf")
 try:
-    # hello contains a timer and host-dependent CPUID strings. Preserve all raw
-    # outputs; compare deterministic prose and validate the variable fields.
     reference = (pathlib.Path(guests) / "hello-native.txt").read_text()
-    def normalized(s):
-        s = re.sub(r"10M-iteration loop: [0-9]+ us", "10M-iteration loop: <time> us", s)
-        s = re.sub(r"Guest CPU vendor: [^\n]*", "Guest CPU vendor: <vendor>", s)
-        s = re.sub(r"Guest CPU brand:  [^\n]*", "Guest CPU brand:  <brand>", s)
-        return re.sub(r"SSE2 (yes|no) \| SSE4\.2 (yes|no) \| AVX (yes|no)", "<features>", s)
+    hello_outputs["native x86 fixture"] = reference
+    (output / "hello-native.txt").write_text(reference)
+    def validate_hello(s, engine):
+        lines = s.splitlines(keepends=True)
+        ref = reference.splitlines(keepends=True)
+        if len(lines) != 5 or len(lines) != len(ref) or lines[0] != ref[0]:
+            raise RuntimeError(f"{engine}: hello line count or greeting differs")
+        patterns = [r"Guest CPU vendor: [\x20-\x7e]{12}\n",
+                    r"Guest CPU brand:  [\x20-\x7e]+\n",
+                    r"SSE2 yes \| SSE4\.2 (yes|no) \| AVX (yes|no)\n",
+                    r"10M-iteration loop: [1-9][0-9]* us\n"]
+        for line, pattern in zip(lines[1:], patterns):
+            if not re.fullmatch(pattern, line):
+                raise RuntimeError(f"{engine}: invalid hello field {line!r}")
+        # This is the documented CPUID contract, also tested with instruction
+        # probes. Do not advertise unimplemented SSE4.2 or AVX instruction sets.
+        if engine == "astra" and lines[3] != "SSE2 yes | SSE4.2 no | AVX no\n":
+            raise RuntimeError("Astra CPUID feature advertisement is incorrect")
     for engine, binary in (("astra", astra), ("fxi", fxi)):
         value = run([binary, hello_guest])
+        hello_outputs[engine] = value
         (output / f"hello-{engine}.txt").write_text(value)
-        if normalized(value) != normalized(reference):
-            raise RuntimeError(f"{engine} hello deterministic output mismatch")
-        if not re.search(r"10M-iteration loop: [0-9]+ us", value):
-            raise RuntimeError(f"{engine} hello missing timed loop")
+        validate_hello(value, engine)
     data["hello_normalized_match"] = True
     data["hello_literal_match"] = False
 except Exception as e:
@@ -87,8 +97,10 @@ means = {k: statistics.mean(v) if len(v) == 5 else None for k, v in percentages.
 data["mean_percent"] = means
 data["performance_gate"] = arm and not data["errors"] and means["astra"] is not None and means["astra"] >= 12
 lines += ["", f"Arithmetic means: {means}", "",
-          f"ARM64 performance gate (normalized hello): **{data['performance_gate']}**.",
-          "Hello comparison normalizes elapsed time and CPUID identity/features; raw output is archived. Literal equality is not claimed."]
+          f"ARM64 performance gate (approved hello field rules): **{data['performance_gate']}**.",
+          "Hello: exact greeting, labels, formatting and line count; printable nonempty CPU identity (12-byte vendor), SSE2=yes, Astra SSE4.2/AVX=no, positive loop time, exit=0."]
+for engine, raw in hello_outputs.items():
+    lines += ["", f"### Raw hello: {engine}", "```text", raw.rstrip("\n"), "```"]
 if data["errors"]:
     lines += ["", "Errors:", "```", *data["errors"], "```"]
 summary = "\n".join(lines) + "\n"
