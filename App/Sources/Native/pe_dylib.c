@@ -2,11 +2,12 @@
 // No-JIT Windows code, milestone A spike. See pe_dylib.h and docs/NO_JIT_WINDOWS.md.
 //
 // engine/pedylib/pe2dylib.py lays a PE image out as mapped (every section at its RVA,
-// sections 16 KB aligned) inside __TEXT of a dylib, which the IPA step signs. dyld maps
-// it like any library: the whole image is then signed, readable and executable. Here:
-//   1. every page of a non-code section is replaced by anonymous read-write memory at
-//      the same address with the same bytes (code pages are never touched, and stay
-//      signed and executable: no JIT involved at any point);
+// sections 16 KB aligned) across two segments of a dylib, which the IPA step signs:
+// headers + code in __TEXT (signed, r-x), every data section in __DATA (rw,
+// copy-on-write) directly behind it. dyld maps it like any library. Here:
+//   1. check that layout (code pages below the split, data pages above it). Pages dyld
+//      mapped cannot be replaced: iOS fails mmap(MAP_FIXED) over them with EPERM
+//      (build 42), so data must be writable from the start;
 //   2. base relocations are applied (only data pages may need them);
 //   3. imports are resolved against the app (myiosdeck.dll);
 //   4. for ARM64EC, the dispatch pointers in the CHPE metadata are filled the way
@@ -121,7 +122,8 @@ static bool pe_load(const char *path, pe_image *pe, char *err, size_t errlen) {
     void *h = dlopen(path, RTLD_NOW | RTLD_LOCAL);
     if (!h) FAIL("dlopen: %s", dlerror());
     uint8_t *img = dlsym(h, "myiosdeck_pe_image"), *end = dlsym(h, "myiosdeck_pe_image_end");
-    if (!img || !end) FAIL("no myiosdeck_pe_image symbol in the dylib");
+    uint8_t *data = dlsym(h, "myiosdeck_pe_data");
+    if (!img || !end || !data) FAIL("no myiosdeck_pe_image/_data symbols in the dylib");
     if (img[0] != 'M' || img[1] != 'Z') FAIL("no MZ header at %p", (void *)img);
     const uint8_t *nt = img + rd32(img + 0x3C);
     if (memcmp(nt, "PE\0\0", 4)) FAIL("no PE header");
@@ -140,30 +142,20 @@ static bool pe_load(const char *path, pe_image *pe, char *err, size_t errlen) {
     mid_log("[pe-dylib] dlopen ok: image %p+0x%zx machine 0x%x, %u sections, preferred base 0x%llx", (void *)img,
             pe->size, pe->machine, pe->nsec, (unsigned long long)pe->image_base);
 
-    // 1. Data pages -> anonymous RW copies (code pages stay as dyld mapped them).
+    // 1. Layout: code pages in __TEXT below `data`, data pages in __DATA from `data` on.
     size_t npages;
     kinds = page_kinds(pe, &npages);
-    size_t code_pages = 0, data_pages = 0;
+    size_t split = (size_t)(data - img) / PE_PAGE, code_pages = 0, data_pages = 0;
+    if ((size_t)(data - img) % PE_PAGE) FAIL("__DATA payload at +0x%zx is not page aligned", (size_t)(data - img));
     for (size_t p = 0; p < npages; p++) {
         if (kinds[p] == 3) FAIL("page +0x%zx holds code and data (rebuild with 16 KB section alignment)", p * PE_PAGE);
+        if (kinds[p] == 1 && p >= split) FAIL("code page +0x%zx is in __DATA (not executable)", p * PE_PAGE);
+        if (kinds[p] == 2 && p < split) FAIL("data page +0x%zx is in __TEXT (not writable)", p * PE_PAGE);
         code_pages += kinds[p] == 1;
+        data_pages += kinds[p] == 2;
     }
-    for (size_t p = 0; p < npages;) {
-        if (kinds[p] != 2) { p++; continue; }
-        size_t q = p;
-        while (q < npages && kinds[q] == 2) q++;
-        uint8_t *at = img + p * PE_PAGE;
-        size_t len = (q - p) * PE_PAGE;
-        void *copy = malloc(len);
-        memcpy(copy, at, len);
-        void *r = mmap(at, len, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE | MAP_ANON, -1, 0);
-        if (r != at) { int e = errno; free(copy); FAIL("mmap RW over data pages %p+0x%zx: %s", (void *)at, len, strerror(e)); }
-        memcpy(at, copy, len);
-        free(copy);
-        data_pages += q - p;
-        p = q;
-    }
-    mid_log("[pe-dylib] %zu code pages stay signed RX in place, %zu data pages now RW", code_pages, data_pages);
+    mid_log("[pe-dylib] %zu code pages signed RX in __TEXT, %zu data pages RW in __DATA from +0x%zx", code_pages,
+            data_pages, split * PE_PAGE);
 
     // 2. Base relocations.
     int64_t delta = (int64_t)((uintptr_t)img - pe->image_base);

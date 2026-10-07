@@ -15,7 +15,7 @@ writes runtime thunks into the pool, and runs the game's x86-64 code through FEX
 
 | | Step | What it takes |
 |---|---|---|
-| A | Wine's ARM64EC DLLs run from **signed dylibs** | Rebuild the PE side with 16 KB section alignment; each image wrapped by `engine/pedylib/pe2dylib.py` in `__TEXT` of a dylib; at load, data pages become RW copies in place, code pages are never written. Everything Madeira patches in `.text` at load has to be done at build time instead (x18 sites → trampolines inside the image, syscall-stub literal pools → data). |
+| A | Wine's ARM64EC DLLs run from **signed dylibs** | Rebuild the PE side with 16 KB section alignment; each image wrapped by `engine/pedylib/pe2dylib.py` as a dylib: headers + code in signed `__TEXT` (r-x), data in `__DATA` (rw) right behind it, so RVAs hold and code is never written (iOS refuses mmap over dyld-mapped pages, build 42). Everything Madeira patches in `.text` at load has to be done at build time instead (x18 sites → trampolines inside the image, syscall-stub literal pools → data). |
 | B | ntdll's unix loader maps those images | `loader_ios.c` / `virtual_ios.c`: when JIT is off, take the image from the dylib instead of copying it into the pool. |
 | C | No runtime-generated code | Every pool trampoline/thunk becomes fixed code compiled into the app. |
 | D | **FXI** as the x86-64 CPU | Replaces FEX/xtajit64 behind the ARM64EC emulator interface (`__os_arm64x_*` dispatch, `BTCpu*` exports): GS → TEB, x64 ⇄ ARM64EC calling convention transitions, exceptions/unwinding, threads. |
