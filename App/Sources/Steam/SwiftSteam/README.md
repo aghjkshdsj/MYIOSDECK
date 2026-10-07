@@ -8,6 +8,8 @@ Copied unchanged from [Madeira](https://github.com/willfaust/Madeira)
 (the commit pinned in `engine/wine/PIN` and `engine/dxmt/PIN`). Licence:
 GPL-3.0-or-later with the Madeira Converter Exception, as in each file's header.
 
-MYIOSDECK supplies the two app types it uses (`MadeiraConfig`, `LogStore.log`)
+`../SteamInstall.swift` and `../SteamKeyValues.swift` (install paths, VDF
+parser) come unchanged from the same commit's `app/Madeira/`; SwiftSteam uses
+them. MYIOSDECK supplies the two app types it uses (`MadeiraConfig`, `LogStore.log`)
 in `../MadeiraShims.swift`. Keep local changes out of this folder so it can be
 refreshed from a newer Madeira commit.
