@@ -6,7 +6,7 @@ name: Stage 2 - Wine unix side
 on:
   push:
     branches: [main]
-    paths: ["engine/wine/build-unix.sh", "engine/wine/PIN", ".github/workflows/wine-unix.yml"]
+    paths: ["engine/wine/build-unix.sh", "engine/wine/PIN", "engine/wine/patches/**", ".github/workflows/wine-unix.yml"]
   workflow_dispatch:
 
 permissions:

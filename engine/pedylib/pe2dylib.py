@@ -389,7 +389,7 @@ def cmd_convert(a):
           % (patched, len(tramp) >> 10, skipped, len(after)))
     img = bytes(pe.image) + bytes(img_size - len(pe.image))
     os.makedirs(a.outdir, exist_ok=True)
-    stem = os.path.splitext(pe.name)[0]
+    stem = pe.name.lower() if a.keep_ext else os.path.splitext(pe.name)[0]
     for part, data in (("tramp", tramp), ("text", img[:split]), ("data", img[split:])):
         with open(os.path.join(a.outdir, "%s.%s.img" % (stem, part)), "wb") as f:
             f.write(data)
@@ -465,6 +465,8 @@ def main():
     c.add_argument("dll")
     c.add_argument("outdir")
     c.add_argument("--strict", action="store_true")
+    c.add_argument("--keep-ext", action="store_true",
+                   help="name outputs after the full file name (kernel32.dll -> libkernel32.dll.dylib), as Wine looks them up")
     c.set_defaults(fn=cmd_convert)
     d = sub.add_parser("audit")
     d.add_argument("dlls", nargs="+")

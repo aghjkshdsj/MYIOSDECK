@@ -173,30 +173,42 @@ bool mid_wine_boot(const char *prefix, const char *exe, const char *args, char *
         snprintf(err, errlen, "Wine already ran in this app session; restart MYIOSDECK to start another program");
         return false;
     }
-    if (!mid_jit_pool_ready()) {
-        snprintf(err, errlen, "Wine needs JIT: enable it first");
-        return false;
-    }
-    /* Give Wine everything left in the pool after the stage-1 engine's code.
-     * Its loader copies PE code sections here and runs them from the RX view. */
-    size_t used = (mid_jit_pool_used() + 0x3FFFu) & ~(size_t)0x3FFF;
-    size_t left = mid_jit_pool_size() > used ? mid_jit_pool_size() - used : 0;
-    if (left < (256u << 20)) {
-        snprintf(err, errlen, "Only %zu MB of JIT pool left; set the pool to 1 GB and enable JIT again", left >> 20);
-        return false;
-    }
-    void *rx = mid_jit_pool_alloc(left);
-    if (!rx) {
-        snprintf(err, errlen, "JIT pool allocation for Wine failed");
-        return false;
-    }
+    /* No-JIT (docs/NO_JIT_WINDOWS.md step B): the caller set WINE_IOS_NOJIT=1 and
+     * MYIOSDECK_PE_DIR; Wine maps its DLLs from the signed dylibs there and gets no pool. */
+    const char *nojit = getenv("WINE_IOS_NOJIT");
+    bool no_jit = nojit && *nojit == '1';
     char buf[32];
-    snprintf(buf, sizeof buf, "%llx", (unsigned long long)(uintptr_t)rx);
-    setenv("WINE_IOS_JIT_RX", buf, 1);
-    snprintf(buf, sizeof buf, "%llx", (unsigned long long)((uintptr_t)rx + (uintptr_t)mid_jit_pool_write_offset()));
-    setenv("WINE_IOS_JIT_RW", buf, 1);
-    snprintf(buf, sizeof buf, "%llx", (unsigned long long)left);
-    setenv("WINE_IOS_JIT_SIZE", buf, 1);
+    void *rx = NULL;
+    size_t left = 0;
+    if (no_jit) {
+        unsetenv("WINE_IOS_JIT_RX");
+        unsetenv("WINE_IOS_JIT_RW");
+        unsetenv("WINE_IOS_JIT_SIZE");
+    } else {
+        if (!mid_jit_pool_ready()) {
+            snprintf(err, errlen, "Wine needs JIT: enable it first");
+            return false;
+        }
+        /* Give Wine everything left in the pool after the stage-1 engine's code.
+         * Its loader copies PE code sections here and runs them from the RX view. */
+        size_t used = (mid_jit_pool_used() + 0x3FFFu) & ~(size_t)0x3FFF;
+        left = mid_jit_pool_size() > used ? mid_jit_pool_size() - used : 0;
+        if (left < (256u << 20)) {
+            snprintf(err, errlen, "Only %zu MB of JIT pool left; set the pool to 1 GB and enable JIT again", left >> 20);
+            return false;
+        }
+        rx = mid_jit_pool_alloc(left);
+        if (!rx) {
+            snprintf(err, errlen, "JIT pool allocation for Wine failed");
+            return false;
+        }
+        snprintf(buf, sizeof buf, "%llx", (unsigned long long)(uintptr_t)rx);
+        setenv("WINE_IOS_JIT_RX", buf, 1);
+        snprintf(buf, sizeof buf, "%llx", (unsigned long long)((uintptr_t)rx + (uintptr_t)mid_jit_pool_write_offset()));
+        setenv("WINE_IOS_JIT_RW", buf, 1);
+        snprintf(buf, sizeof buf, "%llx", (unsigned long long)left);
+        setenv("WINE_IOS_JIT_SIZE", buf, 1);
+    }
     uint64_t wb, ws;
     if (mid_exe_window(&wb, &ws)) {
         snprintf(buf, sizeof buf, "%llx:%llx", (unsigned long long)wb, (unsigned long long)ws);
@@ -208,7 +220,11 @@ bool mid_wine_boot(const char *prefix, const char *exe, const char *args, char *
     if (args && *args) setenv("MADEIRA_ARGS", args, 1); else unsetenv("MADEIRA_ARGS");
     mid_capture_stdio();
     follow_wine_log(prefix);
-    mid_log("[wine] JIT slice for Wine: RX=%p size=%zu MB", rx, left >> 20);
+    if (no_jit)
+        mid_log("[wine] NO JIT: Wine maps its DLLs from the signed dylibs in %s (cs_flags=0x%x)",
+                getenv("MYIOSDECK_PE_DIR"), mid_cs_flags());
+    else
+        mid_log("[wine] JIT slice for Wine: RX=%p size=%zu MB", rx, left >> 20);
 
     if (wineserver_start(prefix) != 0) {
         snprintf(err, errlen, "wineserver failed to start");

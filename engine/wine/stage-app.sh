@@ -27,6 +27,29 @@ fi
 A="$M/app/Madeira"
 ls "$A/arm64ec-windows/ntdll.dll" "$A/arm64ec-windows/xtajit64.dll" "$A/prefix-template.tar.gz" > /dev/null
 
+# No-JIT step B: with MYIOSDECK_NOJIT_EMULATOR set, system32\xtajit64.dll points at the stub
+# emulator (engine/pedylib/emu) instead of FEX, which needs JIT.
+python3 - "$A/WineProcessBridge.m" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+mark = "MYIOSDECK_NOJIT_EMULATOR"
+anchor = 'dprintf(STDERR_FILENO, "[WineProc] Symlinked %d DLLs from %s -> sys32\\n", linked, bundle_subdir);\n'
+if mark not in s:
+    assert s.count(anchor) == 1, "WineProcessBridge.m anchor"
+    s = s.replace(anchor, anchor + r'''            {
+                const char *emu = getenv("MYIOSDECK_NOJIT_EMULATOR");
+                if (emu && *emu) {
+                    NSString *dst = [sys32Dir stringByAppendingPathComponent:@"xtajit64.dll"];
+                    [fm removeItemAtPath:dst error:nil];
+                    BOOL ok = [fm createSymbolicLinkAtPath:dst withDestinationPath:[NSString stringWithUTF8String:emu] error:nil];
+                    dprintf(STDERR_FILENO, "[WineProc] no-JIT: xtajit64.dll -> %s (%s)\n", emu, ok ? "ok" : "FAILED");
+                }
+            }
+''')
+    open(p, "w").write(s)
+PY
+
 LINK=""
 for f in "$LIBS"/*.a; do LINK="$LINK \$(SRCROOT)/${f#"$ROOT/"}"; done
 mkdir -p "$ROOT/Config" "$ROOT/App/Generated"

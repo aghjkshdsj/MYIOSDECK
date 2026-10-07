@@ -119,6 +119,23 @@ jobs:
           mkdir -p App/Generated/pedylib
           python3 engine/pedylib/pe2dylib.py convert engine/wine/madeira/app/Madeira/arm64ec-windows/ntdll.dll \
             App/Generated/pedylib | tail -4
+          # No-JIT step B: every Wine PE file that fits the scheme becomes a signed dylib (PE/wine),
+          # named by file name as Wine looks it up. xtajit64 (FEX) is replaced by the stub emulator.
+          FARM=engine/wine/madeira/app/Madeira/arm64ec-windows
+          mkdir -p App/Generated/pedylib/wine
+          ok=0; skip=0
+          for f in "$FARM"/*; do
+            [ -f "$f" ] || continue
+            [ "$(basename "$f")" = xtajit64.dll ] && continue
+            if python3 engine/pedylib/pe2dylib.py convert --strict --keep-ext "$f" App/Generated/pedylib/wine > /dev/null 2>&1; then
+              ok=$((ok + 1))
+            else
+              skip=$((skip + 1)); echo "not converted: $(basename "$f")"
+            fi
+          done
+          # Wine runs bare-name programs from system32, which Madeira links to the farm.
+          [ -f App/Generated/pedylib/winepe/hello-arm64ec.exe ] && cp App/Generated/pedylib/winepe/hello-arm64ec.exe "$FARM/"
+          echo "- No-JIT Wine: $ok PE files as signed dylibs, $skip not converted" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Build without Wine
         if: steps.wine.outcome != 'success'
@@ -151,6 +168,11 @@ jobs:
           mkdir -p App/Generated/PE
           bash engine/pedylib/link-dylibs.sh App/Generated/pedylib ||
             echo "::warning::Spike dylibs did not link; this IPA has no DLL test."
+          if [ -d App/Generated/pedylib/wine ]; then
+            bash engine/pedylib/link-dylibs.sh App/Generated/pedylib/wine App/Generated/PE/wine ||
+              echo "::warning::Wine dylibs did not link; this IPA cannot run Wine without JIT."
+            cp App/Generated/pedylib/winepe/xtajit64.dll App/Generated/PE/wine/ 2>/dev/null || true
+          fi
 
       - name: Generate Xcode project
         run: xcodegen generate
@@ -177,11 +199,10 @@ jobs:
           [ ! -f "$MSC" ] || codesign --force --sign - --timestamp=none "$MSC"
           # No-JIT spike: Windows DLLs as signed dylibs (engine/pedylib).
           PEDYLIBS=0
-          for f in Payload/MYIOSDECK.app/PE/*.dylib; do
-            [ -f "$f" ] || continue
-            codesign --force --sign - --timestamp=none "$f"
+          while IFS= read -r f; do
+            codesign --force --sign - --timestamp=none "$f" 2>/dev/null
             PEDYLIBS=$((PEDYLIBS + 1))
-          done
+          done < <(find Payload/MYIOSDECK.app/PE -name '*.dylib' 2>/dev/null)
           codesign --force --sign - --entitlements App/MYIOSDECK.entitlements --timestamp=none Payload/MYIOSDECK.app
           codesign -d --entitlements - Payload/MYIOSDECK.app || true
           FLAVOR=""

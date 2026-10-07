@@ -220,13 +220,14 @@ struct LibraryView: View {
                         }
                         Spacer()
                         Button("Play") {
-                            withJIT {
+                            let launch = {
                                 wine.run(p)
                                 if p.graphics, case .booting = wine.state {
                                     surfaceTitle = p.title
                                     showSurface = true
                                 }
                             }
+                            if p.noJIT { launch() } else { withJIT(launch) }
                         }
                             .buttonStyle(DeckButtonStyle())
                             .frame(width: 90)

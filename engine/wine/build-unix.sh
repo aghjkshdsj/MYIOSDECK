@@ -82,6 +82,10 @@ step_deps() {
 }
 
 step_ntdll() {
+    # No-JIT step B: map PE images from signed dylibs when WINE_IOS_NOJIT=1
+    # (engine/wine/patches/nojit_dylib.py). Start from the pristine file: the checkout is cached.
+    git -C "$M" checkout -- build/ntdll-unix/virtual_ios.c
+    python3 "$HERE/patches/nojit_dylib.py" "$M"
     # dwrite's unix side wants generated headers from the PE tree; the native
     # tree generates the same headers (include/all), so use that instead.
     sed -i '' 's#wine/build-arm64ec/include#wine/build-macos/include#g' "$M/build/ntdll-unix/build.sh"

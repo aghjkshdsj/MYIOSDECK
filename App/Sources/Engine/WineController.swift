@@ -13,10 +13,20 @@ final class WineController: ObservableObject, @unchecked Sendable {
         let title: String
         let detail: String
         var graphics = false  // opens a window: shown on the game surface (stage 3)
+        /// Runs without JIT: Wine's DLLs from signed dylibs, no x64 code (docs/NO_JIT_WINDOWS.md).
+        var noJIT = false
+    }
+
+    /// The signed Wine dylibs (engine/pedylib), present when CI converted the DLL farm.
+    static let peWineDir = Bundle.main.bundlePath + "/PE/wine"
+    static var noJITWineAvailable: Bool {
+        FileManager.default.fileExists(atPath: peWineDir + "/libntdll.dll.dylib")
     }
 
     /// Madeira's test programs, shipped in the ARM64EC DLL farm.
     static let programs = [
+        Program(id: "hello-arm64ec.exe", title: "Windows Hello (ARM64EC, no JIT)",
+                detail: "Wine from signed dylibs, no JIT needed: native Windows ARM code only", noJIT: true),
         Program(id: "hello-x64.exe", title: "Windows Hello (x64)", detail: "Console hello world through Wine + FEX ARM64EC"),
         Program(id: "fib-x64.exe", title: "Fibonacci (x64)", detail: "Recursive CPU test: x86-64 call/ret through FEX"),
         Program(id: "clocktest-x64.exe", title: "Clock test (x64)", detail: "Windows timers and QueryPerformanceCounter"),
@@ -78,6 +88,21 @@ final class WineController: ObservableObject, @unchecked Sendable {
         case .booting, .running, .finished:
             return refuse("Wine already ran a program in this session. Restart MYIOSDECK to run another.")
         default: break
+        }
+        // No JIT: Wine maps its DLLs from the signed dylibs and loads the stub x64 emulator.
+        // With JIT, every program (this one too) takes the usual JIT-pool path.
+        if program.noJIT && !mid_jit_pool_ready() {
+            guard Self.noJITWineAvailable else {
+                return refuse("This build has no signed Wine DLLs (no-JIT Wine).")
+            }
+            setenv("WINE_IOS_NOJIT", "1", 1)
+            setenv("MYIOSDECK_PE_DIR", Self.peWineDir, 1)
+            setenv("MYIOSDECK_NOJIT_EMULATOR", Self.peWineDir + "/xtajit64.dll", 1)
+            setenv("MADEIRA_USE_ARM64EC", "1", 1)
+            dlog("[wine] no-JIT session: DLLs from \(Self.peWineDir)")
+        } else {
+            for k in ["WINE_IOS_NOJIT", "MYIOSDECK_PE_DIR", "MYIOSDECK_NOJIT_EMULATOR"] { unsetenv(k) }
+            if program.noJIT { setenv("MADEIRA_USE_ARM64EC", "1", 1) }
         }
         state = .booting(program.title)
         // Controller API for this session (Settings › Controller). Must be in the

@@ -53,5 +53,21 @@ fail=0
 for arch in aarch64 arm64ec; do
     ( set -e; build_one "$arch" ) || { echo "::warning::spike DLL for $arch failed"; fail=1; }
 done
+
+# Step B (Wine without JIT): the stub x64 emulator Wine loads as xtajit64.dll, and an
+# ARM64EC Windows Hello. PE files go to $OUT/winepe (bundled as is: Wine opens the files),
+# their signed-dylib sources to $OUT/wine (named by full file name, as Wine looks them up).
+build_wine_extras() {
+    local EC=(-target arm64ec-w64-mingw32 -O2 -fno-stack-protector -Wl,--section-alignment=0x4000)
+    mkdir -p "$OUT/winepe" "$OUT/wine"
+    arm64ec-w64-mingw32-clang "${EC[@]}" -shared -nostdlib -o "$OUT/winepe/xtajit64.dll" \
+        "$HERE/emu/xtajit64_stub.c" "$HERE/spike/arm64ec_crt.c" -lntdll
+    arm64ec-w64-mingw32-clang "${EC[@]}" -o "$OUT/winepe/hello-arm64ec.exe" "$HERE/hello/hello-arm64ec.c"
+    llvm-readobj --coff-imports "$OUT/winepe/hello-arm64ec.exe" | grep -E 'Name:' | head -20 || true
+    for f in "$OUT/winepe/xtajit64.dll" "$OUT/winepe/hello-arm64ec.exe"; do
+        python3 "$HERE/pe2dylib.py" convert --strict --keep-ext "$f" "$OUT/wine" | tail -3
+    done
+}
+( set -e; build_wine_extras ) || { echo "::warning::Wine no-JIT extras failed"; fail=1; }
 ls -la "$OUT"
 exit $fail
