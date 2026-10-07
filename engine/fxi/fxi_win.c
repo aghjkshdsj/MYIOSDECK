@@ -60,6 +60,7 @@ FxiCpu *fxi_win_cpu_new(void) {
     c->vm = g_win_vm;
     c->err = calloc(1, 256);
     c->mxcsr = 0x1f80;
+    fxi_x87_init(c);
     fxi_set_rflags(c, 0x202);
     return c;
 }
@@ -88,6 +89,6 @@ void fxi_win_load_context(FxiCpu *c, const void *ctx) {
     memcpy(c->r, p + 0x78, 16 * 8);              // Rax Rcx Rdx Rbx Rsp Rbp Rsi Rdi R8-R15
     c->rip = ld64((uint64_t)(uintptr_t)(p + 0xf8));
     fxi_set_rflags(c, ld32((uint64_t)(uintptr_t)(p + 0x44)));
+    fxi_x87_fxrstor(c, p + 0x100, 1);            // FltSave (fxsave layout): x87 and XMM0-15
     c->mxcsr = (uint32_t)ld32((uint64_t)(uintptr_t)(p + 0x34));
-    memcpy(c->xmm, p + 0x1a0, 16 * 16);          // FltSave.XmmRegisters
 }

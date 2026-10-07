@@ -606,10 +606,12 @@ static const struct { const char *name; OpFn fn; } kNamed[] = {
 
 OpFn fxi_sse_named(const char *name);      // fxi_sse.c
 OpFn fxi_atomic_named(const char *name);   // fxi_atomic.c
+OpFn fxi_x87_named(const char *name);      // fxi_x87.c
 
 OpFn fxi_named(const char *name) {
     for (size_t i = 0; i < sizeof kNamed / sizeof kNamed[0]; i++)
         if (!strcmp(kNamed[i].name, name)) return kNamed[i].fn;
     OpFn f = fxi_atomic_named(name);
+    if (!f) f = fxi_x87_named(name);
     return f ? f : fxi_sse_named(name);
 }

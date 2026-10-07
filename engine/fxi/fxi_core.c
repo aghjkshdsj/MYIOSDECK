@@ -12,7 +12,7 @@
 
 #include "fxi_internal.h"
 
-#define FXI_VERSION "fxi 0.2 (integer + SSE2 core, atomics)"
+#define FXI_VERSION "fxi 0.3 (integer + SSE2 core, atomics, x87)"
 
 Block *fxi_stop;
 static int g_echo_fd = -1;
@@ -225,6 +225,7 @@ int fxi_run_elf(const uint8_t *elf, size_t len, int argc, const char *const *arg
     c->r[R_SP] = setup_stack(vm, argc, argv);
     c->rip = entry;
     c->mxcsr = 0x1f80;
+    fxi_x87_init(c);
     fxi_set_rflags(c, 0x202);
 
     Block *b = fxi_lookup(c, entry);

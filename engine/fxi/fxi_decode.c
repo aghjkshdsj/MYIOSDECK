@@ -517,6 +517,16 @@ static int decode_one_inner(Dec *d) {
         return 0;
     }
     case 0xc9: emit(d, named("leave")); return 0;
+    case 0x9b: emit(d, named("nop")); return 0;   // fwait: x87 exceptions are never raised
+    case 0xd8: case 0xd9: case 0xda: case 0xdb: case 0xdc: case 0xdd: case 0xde: case 0xdf: {   // x87
+        modrm(d);
+        Uop *u = emit(d, named("x87"));
+        u->aux = (uint64_t)((b - 0xd8) << 8 | d->mod << 6 | (d->reg & 7) << 3 | (d->rm & 7));
+        u->imm = d->rip;
+        if (d->is_mem) set_mem(d, u);
+        meta(d)->reads = 1;   // fcmov reads flags, fcomi writes some
+        return 0;
+    }
     case 0xcc: case 0xf4: { Uop *u = emit(d, named("hlt")); u->aux = d->rip; return 1; }
     case 0xe8: {
         int64_t rel = rd_s32(d);
@@ -666,6 +676,20 @@ static int decode_one_inner(Dec *d) {
         meta(d)->kill = 1;
         return 0;
     }
+    case 0xae:                                     // fxsave fxrstor ldmxcsr stmxcsr clflush / fences
+        modrm(d);
+        if (!d->is_mem) {
+            if ((d->reg & 7) >= 5) { emit(d, named("fence")); return 0; }   // lfence mfence sfence
+            return unimplemented(d, "0f ae reg");
+        }
+        switch (d->reg & 7) {
+        case 0: set_mem(d, emit(d, named("fxsave"))); return 0;
+        case 1: set_mem(d, emit(d, named("fxrstor"))); return 0;
+        case 2: set_mem(d, emit(d, named("ldmxcsr"))); return 0;
+        case 3: set_mem(d, emit(d, named("stmxcsr"))); return 0;
+        case 7: emit(d, named("nop")); return 0;   // clflush
+        }
+        return unimplemented(d, "xsave/xrstor");
     case 0xc7:                                     // cmpxchg8b/16b m
         modrm(d);
         if ((d->reg & 7) != 1 || !d->is_mem) return unimplemented(d, "0f c7");

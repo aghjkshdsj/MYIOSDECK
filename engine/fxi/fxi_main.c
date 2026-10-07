@@ -59,21 +59,46 @@ static int scan_pe(const char *path) {
     if (!pdata || !exc_size) { fprintf(stderr, "%s: no .pdata\n", path); return 2; }
     unsigned nfunc = exc_size / 12;
 
+    // Functions: every .pdata entry, then (leaf functions have no .pdata) the entry point and
+    // every direct call/jmp target found on the way, swept up to the first ret/jmp/int3.
+    uint32_t image_size = u32at(opt + 56);
+    uint8_t *seen = calloc(image_size / 8 + 1, 1);   // one bit per decoded instruction start
+    enum { MAX_WORK = 1 << 16 };
+    static uint32_t work[MAX_WORK];
+    unsigned nwork = 0;
+    work[nwork++] = u32at(opt + 16);                 // AddressOfEntryPoint
     static Miss miss[512];
     unsigned nmiss = 0;
-    unsigned long long insns = 0, bad = 0, invalid = 0, funcs = 0;
-    uint32_t last_begin = ~0u;
-    for (unsigned i = 0; i < nfunc; i++) {
-        uint32_t begin = u32at(pdata + i * 12), end = u32at(pdata + i * 12 + 4);
-        if (begin == last_begin || end <= begin) continue;   // chained entries
-        last_begin = begin;
+    unsigned long long insns = 0, bad = 0, invalid = 0, funcs = 0, leafs = 0;
+    for (unsigned i = 0; i <= nfunc; i++) {
+        uint32_t begin, end;
+        if (i < nfunc) {
+            begin = u32at(pdata + i * 12); end = u32at(pdata + i * 12 + 4);
+            if (end <= begin || end > image_size) continue;
+        } else {
+            if (!nwork) break;
+            begin = work[--nwork]; end = 0; i--;     // stay on the worklist until it is empty
+            if (begin >= image_size || (seen[begin >> 3] >> (begin & 7)) & 1) continue;
+            leafs++;
+        }
         funcs++;
-        for (uint32_t rva = begin; rva < end;) {
+        for (uint32_t rva = begin; end ? rva < end : rva < image_size;) {
+            if ((seen[rva >> 3] >> (rva & 7)) & 1) break;   // joins code already swept
             const unsigned char *p = RVA(rva);
             if (!p) break;
             int op_end = 0, n = fxi_insn_length(p, &op_end);
             if (n <= 0) { invalid++; break; }
+            seen[rva >> 3] |= (uint8_t)(1u << (rva & 7));
             insns++;
+            uint8_t opc = p[op_end - 1];
+            int two_byte = op_end >= 2 && p[op_end - 2] == 0x0f;
+            if (!two_byte && (opc == 0xe8 || opc == 0xe9) && nwork < MAX_WORK) {
+                int32_t rel; memcpy(&rel, p + op_end, 4);
+                work[nwork++] = rva + (uint32_t)n + (uint32_t)rel;
+            }
+            int stop = !end && !two_byte && (opc == 0xc3 || opc == 0xc2 || opc == 0xe9 || opc == 0xeb || opc == 0xcc ||
+                                            (opc == 0xff && ((p[op_end] >> 3) & 7) == 4));
+            if (!end && two_byte && opc == 0x0b) stop = 1;   // ud2
             char why[160];
             if (!fxi_probe(p, base + rva, why, sizeof why)) {
                 bad++;
@@ -93,15 +118,17 @@ static int scan_pe(const char *path) {
                 if (j < nmiss) miss[j].count++;
             }
             rva += (uint32_t)n;
+            if (stop) break;
         }
     }
+    free(seen);
     // Most frequent first.
     for (unsigned a = 0; a < nmiss; a++)
         for (unsigned b = a + 1; b < nmiss; b++)
             if (miss[b].count > miss[a].count) { Miss t = miss[a]; miss[a] = miss[b]; miss[b] = t; }
     const char *name = strrchr(path, '/'); name = name ? name + 1 : path;
-    printf("### %s (machine %#x): %llu functions, %llu instructions, %llu not implemented (%u kinds)%s\n\n",
-           name, machine, funcs, insns, bad, nmiss, invalid ? ", some bytes undecodable" : "");
+    printf("### %s (machine %#x): %llu functions (%llu without .pdata), %llu instructions, %llu not implemented (%u kinds)%s\n\n",
+           name, machine, funcs, leafs, insns, bad, nmiss, invalid ? ", some bytes undecodable" : "");
     if (nmiss) {
         printf("| count | instruction (prefixes + opcode) | first at | example |\n|---|---|---|---|\n");
         for (unsigned j = 0; j < nmiss; j++)

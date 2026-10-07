@@ -55,6 +55,11 @@ struct FxiCpu {
     uint32_t lf_cin;         // carry in (ADC/SBB/INC/DEC), CF=OF for MUL, raw RFLAGS for LF_RAW
     uint32_t df;             // direction flag
     uint32_t mxcsr;
+    // x87 (fxi_x87.c), values as double: ST(i) = st[(fpu_top + i) & 7]
+    double st[8];
+    uint32_t fpu_top;
+    uint32_t fpu_tags;       // bit p set: physical register p is empty
+    uint16_t fcw, fsw;       // control word; status word condition bits (top lives in fpu_top)
     // Run state
     int stop;                // nonzero: leave the dispatch chain
     long long exit_code;
@@ -150,6 +155,12 @@ Block *fxi_lookup(FxiCpu *c, uint64_t rip);     // translate on miss; fxi_stop o
 Block *fxi_translate(struct Fxi *vm, uint64_t rip);
 int fxi_insn_length(const uint8_t *p, int *op_end);   // x86-64 length (0: invalid)
 int fxi_probe(const uint8_t *p, uint64_t rip, char *why, size_t why_len);   // 1: FXI decodes it
+// x87 (fxi_x87.c)
+void fxi_x87_init(FxiCpu *c);                                   // fninit state
+void fxi_x87_fxsave(FxiCpu *c, uint8_t *p, int with_xmm);       // fxsave / CONTEXT FltSave layout
+void fxi_x87_fxrstor(FxiCpu *c, const uint8_t *p, int with_xmm);
+double fxi_f80_load(const uint8_t *p);
+void fxi_f80_store(uint8_t *p, double v);
 void fxi_fail(FxiCpu *c, const char *fmt, ...); // set c->stop and the error text
 long fxi_syscall(FxiCpu *c);                    // Linux syscall in RAX/RDI/...; returns result
 struct Fxi *fxi_vm_new(void);                   // empty block cache, stop block ready

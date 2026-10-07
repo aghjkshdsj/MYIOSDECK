@@ -15,16 +15,19 @@ else
     echo "hello: FAILED"; cat /tmp/fxi_hello.txt; fail=1
 fi
 
-echo "== atomics =="
-"$G/atomics.elf" > /tmp/native_atomics.txt
-"$FXI" "$G/atomics.elf" > /tmp/fxi_atomics.txt 2> /tmp/fxi_atomics_err.txt
-if diff -u /tmp/native_atomics.txt /tmp/fxi_atomics.txt; then
-    echo "atomics: match ($(wc -l < /tmp/native_atomics.txt) lines)"
-    echo "atomics (cmpxchg/xadd/xchg/lock ALU/cmpxchg16b/bt*): **match**" >> "$summary"
-else
-    echo "atomics: MISMATCH"; cat /tmp/fxi_atomics_err.txt; fail=1
-    echo "atomics: **MISMATCH** $(tail -1 /tmp/fxi_atomics_err.txt)" >> "$summary"
-fi
+# Exact-output tests: atomics (cmpxchg/xadd/xchg/lock ALU/cmpxchg16b/bt*/shld/shrd), x87.
+for t in atomics x87; do
+    echo "== $t =="
+    "$G/$t.elf" > "/tmp/native_$t.txt"
+    "$FXI" "$G/$t.elf" > "/tmp/fxi_$t.txt" 2> "/tmp/fxi_${t}_err.txt"
+    if diff -u "/tmp/native_$t.txt" "/tmp/fxi_$t.txt"; then
+        echo "$t: match ($(wc -l < "/tmp/native_$t.txt") lines)"
+        echo "- $t: **match** (output identical to native)" >> "$summary"
+    else
+        echo "$t: MISMATCH"; cat "/tmp/fxi_${t}_err.txt"; fail=1
+        echo "- $t: **MISMATCH** $(tail -1 "/tmp/fxi_${t}_err.txt")" >> "$summary"
+    fi
+done
 
 {
     echo "## FXI vs native (x86-64 CI host)"
