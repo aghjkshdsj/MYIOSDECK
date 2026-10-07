@@ -42,7 +42,7 @@ sideload edition (FEX, ~90% of native) stays the full-speed option, from the sam
   Madeira's FEX fork at `...\claude\fex` (ARM64EC frontend: `Source/Windows/ARM64EC/Module.S`,
   `Module.cpp` = the reference for Wine's emulator interface).
 
-## State (2026-10-07, build 61)
+## State (2026-10-07, build 63)
 - **FXI**: no-JIT x86-64 interpreter (`engine/fxi`), 8.1% of native on device. Since build 57 it
   also has a Windows mode (`fxi_win.c`): FS/GS segment slots (r[17]/r[18], `gs:[0x30]` = TEB),
   a thread-safe shared block cache, cached `ec_exit` blocks for jumps into native ARM64EC code.
@@ -95,18 +95,28 @@ sideload edition (FEX, ~90% of native) stays the full-speed option, from the sam
   `engine/guest/x87.c` matches native. The scanner now also follows call/jmp targets from the entry
   point (leaf functions): all 10 Madeira x64 test programs, cube-x64 included, decode 100%.
   `fxi-next` is the side branch for FXI work between device builds (`gh workflow run fxi.yml --ref fxi-next`).
+- **Build 61 result: Windows Hello (x64) runs with JIT off** (2026-10-07): TLS callbacks and main
+  in FXI, "Hello from x86_64 PE ..." printed, exit code 42, app stays up.
+- **Build 63**: x64 exceptions. Each uop carries its instruction address; `fxi_ea` (and the stack
+  and string ops, FXI_TOUCH) record the uop that touches memory, so a host fault has an exact rip
+  (stack ops change RSP after the access). int3 / int n / hlt / ud2 / #DE raise Windows exceptions
+  (FXI_STOP_EXCEPTION). The emulator DLL passes ntdll's native KiUserExceptionDispatcher at
+  ProcessInit (export = ffwd thunk, followed) and forwards ResetToConsistentState; the app
+  (`fxi_win_host.c` raise_x64) packs the x64 state into an ARM64EC context and jumps to the
+  dispatcher on the guest stack (FEX's RethrowGuestException scheme). Threads: the indirect
+  inline cache is one pointer checked against the block's rip (was a two-field race); links are
+  release stores. Cost on CI: integer/memory kernels about -9% (64-byte uops + the cur store).
+  New Library entry **"x64 test suite (no JIT)"** (`engine/pedylib/hello/suite-x64.c`, built
+  in the guests job, scanned by fxi --scan-pe: 47k instructions, 100% decoded): callbacks,
+  float, threads, raise, int3, divide, fault, c++, longjmp, child; `[suite]` lines in the log.
 
 ## Next steps (in order)
 1. FXI instructions for real Windows x64 code, driven by the STOP lines and `fxi --scan-pe`.
    Atomics (build 60), x87 + shld/shrd + 0F AE (build 61) done. Known FXI gaps: no 32-bit
-   addressing, few SSE3+/SSSE3/SSE4, no AVX, no self-modifying-code invalidation, no x64
-   exceptions (int3, guest faults -> SEH).
+   addressing, few SSE3+/SSSE3/SSE4, no AVX, no self-modifying-code invalidation.
    Rebuild loop for FXI alone: `fxi.yml` (Linux checksums) before the IPA.
-2. Until hello-x64 prints: x64 SEH/unwinding and guest faults inside FXI (a host SIGSEGV while
-   interpreting must become a Windows exception for the x64 code), FPCR/MXCSR, `syscall` never
-   expected (x64 ntdll stubs jump to EC code).
-3. Threads (ThreadInit per thread exists; check the inline-cache race in fxi_ops.c INDIRECT:
-   imm/link written non-atomically), NotifyMemoryProtect/Flush for code invalidation.
+2. x64 exceptions (build 63): confirm on device with the suite; rep-string faults are not exact.
+3. Threads (build 63 suite checks them), NotifyMemoryProtect/Flush for code invalidation.
 4. Child processes: one signed ntdll per pseudo-process (ship several separately signed ntdll
    dylibs; today a second mapping of a DLL returns "mapped again -- not supported").
 5. 16 KB-aligned rebuild of the 7 D3D/Metal DLLs (or of the whole PE side) so D3D games load.
