@@ -8,5 +8,8 @@
 	<!-- "Memory+": raises the jetsam limit so games and the JIT pool fit. -->
 	<key>com.apple.developer.kernel.increased-memory-limit</key>
 	<true/>
+	<!-- Larger address space: Unity and other engines reserve multi-GB heaps up front. -->
+	<key>com.apple.developer.kernel.extended-virtual-addressing</key>
+	<true/>
 </dict>
 </plist>
