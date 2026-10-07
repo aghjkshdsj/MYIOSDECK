@@ -68,12 +68,14 @@ struct LibraryView: View {
     /// outside the surface because the Metal host view is above all other views.
     private var gameSurface: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text(surfaceTitle).font(.headline)
+            HStack(spacing: 10) {
+                Text(surfaceTitle).font(.headline).lineLimit(1)
                 Spacer()
-                Button("Close") { showSurface = false }
+                Button("Hide") { showSurface = false }
+                    .frame(width: 60)
+                Button("Quit game") { confirmQuit = true }
                     .buttonStyle(DeckButtonStyle())
-                    .frame(width: 90)
+                    .frame(width: 120)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
@@ -82,7 +84,14 @@ struct LibraryView: View {
                 .ignoresSafeArea(edges: [.bottom, .horizontal])
         }
         .background(Color.black)
+        .confirmationDialog("Quit \(surfaceTitle)?", isPresented: $confirmQuit, titleVisibility: .visible) {
+            Button("Quit game and close MYIOSDECK", role: .destructive) { CrashReporter.shared.quitApp() }
+        } message: {
+            Text("A Windows game can only be stopped by closing MYIOSDECK. Unsaved progress is lost. Open MYIOSDECK again to play another game.")
+        }
     }
+
+    @State private var confirmQuit = false
 
     /// Stage 4: Steam account (SwiftSteam, from Madeira). The owned library and
     /// downloads build on this sign-in.

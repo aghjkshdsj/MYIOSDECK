@@ -54,6 +54,14 @@ final class CrashReporter: ObservableObject {
                         file: LogStore.shared.fileURL)
     }
 
+    /// Quit game: Wine cannot stop a running Windows program (one session per
+    /// app run), so ending the game ends the app. Not reported as a crash.
+    func quitApp() {
+        dlog("[app] quit requested by the user")
+        sceneActive(false)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { exit(0) }   // let the log line reach the file
+    }
+
     /// Foreground: arm the marker. Background: a later exit is not a crash.
     func sceneActive(_ active: Bool) {
         if active {
