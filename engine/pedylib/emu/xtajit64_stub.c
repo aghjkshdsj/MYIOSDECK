@@ -46,12 +46,15 @@ DISPATCH(DispatchJump, 8);
 DISPATCH(RetToEntryThunk, 16);
 DISPATCH(BeginSimulation, 24);
 
-// Call a native app function (Apple arm64 ABI) with one argument. A plain blr: an ARM64EC
-// indirect call would go through __os_arm64x_check_icall, which treats non-EC code as x64.
-static long host_call2(int slot, long arg0, long arg1) {
-    if (!MyiosdeckFxiHost || !MyiosdeckFxiHost[slot]) return (long)0xC0000001;
-    register long x0 __asm__("x0") = arg0;
-    register long x1 __asm__("x1") = arg1;
+// Call a native app function (Apple arm64 ABI) with up to two arguments. A plain blr: an
+// ARM64EC indirect call would go through __os_arm64x_check_icall, which treats non-EC code as
+// x64. Arguments are 64-bit (long long): Windows' long is 32 bits, and build 63 cut the
+// exception dispatcher's address to its low half that way.
+typedef long long hostarg;
+static hostarg host_call2(int slot, hostarg arg0, hostarg arg1) {
+    if (!MyiosdeckFxiHost || !MyiosdeckFxiHost[slot]) return (hostarg)(long)0xC0000001;
+    register hostarg x0 __asm__("x0") = arg0;
+    register hostarg x1 __asm__("x1") = arg1;
     register void *x16 __asm__("x16") = MyiosdeckFxiHost[slot];
     __asm__ volatile("blr x16"
                      : "+r"(x0), "+r"(x1), "+r"(x16)
@@ -60,7 +63,7 @@ static long host_call2(int slot, long arg0, long arg1) {
                        "x30", "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7", "memory", "cc");
     return x0;
 }
-static long host_call(int slot, long arg) { return host_call2(slot, arg, 0); }
+static hostarg host_call(int slot, hostarg arg) { return host_call2(slot, arg, 0); }
 
 // ARM64EC exports are x64 "fast-forward" thunks (mov rax,rsp; mov [rax+20],rbx; push rbp;
 // pop rbp; jmp rel32) whose jmp leads to the native function: native callers follow it.
@@ -79,7 +82,7 @@ EXPORT NTSTATUS WINAPI ProcessInit(void) {
         DbgPrint("[xtajit64-fxi] no host table: this process cannot run x64 code without JIT\n");
         return (NTSTATUS)0xC0000001;
     }
-    return host_call(H_PROCESS_INIT, (long)native_entry((void *)KiUserExceptionDispatcher));
+    return (NTSTATUS)host_call(H_PROCESS_INIT, (hostarg)native_entry((void *)KiUserExceptionDispatcher));
 }
 EXPORT NTSTATUS WINAPI ThreadInit(void) { return host_call(H_THREAD_INIT, 0); }
 EXPORT unsigned char WINAPI BTCpu64IsProcessorFeaturePresent(unsigned int feature) {
@@ -115,7 +118,7 @@ EXPORT void WINAPI NotifyMemoryProtect(void *addr, SIZE_T size, unsigned long pr
 // return (the app re-raises it as an exception of the x64 instruction, on the guest stack).
 EXPORT NTSTATUS WINAPI ResetToConsistentState(void *rec, void *x64ctx, void *arm_ctx) {
     (void)x64ctx;
-    host_call2(H_RESET_TO_CONSISTENT, (long)rec, (long)arm_ctx);
+    host_call2(H_RESET_TO_CONSISTENT, (hostarg)rec, (hostarg)arm_ctx);
     return 0;
 }
 EXPORT void WINAPI UpdateProcessorInformation(void *info) { (void)info; }

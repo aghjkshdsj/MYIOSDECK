@@ -51,12 +51,20 @@ static uint8_t *cpu_area_now(void) {
 static uint64_t g_ki_dispatcher;
 
 static long host_process_init(uint64_t ki_dispatcher) {
+    // iOS maps nothing below 4 GB (__PAGEZERO): a smaller value is a broken pointer (build 63
+    // passed a 32-bit-truncated one); leave exceptions disabled rather than crash on it.
+    if (ki_dispatcher < 0x100000000ull) {
+        mid_log("[fxi-win] FXI is the x64 CPU of this Windows process (no JIT); exception dispatcher %#llx "
+                "UNEXPECTED (not a valid address): x64 exceptions disabled", (unsigned long long)ki_dispatcher);
+        return 0;
+    }
     g_ki_dispatcher = ki_dispatcher;
     // Its first instruction is `sub sp, sp, #0x4d0` (d11343ff) when this is the native entry.
-    uint32_t first = ki_dispatcher ? *(const uint32_t *)(uintptr_t)ki_dispatcher : 0;
+    uint32_t first = *(const uint32_t *)(uintptr_t)ki_dispatcher;
     mid_log("[fxi-win] FXI is the x64 CPU of this Windows process (no JIT); exception dispatcher %#llx "
             "(first insn %08x%s)", (unsigned long long)ki_dispatcher, first,
-            first == 0xd11343ffu ? ", native entry ok" : ", UNEXPECTED");
+            first == 0xd11343ffu ? ", native entry ok" : ", UNEXPECTED: x64 exceptions disabled");
+    if (first != 0xd11343ffu) g_ki_dispatcher = 0;
     return 0;
 }
 
