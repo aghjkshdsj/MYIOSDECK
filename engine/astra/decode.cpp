@@ -42,6 +42,7 @@ Op decode(Cpu *c,U &pc) {
         else if(b==0x66) { d.word=true; d.prefix=1; d.rex=0; }
         else if(b==0xf3) { d.prefix=2; d.rex=0; }
         else if(b==0xf2) { d.prefix=3; d.rex=0; }
+        else if(b==0x2e || b==0x36 || b==0x3e || b==0x26) { d.rex=0; }
         else break;
         b=d.byte();
     }

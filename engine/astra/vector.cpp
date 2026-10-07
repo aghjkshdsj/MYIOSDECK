@@ -27,7 +27,7 @@ template<int Code,int Prefix,bool Memory> ASTRA_CC void vector_op(Cpu *c,Op *p) 
     if constexpr(store) {
         constexpr int n=(Code==0xd6 || Code==0x17)?8:Code==0x7e?0:(Code==0x11 && scalar_fp)?lane:16;
         if constexpr(Code==0x7e) {
-            if(p.width==8) write<8,Memory?MEM:REG>(c,p->b,a.uq[0],p->pc);
+            if(p->width==8) write<8,Memory?MEM:REG>(c,p->b,a.uq[0],p->pc);
             else write<4,Memory?MEM:REG>(c,p->b,a.uw[0],p->pc);
         } else if constexpr(Memory) std::memcpy(checked(c,ea(c,p->b),n,p->pc,true),Code==0x17?(void *)&a.uq[1]:(void *)&a,n);
         else if constexpr(n==16) c->x[p->b.reg]=a;
