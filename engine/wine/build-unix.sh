@@ -114,6 +114,10 @@ PY
 }
 
 step_win32u() {
+    # Game-mode dialogs: off-screen ones moved on screen, WM_SETTEXT logged
+    # (engine/wine/patches/game_dialogs.py). Start from the pristine files: the checkout is cached.
+    git -C "$M" checkout -- build/win32u-unix/driver_ios.c build/win32u-unix/message_ios.c
+    python3 "$HERE/patches/game_dialogs.py" "$M"
     bash "$M/build/win32u-unix/build.sh"
     test -s "$M/app/Madeira/libwin32u_unix.a"
 }
