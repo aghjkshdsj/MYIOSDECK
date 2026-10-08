@@ -42,7 +42,7 @@ sideload edition (FEX, ~90% of native) stays the full-speed option, from the sam
   Madeira's FEX fork at `...\claude\fex` (ARM64EC frontend: `Source/Windows/ARM64EC/Module.S`,
   `Module.cpp` = the reference for Wine's emulator interface).
 
-## State (2026-10-07, build 73)
+## State (2026-10-08, build 75)
 - **FXI**: no-JIT x86-64 interpreter (`engine/fxi`), 8.1% of native on device. Since build 57 it
   also has a Windows mode (`fxi_win.c`): FS/GS segment slots (r[17]/r[18], `gs:[0x30]` = TEB),
   a thread-safe shared block cache, cached `ec_exit` blocks for jumps into native ARM64EC code.
@@ -169,6 +169,15 @@ sideload edition (FEX, ~90% of native) stays the full-speed option, from the sam
   `c->cur` (no exact host-fault rip) and PIND writes `u->link` non-atomically, so Windows mode
   stays on FXI until those are fixed. engine/fxr duplicates engine/fxi: port FXI fixes to both,
   or fold FXR back into engine/fxi once it covers Windows mode.
+- **Build 74 result (iPhone 15 Pro Max, JIT off)**: FXR 11.6% of native vs FXI 8.7% = **1.33x**
+  (integer 20.3% vs 10.9%, float 9.9/8.3, memory 10.9/9.1, branch 8.5/8.5, simd 8.4/7.0), all
+  checksums match. Branch-heavy code gains nothing yet (the indirect/jcc paths go through p_slow
+  or spill). FXR Hello works.
+- **Build 75**: Steam games can start without JIT. Before, Library > Steam > Play always showed
+  "enable JIT" (written before the no-JIT path existed). Now it offers "Play without JIT
+  (experimental)": `runSteamGame` passes `noJIT` to the session setup the no-JIT cubes use;
+  Madeira picks the ARM64EC bundle from the full Win32 path. 32-bit games (PE machine 0x14c) are
+  refused without JIT (FXI is x64 only; Madeira would take WoW64 on the aarch64 core = FEX).
 - Other branches in the repo: `claude/fxr` (FXR's origin), `gpt-astra/interp`.
 
 ## Next steps (in order)
