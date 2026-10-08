@@ -35,6 +35,8 @@ typedef struct {
     int n;
     // Last instruction was a fusable cmp/test (index of its uop, else -1)
     int fuse_at, fuse_op, fuse_form, fuse_si;
+    uint64_t xt[2];            // FXR: where a direct jump/jcc/call ending the block goes (flag lookahead)
+    int nxt;                   // FXR: how many of xt are known
 } Dec;
 
 static Uop *emit(Dec *d, OpFn fn) {
@@ -159,12 +161,14 @@ static void emit_mov(Dec *d, int form, int bits, uint16_t dst, uint16_t src, uin
 // Conditional branch; fuses with an immediately preceding cmp/test.
 static void emit_jcc(Dec *d, unsigned cc, uint64_t target) {
     uint64_t fall = next_rip(d);
+    d->xt[0] = target; d->xt[1] = fall; d->nxt = 2;   // FXR
     if (d->fuse_at == d->n - 1 && d->fuse_at >= 0) {
         Uop *p = &d->u[d->fuse_at];
         uint16_t dst = p->dst, src = p->src; uint64_t imm = p->imm, rip = p->rip;
         OpFn f = fxi_fjcc_tab[d->fuse_op == ALU_TEST][d->fuse_form == F_RI][d->fuse_si][cc];
         memset(p, 0, sizeof *p);
         memset(&d->m[d->fuse_at], 0, sizeof d->m[0]);
+        d->m[d->fuse_at].kill = 1;   // like the cmp/test, writes every flag: earlier flag writers are dead
         p->fn = f; p->dst = dst; p->src = src; p->disp = (int64_t)imm; p->rip = rip;
         p->base = R_ZERO; p->index = R_ZERO;
         p->imm = target; p->aux = fall;
@@ -573,11 +577,13 @@ static int decode_one_inner(Dec *d) {
     case 0xe8: {
         int64_t rel = rd_s32(d);
         Uop *u = emit(d, named("call")); u->aux = next_rip(d); u->imm = next_rip(d) + (uint64_t)rel;
+        d->xt[0] = u->imm; d->nxt = 1;   // FXR: flags before a call are live only if the callee reads them
         return 1;
     }
     case 0xe9: case 0xeb: {
         int64_t rel = b == 0xe9 ? rd_s32(d) : rd_s8(d);
         Uop *u = emit(d, named("jmp")); u->imm = next_rip(d) + (uint64_t)rel;
+        d->xt[0] = u->imm; d->nxt = 1;   // FXR
         return 1;
     }
     case 0xf5: emit(d, named("cmc")); meta(d)->reads = 1; return 0;
@@ -902,22 +908,54 @@ int fxi_probe(const uint8_t *p, uint64_t rip, char *why, size_t why_len) {
     return ok;
 }
 
+// FXR: are the arithmetic flags live where control enters rip? Decodes the block there (no
+// further lookahead) and runs the liveness pass with the flags live at its end; 1 when unsure.
+// ELF mode only: in a Windows process the target may be native code or unmapped.
+static int fxr_live_in(struct Fxi *vm, uint64_t rip) {
+    if (vm->windows || rip < (uint64_t)(uintptr_t)vm->image ||
+        rip >= (uint64_t)(uintptr_t)vm->image + vm->image_size) return 1;
+    Dec *d = malloc(sizeof *d);
+    d->p = (const uint8_t *)(uintptr_t)rip;
+    d->n = 0;
+    d->fuse_at = -1;
+    d->nxt = 0;
+    int ended = 0;
+    for (int insns = 0; insns < 32 && !ended; insns++) {
+        d->rip = (uint64_t)(uintptr_t)d->p;
+        ended = decode_one(d);
+    }
+    OpFn ud = named("fail_ud");
+    int live = 1;
+    for (int i = d->n - 1; i >= 0; i--) {
+        Meta *m = &d->m[i];
+        if (d->u[i].fn == ud) free((char *)(uintptr_t)d->u[i].imm);
+        if (m->cc_live) m->reads = (uint8_t)live;
+        live = m->reads || (live && !m->kill);
+    }
+    free(d);
+    return live;
+}
+
 Block *fxi_translate(struct Fxi *vm, uint64_t rip) {
     Dec *d = malloc(sizeof *d);
     d->p = (const uint8_t *)(uintptr_t)rip;
     d->n = 0;
     d->fuse_at = -1;
+    d->nxt = 0;   // FXR
     int ended = 0;
     for (int insns = 0; insns < MAX_INSNS && !ended; insns++) {
         d->rip = (uint64_t)(uintptr_t)d->p;
         ended = decode_one(d);
     }
-    if (!ended) { Uop *u = emit(d, named("goto")); u->aux = (uint64_t)(uintptr_t)d->p; }
+    if (!ended) { Uop *u = emit(d, named("goto")); u->aux = (uint64_t)(uintptr_t)d->p; d->xt[0] = u->aux; d->nxt = 1; }
 
-    // Flag liveness, backward. Flags are assumed live at the block end.
-    int live = 1;
+    // Flag liveness, backward. FXR: flags at the block end are live only if a direct successor
+    // reads them before writing them (FXI assumes they are live there).
+    int live = d->nxt == 0;
+    for (int k = 0; k < d->nxt && !live; k++) live = fxr_live_in(vm, d->xt[k]);
     for (int i = d->n - 1; i >= 0; i--) {
         Meta *m = &d->m[i];
+        d->u[i].flive = (uint8_t)live;   // FXR: flags live after this uop
         if (m->cc_live) { d->u[i].cc = (uint8_t)live; m->reads = (uint8_t)live; }
         if (m->kill && !live && m->alt) d->u[i].fn = m->alt;
         live = m->reads || (live && !m->kill);

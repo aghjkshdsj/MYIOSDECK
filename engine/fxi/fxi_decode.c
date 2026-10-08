@@ -165,6 +165,7 @@ static void emit_jcc(Dec *d, unsigned cc, uint64_t target) {
         OpFn f = fxi_fjcc_tab[d->fuse_op == ALU_TEST][d->fuse_form == F_RI][d->fuse_si][cc];
         memset(p, 0, sizeof *p);
         memset(&d->m[d->fuse_at], 0, sizeof d->m[0]);
+        d->m[d->fuse_at].kill = 1;   // like the cmp/test, writes every flag: earlier flag writers are dead
         p->fn = f; p->dst = dst; p->src = src; p->disp = (int64_t)imm; p->rip = rip;
         p->base = R_ZERO; p->index = R_ZERO;
         p->imm = target; p->aux = fall;

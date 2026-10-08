@@ -95,20 +95,27 @@ struct FxiCpu {
     long long exit_code;
     char *err;               // fxi_result.error
     struct Fxi *vm;
+    // FXR: indirect branch target cache (per thread, so no races): target rip -> first uop of its
+    // block, direct-mapped. Returns, indirect jumps and calls look here before the block table.
+    int fxr_ready;
+    struct { uint64_t rip; struct Uop *u; } fxr_ibtc[1024];
 };
 
-// One decoded instruction (or fused pair). 64 bytes.
+// One decoded instruction (or fused pair). FXR: 80 bytes.
 struct Uop {
+    PFn p;                   // FXR: the pinned handler that runs this uop (first: the step to the next
+                             // uop is one load with writeback and an indirect branch)
     OpFn fn;
-    Block *link;             // chained successor (taken / call target / inline-cache block)
+    union { Block *link; Uop *ulink; };     // chained successor (taken / call target / inline-cache block);
+                                            // FXR's pinned handlers keep the successor's first uop
     uint64_t imm;            // immediate, absolute branch target, or inline-cache rip
     int64_t disp;            // EA displacement (RIP-relative already absolute)
     uint64_t aux;            // fallthrough / return address / next rip
-    Block *link2;            // fallthrough successor of a conditional branch
+    union { Block *link2; Uop *ulink2; };   // fallthrough successor of a conditional branch
     uint16_t dst, src;       // register byte offsets (GPR) or XMM indices
     uint8_t base, index, scale, cc;
     uint64_t rip;            // the instruction's address (exceptions, faults)
-    PFn p;                   // FXR: the pinned handler that runs this uop
+    uint8_t flive;           // FXR: arithmetic flags live after this uop (decoder liveness, across blocks)
 };
 
 struct Block {

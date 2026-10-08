@@ -10,7 +10,7 @@ CC="${CC:-clang}"
 ARCH_FLAGS=()
 if [ "$(uname -m)" = x86_64 ]; then ARCH_FLAGS=(-mcx16); fi
 "$CC" -O2 -std=gnu11 -g -Wall -Wextra -Wno-unused-parameter -Wno-unused-function -Wno-unused-variable \
-    -Wno-unused-but-set-variable -Wno-sign-compare -ffp-contract=off "${ARCH_FLAGS[@]}" \
+    -Wno-unused-but-set-variable -Wno-sign-compare -ffp-contract=off -fno-math-errno "${ARCH_FLAGS[@]}" \
     -o "$OUT/fxr" "$HERE"/fxi_core.c "$HERE"/fxi_decode.c "$HERE"/fxi_flags.c "$HERE"/fxi_ops.c "$HERE"/fxi_sse.c \
     "$HERE"/fxi_atomic.c "$HERE"/fxi_x87.c "$HERE"/fxi_win.c "$HERE"/fxi_main.c "$HERE"/fxr_pin.c -lm -lpthread
 ls -la "$OUT/fxr"
