@@ -27,8 +27,11 @@ The statically compiled fusion library recognizes general decoded instruction
 patterns: compare/test and branch, vector transform loops, strided byte stores,
 and integer sum reductions. Selection does not inspect program names, fixed
 addresses, benchmark constants, or expected results. Registers, addresses,
-increments, data, and trip counts come from the guest. Memory operations retain
-their original order, including when buffers overlap. `ASTRA_NO_FUSION=1`
+increments, data, and trip counts come from the guest. Forward access streams
+are checked once with overflow-safe range proofs; unsuccessful proofs keep
+per-access checks. Contiguous uniform byte-store loops use signed libc memset.
+Unit-stride vector loops unroll four operations, retaining original load/store
+order even when buffers overlap. `ASTRA_NO_FUSION=1`
 disables fusion for differential testing. There are no benchmark kernel calls
 or substitutions in the interpreter.
 

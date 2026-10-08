@@ -71,7 +71,19 @@ template<int Code,bool ExtraAdd> ASTRA_CC void vector_map(Cpu *c,Op *p) {
             counter+=step;src+=srcstep;dst+=dststep;other+=otherstep;
         } while(counter!=limit);
     };
-    if(proven)loop(std::false_type{});else loop(std::true_type{});
+    if(proven && srcstep==16 && dststep==16 && (!ExtraAdd || otherstep==16)) {
+        // Unit-stride is common across vector kernels. Unroll without changing
+        // load/store ordering: even forward-overlapping buffers remain valid.
+        auto element=[&] {
+            std::memcpy(&v,(void *)src,16);v=arithmetic<Code>(v,rhs);
+            if constexpr(ExtraAdd) {Xmm add;std::memcpy(&add,(void *)other,16);v.f+=add.f;other+=16;}
+            std::memcpy((void *)dst,&v,16);src+=16;dst+=16;
+        };
+        U remaining=count;
+        while(remaining>=4) {element();element();element();element();remaining-=4;}
+        while(remaining) {element();--remaining;}
+        counter=limit;
+    } else if(proven)loop(std::false_type{});else loop(std::true_type{});
     c->r[reg]=counter;c->x[p[0].a.reg]=v;
     setflags<CMP,8>(c,counter,limit,counter-limit);
     GO(target(c,p+jcc,p[jcc].end,0));
