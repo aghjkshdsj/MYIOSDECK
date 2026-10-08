@@ -205,6 +205,26 @@ sideload edition (FEX, ~90% of native) stays the full-speed option, from the sam
   32-bit shift/rotate whose count masks to 0 did not zero-extend (FXI and FXR's pinned shifts).
   **Build 84**: cvtpd2dq plus the rest of missing SSE2 (XMM-count shifts, saturating add/sub,
   pavg, pmulh(u)w, pmaddwd, pinsrw/pextrw, movnt*). Add every new instruction to the difftest.
+- **OpenGL (branch `claude/admiring-bell-742704`, build 94)**: Madeira is pinned at Connor Gow's
+  fork (github.com/c-gow/Madeira, release opengl-test-7, `a144444`, Wine `657de10`): desktop
+  OpenGL 3.3-4.1 through Mesa 25.0.7 OSMesa + Zink on MoltenVK v1.4.2. Madeira's winios WGL
+  driver (`build/win32u-unix/opengl_ios.c` + app `Winios/WiniosGL.m`) renders into an
+  IOSurface drawn on the window's CAMetalLayer. It falls back to Apple's OpenGL ES when the
+  dylibs are missing or Zink fails. New stage `opengl.yml` (`engine/gl/build.sh`, cached) builds
+  `gl/libOSMesa.dylib` and `gl/libMoltenVK.dylib`; build-ipa stages and signs them
+  (`engine/gl/stage-app.sh`). No CPU JIT: Mesa has no LLVM, the audit step fails on JIT imports,
+  and Mesa's only compiled exec-memory source (rtasm_execmem.c) is not linked in. Without JIT
+  iOS refuses PROT_EXEC anyway. The wine build applies the fork's
+  `patches/wine-opengl-winios.patch` (opengl32's unix side is compiled into libntdll_unix);
+  wineserver gains `luajit_compat.o`. Our four no-JIT patches apply unchanged.
+  opengl32.dll converts to a signed dylib. The fork is 34 commits behind the previous pin
+  (`65e6fe8`): Wine Mono, aliased-page store emulation (JIT pool), Dock offline mode and display
+  presets are not in it. Library: "OpenGL triangle (x64[, no JIT])"
+  (`engine/gl/test/gl-triangle-x64.c`): `[gl]` lines give context type, renderer, centre-pixel
+  check, fps and PASS/FAIL. build-ipa takes stage runs from its own branch first
+  (`tools/latest-run.sh`). Not done: the fork's GC64 lua51.dll for LOVE games
+  (`build/luajit-x64`, not built: luajit_compat finds none and changes nothing); gl/ and PE/
+  are loose dylibs outside Frameworks/ (to fix for the App Store).
 - Other branches in the repo: `claude/fxr` (FXR's origin), `gpt-astra/interp`.
 
 ## Next steps (in order)

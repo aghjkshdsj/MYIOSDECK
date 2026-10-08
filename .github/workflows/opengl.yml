@@ -6,8 +6,7 @@ name: Stage 4 - OpenGL (Mesa Zink + MoltenVK)
 # (the audit step fails on code-generation imports).
 on:
   push:
-    # TEMP: the integration branch, until this workflow is on main (dispatch needs it there).
-    branches: [main, claude/admiring-bell-742704]
+    branches: [main]
     paths: ["engine/gl/**", "!engine/gl/stage-app.sh", "!engine/gl/test/**", "!engine/gl/build-test.sh", ".github/workflows/opengl.yml"]
   workflow_dispatch:
 
