@@ -104,6 +104,8 @@ RR(test_q, "testq %[b], %[r]", LOGIC) RR(test_l, "testl %k[b], %k[r]", LOGIC) RR
 RR(add_imm8_q, "addq $-5, %[r]", ARITH) RR(sub_imm32_l, "subl $0x12345678, %k[r]", ARITH)
 RR(and_imm_q, "andq $0x7fffff00, %[r]", LOGIC) RR(cmp_imm8_w, "cmpw $-1, %w[r]", ARITH)
 RR(adc_imm_b, "adcb $0x7f, %b[r]", ARITH) RR(sbb_imm_q, "sbbq $1, %[r]", ARITH)
+// a 67 (address-size) prefix on register-only instructions is padding (Stick Fight: 67 49 f7 e6)
+RR(a32_add_q, ".byte 0x67\n\taddq %[b], %[r]", ARITH) RR(a32_imul_l, ".byte 0x67\n\timull %k[b], %k[r]", CFOF)
 
 R1(inc_q, "incq %[r]", ARITH) R1(inc_l, "incl %k[r]", ARITH) R1(inc_w, "incw %w[r]", ARITH) R1(inc_b, "incb %b[r]", ARITH)
 R1(dec_q, "decq %[r]", ARITH) R1(dec_l, "decl %k[r]", ARITH) R1(dec_b, "decb %b[r]", ARITH)
@@ -347,7 +349,7 @@ typedef void (*test_fn)(void);
 #define ALU_LIST(OP) OP##_q, OP##_l, OP##_w, OP##_b, OP##_mr_q, OP##_rm_l, OP##_mr_b,
 static const test_fn kTests[] = {
     ALU_LIST(add) ALU_LIST(adc) ALU_LIST(sub) ALU_LIST(sbb) ALU_LIST(cmp) ALU_LIST(and) ALU_LIST(or) ALU_LIST(xor)
-    test_q, test_l, test_b, add_imm8_q, sub_imm32_l, and_imm_q, cmp_imm8_w, adc_imm_b, sbb_imm_q,
+    test_q, test_l, test_b, add_imm8_q, sub_imm32_l, and_imm_q, cmp_imm8_w, adc_imm_b, sbb_imm_q, a32_add_q, a32_imul_l,
     inc_q, inc_l, inc_w, inc_b, dec_q, dec_l, dec_b, neg_q, neg_l, neg_w, neg_b, not_q, not_l, not_b,
     bswap_q, bswap_l, shl1_q, sar1_l, shr1_b, rol1_q, ror1_w, rcl1_l, rcr1_b,
     shl_imm_q, shr_imm_l, sar_imm_w, rol_imm_b, ror_imm_q,

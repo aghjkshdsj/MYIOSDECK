@@ -24,6 +24,7 @@ typedef struct {
     const uint8_t *p, *start;
     uint64_t rip;              // start of the current instruction
     int rex, rexw, rexr, rexx, rexb, opsize16, rep, repne, seg, addr32, seg_bad, lock;
+    int addr32_used;           // a 67 prefix on a memory operand (unsupported); on registers it is a no-op
     // ModRM
     int mod, reg, rm, is_mem, riprel;
     uint8_t base, index, scale;
@@ -66,6 +67,7 @@ static void modrm(Dec *d) {
     d->reg = ((b >> 3) & 7) | (d->rexr << 3);
     d->rm = (b & 7) | (d->rexb << 3);
     d->is_mem = d->mod != 3;
+    if (d->is_mem && d->addr32) d->addr32_used = 1;
     d->riprel = 0;
     d->base = R_ZERO; d->index = R_ZERO; d->scale = 0; d->disp = 0;
     if (!d->is_mem) return;
@@ -347,6 +349,7 @@ static void emit_bitop(Dec *d, int bop, int bits, int has_imm) {
 static int decode_one_inner(Dec *d) {
     d->start = d->p;
     d->rex = d->rexw = d->rexr = d->rexx = d->rexb = d->opsize16 = d->rep = d->repne = d->seg = d->addr32 = d->seg_bad = d->lock = 0;
+    d->addr32_used = 0;
     uint8_t b;
     for (;;) {   // legacy prefixes
         b = *d->p;
@@ -365,7 +368,9 @@ static int decode_one_inner(Dec *d) {
         d->p++; b = *d->p;
     }
     d->p++;
-    if (d->addr32) return unimplemented(d, "32-bit addressing");
+    // 67 only changes memory addressing (and the string/loop/xlat registers): padding elsewhere.
+    if (d->addr32 && ((b >= 0xa0 && b <= 0xa7) || (b >= 0xaa && b <= 0xaf) || (b >= 0xe0 && b <= 0xe3) || b == 0xd7))
+        return unimplemented(d, "32-bit addressing");
     int bits = vsize(d);
     int prev_fuse = d->fuse_at;
     d->fuse_at = -1;
@@ -785,6 +790,11 @@ static int decode_one(Dec *d) {
         d->n = n0;
         d->fuse_at = -1;
         return unimplemented(d, "fs/gs override with base and index");
+    }
+    if (d->addr32_used) {      // 67 on a memory operand: 32-bit address arithmetic (not supported)
+        d->n = n0;
+        d->fuse_at = -1;
+        return unimplemented(d, "32-bit addressing");
     }
     return ended;
 }
