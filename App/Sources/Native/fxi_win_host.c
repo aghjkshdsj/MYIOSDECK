@@ -11,6 +11,7 @@
 
 #include <mach/mach.h>
 #include <pthread.h>
+#include <pthread/qos.h>
 #include <time.h>
 
 #include "fxi.h"
@@ -488,6 +489,11 @@ static long host_thread_init(void) {
         fxi_win_set_teb(*slot, (uint64_t)(uintptr_t)teb);
     }
     fault_thread_register(area, teb, *slot);
+    // Game threads at user-interactive QoS: the scheduler keeps them on the performance cores.
+    // Build 88's log had the busiest thread (Stick Fight's audio) spending 113 of 249 ms on an
+    // efficiency core, at about half the speed; one interpreted thread cannot use more than one
+    // core, so it should at least be a fast one.
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
     static pthread_once_t prof_once = PTHREAD_ONCE_INIT;
     pthread_once(&prof_once, prof_start);
     mid_log("[fxi-win] thread ready: TEB %p, CPU area %p, emulator stack %p", (void *)teb, (void *)area,
