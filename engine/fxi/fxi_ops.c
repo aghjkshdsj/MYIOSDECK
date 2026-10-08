@@ -109,13 +109,16 @@ const OpFn fxi_lea_tab[4] = { 0, lea_16, lea_32, lea_64 };
 #define SH_LOAD_M(S) uint64_t addr = fxi_ea(c, u); uint64_t a = ld##S(addr);
 #define SH_STORE_R(S) wr##S(c, u->dst, res);
 #define SH_STORE_M(S) st##S(addr, res);
+// A count of zero writes nothing, except that a 32-bit register is still zero-extended.
+#define SH_ZEXT_R(S) if ((S) == 32) wr32(c, u->dst, a);
+#define SH_ZEXT_M(S)
 
 #define DEF_SHIFT(OPN, KIND, EXPR, FORM, S)                                                \
     static void sh_##OPN##_##FORM##_##S(FxiCpu *c, Uop *u) {                               \
         unsigned n = SH_COUNT(S);                                                          \
         const unsigned sbits = (S); (void)sbits;                                           \
         SH_LOAD_##FORM(S)                                                                  \
-        if (FXI_UNLIKELY(n == 0)) FXI_NEXT(c, u);                                          \
+        if (FXI_UNLIKELY(n == 0)) { SH_ZEXT_##FORM(S) FXI_NEXT(c, u); }                    \
         uint64_t res = (EXPR) & M##S;                                                      \
         SH_STORE_##FORM(S)                                                                 \
         c->lf_op = LF(KIND, SI##S); c->lf_a = a; c->lf_b = n; c->lf_res = res;             \
@@ -134,7 +137,7 @@ DEF_SHIFT_ALL(sar, LF_SAR, (uint64_t)((((int64_t)(a << (64 - sbits))) >> (64 - s
     static void sh_##OPN##_##FORM##_##S(FxiCpu *c, Uop *u) {                               \
         unsigned n = SH_COUNT(S);                                                          \
         SH_LOAD_##FORM(S)                                                                  \
-        if (FXI_UNLIKELY(n == 0)) FXI_NEXT(c, u);                                          \
+        if (FXI_UNLIKELY(n == 0)) { SH_ZEXT_##FORM(S) FXI_NEXT(c, u); }                    \
         unsigned k = n % (S);                                                              \
         uint64_t res = k == 0 ? a : (IS_LEFT ? ((a << k) | (a >> ((S) - k))) : ((a >> k) | (a << ((S) - k)))) & M##S; \
         SH_STORE_##FORM(S)                                                                 \
@@ -156,7 +159,7 @@ DEF_ROT_S(ror, 0, 8) DEF_ROT_S(ror, 0, 16) DEF_ROT_S(ror, 0, 32) DEF_ROT_S(ror, 
     static void sh_##OPN##_##FORM##_##S(FxiCpu *c, Uop *u) {                               \
         unsigned n = SH_COUNT(S) % ((S) + 1);                                              \
         SH_LOAD_##FORM(S)                                                                  \
-        if (n == 0) FXI_NEXT(c, u);                                                        \
+        if (n == 0) { SH_ZEXT_##FORM(S) FXI_NEXT(c, u); }                                  \
         uint64_t f = fxi_rflags(c), cf = f & 1, res = a;                                   \
         for (unsigned i = 0; i < n; i++) {                                                 \
             if (IS_LEFT) { uint64_t out = (res >> ((S) - 1)) & 1; res = ((res << 1) | cf) & M##S; cf = out; } \
@@ -176,7 +179,7 @@ DEF_RC_S(rcr, 0, 8) DEF_RC_S(rcr, 0, 16) DEF_RC_S(rcr, 0, 32) DEF_RC_S(rcr, 0, 6
 static void shxd(FxiCpu *c, Uop *u, int mem) {
     unsigned si = u->cc, bits = 8u << si, right = u->aux & 1;
     unsigned n = ((u->aux & 2) ? (unsigned)c->r[R_CX] : (unsigned)u->imm) & (bits == 64 ? 63u : 31u);
-    if (!n) return;
+    if (!n) { if (!mem && si == 2) wr32(c, u->dst, rd32(c, u->dst)); return; }   // 32-bit reg: zero-extended
     uint64_t m = bits == 64 ? ~0ull : (1ull << bits) - 1, sb = 1ull << (bits - 1);
     uint64_t addr = mem ? fxi_ea(c, u) : 0;
     uint64_t a = mem ? (si == 1 ? ld16(addr) : si == 2 ? ld32(addr) : ld64(addr))
