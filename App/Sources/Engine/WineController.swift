@@ -103,6 +103,7 @@ final class WineController: ObservableObject, @unchecked Sendable {
         setenv("MADEIRA_STEAM_APPID", String(appID), 1)
         setenv("MADEIRA_STEAM_APPPATH", plan.appPath, 1)
         setenv("MADEIRA_WORKDIR", plan.workingFolder, 1)
+        for (key, value) in plan.environment { setenv(key, value, 1) }   // GameGraphics (Wine copies it to Windows)
         run(Program(id: plan.exe, title: title, detail: "", graphics: true, noJIT: noJIT), args: plan.arguments)
     }
 

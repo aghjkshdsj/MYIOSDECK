@@ -158,11 +158,40 @@ struct SteamGameSheet: View {
                 if let playBlocker {
                     Text(playBlocker).font(.caption).foregroundStyle(Deck.dim)
                 }
+                graphicsPicker
                 Button("Check for update / repair") { library.install(game.id) }.buttonStyle(DeckButtonStyle())
                 Button("Uninstall", role: .destructive) { library.uninstall(game.id) }
             } else {
                 Button("Install") { library.install(game.id) }.buttonStyle(DeckButtonStyle())
             }
+        }
+    }
+
+    @State private var graphics: GameGraphics?
+
+    /// Direct3D or OpenGL for this game (GameGraphics), saved per App ID, used at the next Play.
+    private var graphicsPicker: some View {
+        let selection = Binding<GameGraphics>(
+            get: { graphics ?? GameGraphics.choice(appID: game.id) },
+            set: { graphics = $0; GameGraphics.setChoice($0, appID: game.id) })
+        return VStack(alignment: .leading, spacing: 6) {
+            Text("Graphics").font(.subheadline.weight(.semibold))
+            Picker("Graphics", selection: selection) {
+                ForEach(GameGraphics.allCases) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            Text(graphicsNote(selection.wrappedValue)).font(.caption).foregroundStyle(Deck.dim)
+        }
+    }
+
+    private func graphicsNote(_ choice: GameGraphics) -> String {
+        switch choice {
+        case .automatic:
+            return "Starts the game as Steam does, with its own renderer (usually Direct3D)."
+        case .direct3d:
+            return "Direct3D 9-12 through DXMT and Madeira's D3D12 on Metal. Uses Steam's Direct3D launch option if the game has one, else the engine's switch (Unity, Godot 4, Factorio)."
+        case .opengl:
+            return "Desktop OpenGL through Mesa Zink and MoltenVK on Metal. Uses Steam's OpenGL launch option if the game has one, else the engine's switch (Unity -force-glcore, Godot, Factorio). Works only if the game includes an OpenGL renderer; many Unity games ship Direct3D only."
         }
     }
 
