@@ -40,6 +40,9 @@ final class Settings: ObservableObject {
     @Published var useFXR: Bool { didSet { d.set(useFXR, forKey: "useFXR") } }
     /// The no-JIT engine for the built-in x86-64 Linux programs.
     var linuxNoJITMode: RunMode { useFXR ? .fxr : .interpreter }
+    /// Without JIT, start Windows games with no audio device (Wine's mmdevapi disabled), so the
+    /// game's audio engine does not decode and mix in the interpreter. Read at launch.
+    @Published var noJITMuteAudio: Bool { didSet { d.set(noJITMuteAudio, forKey: "noJITMuteAudio") } }
     /// How Windows games see the controller: "xinput", "dinput" (XInput plus a
     /// DirectInput joystick) or "hid" (player 1 as a HID gamepad). Read at launch.
     @Published var controllerAPI: String { didSet { d.set(controllerAPI, forKey: "controllerAPI") } }
@@ -48,7 +51,7 @@ final class Settings: ObservableObject {
         // Wine copies every loaded DLL's code into the pool: give it room by default.
         d.register(defaults: ["jitPoolMB": mid_wine_linked() ? 1024 : 512, "fexPreset": FEXPreset.fast.rawValue, "multiblock": true,
                               "maxInst": 5000, "showHUD": true, "frameCap": 120, "verboseFEXLog": false,
-                              "benchInterpreter": true, "useFXR": false, "controllerAPI": "xinput"])
+                              "benchInterpreter": true, "useFXR": false, "noJITMuteAudio": false, "controllerAPI": "xinput"])
         jitPoolMB = d.integer(forKey: "jitPoolMB")
         fexPreset = FEXPreset(rawValue: d.integer(forKey: "fexPreset")) ?? .fast
         multiblock = d.bool(forKey: "multiblock")
@@ -58,6 +61,7 @@ final class Settings: ObservableObject {
         verboseFEXLog = d.bool(forKey: "verboseFEXLog")
         benchInterpreter = d.bool(forKey: "benchInterpreter")
         useFXR = d.bool(forKey: "useFXR")
+        noJITMuteAudio = d.bool(forKey: "noJITMuteAudio")
         controllerAPI = d.string(forKey: "controllerAPI") ?? "xinput"
     }
 }

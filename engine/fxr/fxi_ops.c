@@ -394,26 +394,64 @@ static void op_jcc(FxiCpu *c, Uop *u) {
 // Stack accesses record the uop (FXI_TOUCH) and change RSP only after the access, so a
 // fault (a stack overflow) leaves the instruction's state exact.
 #define PUSH64(c, u, v) do { uint64_t sp_ = (c)->r[R_SP] - 8; FXI_TOUCH(c, u); st64(sp_, (v)); (c)->r[R_SP] = sp_; } while (0)
+// Return-address prediction (build 88: a profiled game's audio thread did 2.3M block lookups/s,
+// mostly returns to many call sites through ret's one-entry cache). A call pushes its return rip
+// and its own link2 slot (calls have no fallthrough link); ret pops: when the rip matches, the
+// slot holds (or receives, once) that call site's return block. A mismatch (longjmp, unwinding,
+// over 32 deep) falls back to ret's inline cache, so this only ever skips a lookup.
+#define RAS_PUSH(c, u) do { uint32_t t_ = (c)->ras_top++ & 31; (c)->ras[t_].rip = (u)->aux; (c)->ras[t_].slot = &(u)->link2; } while (0)
 static void op_call(FxiCpu *c, Uop *u) {
     PUSH64(c, u, u->aux);
+    RAS_PUSH(c, u);
     CHAIN(c, u->link, u->imm);
 }
 static void op_call_R(FxiCpu *c, Uop *u) {
     uint64_t t = c->r[u->src >> 3];
     PUSH64(c, u, u->aux);
+    RAS_PUSH(c, u);
     INDIRECT(c, u, t);
 }
 static void op_call_M(FxiCpu *c, Uop *u) {
     uint64_t t = ld64(fxi_ea(c, u));
     PUSH64(c, u, u->aux);
+    RAS_PUSH(c, u);
     INDIRECT(c, u, t);
 }
-static void op_jmp_R(FxiCpu *c, Uop *u) { INDIRECT(c, u, c->r[u->src >> 3]); }
-static void op_jmp_M(FxiCpu *c, Uop *u) { INDIRECT(c, u, ld64(fxi_ea(c, u))); }
+// Indirect jumps (switch tables, tail calls): a second cache entry in link2 (unused by jumps).
+// Each pointer is checked against its own block's rip, so the two never need to agree.
+#define INDIRECT2(c, u, target)                                                            \
+    do {                                                                                   \
+        uint64_t t_ = (target);                                                            \
+        Block *l_ = __atomic_load_n(&(u)->link, __ATOMIC_RELAXED);                         \
+        if (FXI_LIKELY(l_ && l_->rip == t_)) FXI_GOTO_BLOCK((c), l_);                      \
+        Block *m_ = __atomic_load_n(&(u)->link2, __ATOMIC_RELAXED);                        \
+        if (m_ && m_->rip == t_) FXI_GOTO_BLOCK((c), m_);                                  \
+        Block *b_ = fxi_lookup((c), t_);                                                   \
+        if (b_ != fxi_stop) {                                                              \
+            if (l_) __atomic_store_n(&(u)->link2, l_, __ATOMIC_RELEASE);                   \
+            __atomic_store_n(&(u)->link, b_, __ATOMIC_RELEASE);                            \
+        }                                                                                  \
+        FXI_GOTO_BLOCK((c), b_);                                                           \
+    } while (0)
+static void op_jmp_R(FxiCpu *c, Uop *u) { INDIRECT2(c, u, c->r[u->src >> 3]); }
+static void op_jmp_M(FxiCpu *c, Uop *u) { INDIRECT2(c, u, ld64(fxi_ea(c, u))); }
 static void op_ret(FxiCpu *c, Uop *u) {
     FXI_TOUCH(c, u);
     uint64_t t = ld64(c->r[R_SP]);
     c->r[R_SP] += 8 + u->aux;   // aux: ret imm16
+    // Pop on a match; one level deeper also counts (a native call returned through the glue
+    // and left its entry); otherwise leave the ring alone (a callback's ret never pushed).
+    uint32_t top = (c->ras_top - 1) & 31, below = (c->ras_top - 2) & 31, hit = 0;
+    if (FXI_LIKELY(c->ras[top].rip == t && c->ras[top].slot)) { hit = 1; c->ras_top -= 1; }
+    else if (c->ras[below].rip == t && c->ras[below].slot) { hit = 1; top = below; c->ras_top -= 2; }
+    if (FXI_LIKELY(hit)) {
+        Block **slot = c->ras[top].slot;
+        Block *b = __atomic_load_n(slot, __ATOMIC_ACQUIRE);
+        if (FXI_LIKELY(b != NULL)) FXI_GOTO_BLOCK(c, b);
+        b = fxi_lookup(c, t);
+        if (b != fxi_stop) __atomic_store_n(slot, b, __ATOMIC_RELEASE);
+        FXI_GOTO_BLOCK(c, b);
+    }
     INDIRECT(c, u, t);
 }
 // Block ended without a branch (length cap or before a syscall): continue at aux.

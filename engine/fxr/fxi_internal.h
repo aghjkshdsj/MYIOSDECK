@@ -86,6 +86,9 @@ struct FxiCpu {
     uint32_t df_how;
     uint32_t sysflags;       // EFLAGS.ID (bit 21) and AC (bit 18) as popf left them: CPUID detection toggles ID
     uint64_t n_lookups, n_exits;   // profiler counters: block lookups (first-time edges), exits to native code
+    // Return-address prediction: call pushes (return rip, its call uop's link2 slot), ret pops.
+    struct { uint64_t rip; Block **slot; } ras[32];
+    uint32_t ras_top;
     int stop;                // nonzero: leave the dispatch chain
     long long exit_code;
     char *err;               // fxi_result.error

@@ -139,8 +139,16 @@ final class WineController: ObservableObject, @unchecked Sendable {
             setenv("MADEIRA_USE_ARM64EC", "1", 1)
             setenv("MYIOSDECK_NOJIT_TRACE", CrashReporter.nojitTraceURL.path, 1)
             dlog("[wine] no-JIT session: DLLs from \(Self.peWineDir)")
+            // Settings › Without JIT › game audio off: no audio endpoints, so the game's audio
+            // engine (decoding and mixing in the interpreter) does not run.
+            if UserDefaults.standard.bool(forKey: "noJITMuteAudio") {
+                setenv("WINEDLLOVERRIDES", "mmdevapi=d", 1)
+                dlog("[wine] no-JIT session without audio (mmdevapi disabled)")
+            } else {
+                unsetenv("WINEDLLOVERRIDES")
+            }
         } else {
-            for k in ["WINE_IOS_NOJIT", "MYIOSDECK_PE_DIR", "MYIOSDECK_NOJIT_EMULATOR"] { unsetenv(k) }
+            for k in ["WINE_IOS_NOJIT", "MYIOSDECK_PE_DIR", "MYIOSDECK_NOJIT_EMULATOR", "WINEDLLOVERRIDES"] { unsetenv(k) }
             if program.noJIT { setenv("MADEIRA_USE_ARM64EC", "1", 1) }
         }
         state = .booting(program.title)

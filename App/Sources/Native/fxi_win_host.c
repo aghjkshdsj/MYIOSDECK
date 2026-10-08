@@ -238,7 +238,9 @@ static long host_reset_to_consistent(const uint8_t *rec, const uint8_t *arm_ctx)
 // values), the thread is redirected to fault_entry, which raises the x64 access violation the
 // way host_reset_to_consistent does. Everything else stays Madeira's.
 #define FAULT_THREADS 1024
-static struct { mach_port_t thread; uint8_t *area, *teb; } g_fault_threads[FAULT_THREADS];
+// cpu is set once the thread has one (FxiCpus are never freed); area and teb belong to Wine and
+// are gone once the thread exits, so the profiler reads them only with vm_read_overwrite.
+static struct { mach_port_t thread; uint8_t *area, *teb; FxiCpu *cpu; } g_fault_threads[FAULT_THREADS];
 
 static uint8_t *fault_thread_area(mach_port_t thread) {
     for (int i = 0; i < FAULT_THREADS; i++)
@@ -246,7 +248,7 @@ static uint8_t *fault_thread_area(mach_port_t thread) {
     return NULL;
 }
 
-static void fault_thread_register(uint8_t *area, uint8_t *teb) {
+static void fault_thread_register(uint8_t *area, uint8_t *teb, FxiCpu *cpu) {
     mach_port_t self = mach_thread_self();
     int slot = -1;
     for (int i = 0; i < FAULT_THREADS && slot < 0; i++)
@@ -259,6 +261,7 @@ static void fault_thread_register(uint8_t *area, uint8_t *teb) {
     if (slot < 0) return;
     g_fault_threads[slot].area = area;
     g_fault_threads[slot].teb = teb;
+    g_fault_threads[slot].cpu = cpu;
     __atomic_store_n(&g_fault_threads[slot].thread, self, __ATOMIC_RELEASE);
 }
 
@@ -333,7 +336,7 @@ static void prof_report(uint64_t period_samples) {
             if (g_fault_threads[i].thread && t > bestn) { bestn = t; best = i; }
         }
         if (best < 0 || bestn * 50 < period_samples) break;   // under 2% of the period: skip
-        FxiCpu *c = *(FxiCpu **)(g_fault_threads[best].area + 0x30);
+        FxiCpu *c = g_fault_threads[best].cpu;
         uint64_t lk = 0, ex = 0;
         if (c) fxi_win_profile(c, &lk, &ex, &blocks);
         mid_log("[fxi-prof]   thread TEB %p: running %.0f%% of the time, x64 %.0f%% / native %.0f%%, "
@@ -346,7 +349,7 @@ static void prof_report(uint64_t period_samples) {
     }
     for (int i = 0; i < FAULT_THREADS; i++) {                 // counters for the next period
         if (!g_fault_threads[i].thread) continue;
-        FxiCpu *c = *(FxiCpu **)(g_fault_threads[i].area + 0x30);
+        FxiCpu *c = g_fault_threads[i].cpu;
         if (c) fxi_win_profile(c, &g_prof_thr[i].last_lookups, &g_prof_thr[i].last_exits, &blocks);
         g_prof_thr[i].x64 = g_prof_thr[i].native = 0;
     }
@@ -401,10 +404,12 @@ static void *prof_thread(void *arg) {
             mach_msg_type_number_t cnt = THREAD_BASIC_INFO_COUNT;
             if (thread_info(t, THREAD_BASIC_INFO, (thread_info_t)&bi, &cnt) != KERN_SUCCESS || bi.run_state != TH_STATE_RUNNING)
                 continue;
-            uint8_t *area = g_fault_threads[i].area;
-            FxiCpu *c = *(FxiCpu **)(area + 0x30);
-            if (!c) continue;
-            if (!__atomic_load_n(area, __ATOMIC_RELAXED)) { g_prof_thr[i].native++; continue; }   // InSimulation
+            // The thread may have exited and Wine freed its CPU area (build 87 crashed here
+            // reading it directly): read InSimulation through vm_read_overwrite.
+            FxiCpu *c = g_fault_threads[i].cpu;
+            uint8_t insim;
+            if (!c || !vmr((uint64_t)(uintptr_t)g_fault_threads[i].area, &insim, 1)) continue;
+            if (!insim) { g_prof_thr[i].native++; continue; }
             g_prof_thr[i].x64++;
             uint64_t lk, ex, bl, rip = fxi_win_profile(c, &lk, &ex, &bl);
             uint64_t h = (rip * 0x9E3779B97F4A7C15ull) >> 50;
@@ -477,14 +482,14 @@ static long host_thread_init(void) {
         mid_log("[fxi-win] ThreadInit: no CPU area (teb %p)", (void *)teb);
         return (long)0xC0000001;   // STATUS_UNSUCCESSFUL
     }
-    fault_thread_register(area, teb);
-    static pthread_once_t prof_once = PTHREAD_ONCE_INIT;
-    pthread_once(&prof_once, prof_start);
     FxiCpu **slot = (FxiCpu **)(area + 0x30);                   // EmulatorData[0]
     if (!*slot) {
         *slot = fxi_win_cpu_new();
         fxi_win_set_teb(*slot, (uint64_t)(uintptr_t)teb);
     }
+    fault_thread_register(area, teb, *slot);
+    static pthread_once_t prof_once = PTHREAD_ONCE_INIT;
+    pthread_once(&prof_once, prof_start);
     mid_log("[fxi-win] thread ready: TEB %p, CPU area %p, emulator stack %p", (void *)teb, (void *)area,
             *(void **)(area + 0x8));
     return *slot ? 0 : (long)0xC0000017;                        // STATUS_NO_MEMORY
