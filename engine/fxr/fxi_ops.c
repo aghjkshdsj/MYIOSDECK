@@ -613,6 +613,46 @@ static void op_movs(FxiCpu *c, Uop *u) {
     FXI_NEXT(c, u);
 }
 
+// scas / cmps: u->cc = 0 single, 1 repe (F3), 2 repne (F2). The flags are those of the last
+// compare; a rep with RCX = 0 compares nothing and leaves them alone. They only read memory,
+// so a fault part-way leaves the registers as before the instruction (restartable, exact).
+static const uint64_t kStrMask[4] = { 0xff, 0xffff, 0xffffffff, ~0ull };
+FXI_INLINE uint64_t ld_sz(uint64_t a, unsigned s) { return s == 0 ? ld8(a) : s == 1 ? ld16(a) : s == 2 ? ld32(a) : ld64(a); }
+static void str_cmp(FxiCpu *c, Uop *u, int is_cmps) {
+    FXI_TOUCH(c, u);
+    unsigned s = u->scale;
+    uint64_t m = kStrMask[s], n = u->cc ? c->r[R_CX] : 1, si = c->r[R_SI], di = c->r[R_DI], a = 0, b = 0;
+    if (!n) return;
+    int64_t step = c->df ? -(int64_t)(1u << s) : (int64_t)(1u << s);
+    uint64_t acc = c->r[R_AX] & m;
+    do {
+        a = is_cmps ? ld_sz(si, s) : acc;
+        b = ld_sz(di, s);
+        si += (uint64_t)step; di += (uint64_t)step; n--;
+    } while (u->cc && n && ((a == b) == (u->cc == 1)));
+    if (is_cmps) c->r[R_SI] = si;
+    c->r[R_DI] = di;
+    if (u->cc) c->r[R_CX] = n;
+    c->lf_op = LF(LF_SUB, s); c->lf_a = a; c->lf_b = b; c->lf_res = (a - b) & m; c->lf_cin = 0;
+}
+static void op_scas(FxiCpu *c, Uop *u) { str_cmp(c, u, 0); FXI_NEXT(c, u); }
+static void op_cmps(FxiCpu *c, Uop *u) { str_cmp(c, u, 1); FXI_NEXT(c, u); }
+// lods: AL/AX/EAX/RAX = [RSI] (EAX zero-extends); with rep, the last element.
+static void op_lods(FxiCpu *c, Uop *u) {
+    FXI_TOUCH(c, u);
+    unsigned s = u->scale;
+    uint64_t n = u->cc ? c->r[R_CX] : 1, si = c->r[R_SI];
+    int64_t step = c->df ? -(int64_t)(1u << s) : (int64_t)(1u << s);
+    if (n) {
+        uint64_t v = ld_sz(si + (uint64_t)step * (n - 1), s);
+        si += (uint64_t)step * n;
+        if (s == 0) wr8(c, R_AX * 8, v); else if (s == 1) wr16(c, R_AX * 8, v); else if (s == 2) wr32(c, R_AX * 8, v); else wr64(c, R_AX * 8, v);
+        c->r[R_SI] = si;
+        if (u->cc) c->r[R_CX] = 0;
+    }
+    FXI_NEXT(c, u);
+}
+
 // ---------------------------------------------------------------------------
 // Named handlers for the decoder
 // ---------------------------------------------------------------------------
@@ -630,7 +670,7 @@ static const struct { const char *name; OpFn fn; } kNamed[] = {
     { "popcnt_R", popcnt_R }, { "popcnt_M", popcnt_M }, { "shxd_R", op_shxd_R }, { "shxd_M", op_shxd_M },
     { "cld", op_cld }, { "std", op_std }, { "clc", op_clc }, { "stc", op_stc }, { "cmc", op_cmc },
     { "lahf", op_lahf }, { "sahf", op_sahf }, { "cpuid", op_cpuid }, { "rdtsc", op_rdtsc },
-    { "stos", op_stos }, { "movs", op_movs },
+    { "stos", op_stos }, { "movs", op_movs }, { "scas", op_scas }, { "cmps", op_cmps }, { "lods", op_lods },
 };
 
 OpFn fxi_sse_named(const char *name);      // fxi_sse.c

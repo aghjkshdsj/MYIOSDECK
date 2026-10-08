@@ -478,6 +478,20 @@ static int decode_one_inner(Dec *d) {
         u->cc = (uint8_t)(d->rep || d->repne);
         return 0;
     }
+    case 0xa6: case 0xa7: case 0xae: case 0xaf: {   // cmps / scas (repe F3, repne F2)
+        Uop *u = emit(d, named((b == 0xa6 || b == 0xa7) ? "cmps" : "scas"));
+        u->scale = (b & 1) ? (uint8_t)si_of(bits) : 0;
+        u->cc = (uint8_t)(d->rep ? 1 : d->repne ? 2 : 0);
+        if (u->cc) meta(d)->reads = 1;   // RCX = 0 keeps the old flags
+        else meta(d)->kill = 1;
+        return 0;
+    }
+    case 0xac: case 0xad: {                           // lods
+        Uop *u = emit(d, named("lods"));
+        u->scale = (b & 1) ? (uint8_t)si_of(bits) : 0;
+        u->cc = (uint8_t)(d->rep || d->repne);
+        return 0;
+    }
     case 0xb0: case 0xb1: case 0xb2: case 0xb3: case 0xb4: case 0xb5: case 0xb6: case 0xb7:
         emit_mov(d, F_RI, 8, gpr(d, (b & 7) | (d->rexb << 3), 8), 0, (uint64_t)rd_u8(d)); return 0;
     case 0xb8: case 0xb9: case 0xba: case 0xbb: case 0xbc: case 0xbd: case 0xbe: case 0xbf: {

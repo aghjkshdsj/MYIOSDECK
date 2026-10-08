@@ -173,8 +173,50 @@ static void t_shxd(void) {
     report("shrd64 mem", m, 0, f & ~0x800ull);
 }
 
+// String compares and loads: repne scasb (old CRT strlen, Stick Fight's first stop), repe cmps,
+// scas/cmps without rep, a rep with RCX = 0 (flags unchanged), lods.
+static const char str_a[] = "hello, world";
+static const char str_b[] = "hello, wOrld";
+static void t_strings(void) {
+    u64 f, rcx, rdi, rsi, rax;
+    rcx = ~0ull; rdi = (u64)str_a;
+    __asm__ volatile("cld\n\trepne scasb" GET_FLAGS : "+c"(rcx), "+D"(rdi), [f] "=&r"(f) : "a"(0ull) : "memory", "cc");
+    report("repne scasb strlen", ~rcx - 1, rdi - (u64)str_a, f);
+    rcx = 5; rdi = (u64)str_a;
+    __asm__ volatile("repne scasb" GET_FLAGS : "+c"(rcx), "+D"(rdi), [f] "=&r"(f) : "a"((u64)'z') : "memory", "cc");
+    report("repne scasb miss", rcx, rdi - (u64)str_a, f);
+    rcx = 12; rsi = (u64)str_a; rdi = (u64)str_b;
+    __asm__ volatile("repe cmpsb" GET_FLAGS : "+c"(rcx), "+S"(rsi), "+D"(rdi), [f] "=&r"(f) : : "memory", "cc");
+    report("repe cmpsb diff", rcx, rsi - (u64)str_a, f);
+    rcx = 3; rsi = (u64)str_a; rdi = (u64)str_b;
+    __asm__ volatile("repe cmpsw" GET_FLAGS : "+c"(rcx), "+S"(rsi), "+D"(rdi), [f] "=&r"(f) : : "memory", "cc");
+    report("repe cmpsw equal", rcx, rdi - (u64)str_b, f);
+    rsi = (u64)str_a; rdi = (u64)str_b;
+    __asm__ volatile("cmpsq" GET_FLAGS : "+S"(rsi), "+D"(rdi), [f] "=&r"(f) : : "memory", "cc");
+    report("cmpsq", rsi - (u64)str_a, rdi - (u64)str_b, f);
+    rdi = (u64)str_a + 4;
+    __asm__ volatile("scasl" GET_FLAGS : "+D"(rdi), [f] "=&r"(f) : "a"(0x80000000ull) : "memory", "cc");
+    report("scasl", rdi - (u64)str_a, 0, f);
+    rcx = 0; rdi = (u64)str_a;
+    __asm__ volatile(KNOWN_FLAGS "repne scasb" GET_FLAGS : "+c"(rcx), "+D"(rdi), [f] "=&r"(f) : [p] "r"(0ull), "a"(0ull) : "memory", "cc");
+    report("rep scas rcx=0", rcx, rdi - (u64)str_a, f);
+    rcx = 3; rsi = (u64)str_a + 9; rdi = (u64)str_b + 9;
+    __asm__ volatile("std\n\trepe cmpsb\n\tcld" GET_FLAGS : "+c"(rcx), "+S"(rsi), "+D"(rdi), [f] "=&r"(f) : : "memory", "cc");
+    report("std repe cmpsb", rcx, (u64)str_a + 9 - rsi, f);
+    rax = ~0ull; rsi = (u64)str_a;
+    __asm__ volatile("lodsb" : "+a"(rax), "+S"(rsi) : : "memory");
+    report("lodsb", rax, rsi - (u64)str_a, 0);
+    rax = ~0ull; rsi = (u64)str_a;
+    __asm__ volatile("lodsl" : "+a"(rax), "+S"(rsi) : : "memory");
+    report("lodsl", rax, rsi - (u64)str_a, 0);
+    rax = 0; rsi = (u64)str_a;
+    __asm__ volatile("lodsw" : "+a"(rax), "+S"(rsi) : : "memory");
+    report("lodsw", rax, rsi - (u64)str_a, 0);
+}
+
 int guest_main(int argc, char **argv) {
     (void)argc; (void)argv;
+    t_strings();
     t_cmpxchg();
     t_xadd_xchg();
     t_lock_alu();
