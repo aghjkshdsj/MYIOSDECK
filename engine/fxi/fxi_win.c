@@ -96,6 +96,9 @@ uint64_t fxi_win_fault_rip(FxiCpu *c, int *is_fetch) {
     return c->cur ? c->cur->rip : c->rip;
 }
 
+// Diagnostics: where DF was last set (1 std, 2 popf, 3 context load, 0 never) and its rip.
+int fxi_win_df_source(FxiCpu *c, uint64_t *rip) { *rip = c->df_rip; return (int)c->df_how; }
+
 // Diagnostics: the last block lookups, oldest first.
 int fxi_win_trail(FxiCpu *c, uint64_t *rips, int max) {
     int n = c->trail_n < 16 ? (int)c->trail_n : 16;
@@ -127,6 +130,7 @@ void fxi_win_load_context(FxiCpu *c, const void *ctx) {
     memcpy(c->r, p + 0x78, 16 * 8);              // Rax Rcx Rdx Rbx Rsp Rbp Rsi Rdi R8-R15
     c->rip = ld64((uint64_t)(uintptr_t)(p + 0xf8));
     fxi_set_rflags(c, ld32((uint64_t)(uintptr_t)(p + 0x44)));
+    if (c->df) { c->df_rip = c->rip; c->df_how = 3; }
     fxi_x87_fxrstor(c, p + 0x100, 1);            // FltSave (fxsave layout): x87 and XMM0-15
     c->mxcsr = (uint32_t)ld32((uint64_t)(uintptr_t)(p + 0x34));
 }

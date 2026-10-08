@@ -508,7 +508,13 @@ static void op_pop_M(FxiCpu *c, Uop *u) {
 }
 static void op_leave(FxiCpu *c, Uop *u) { FXI_TOUCH(c, u); uint64_t bp = ld64(c->r[R_BP]); c->r[R_SP] = c->r[R_BP] + 8; c->r[R_BP] = bp; FXI_NEXT(c, u); }
 static void op_pushf(FxiCpu *c, Uop *u) { PUSH64(c, u, fxi_rflags(c)); FXI_NEXT(c, u); }
-static void op_popf(FxiCpu *c, Uop *u) { FXI_TOUCH(c, u); fxi_set_rflags(c, ld64(c->r[R_SP])); c->r[R_SP] += 8; FXI_NEXT(c, u); }
+static void op_popf(FxiCpu *c, Uop *u) {
+    FXI_TOUCH(c, u);
+    fxi_set_rflags(c, ld64(c->r[R_SP]));
+    if (c->df) { c->df_rip = u->rip; c->df_how = 2; }
+    c->r[R_SP] += 8;
+    FXI_NEXT(c, u);
+}
 static void op_nop(FxiCpu *c, Uop *u) { FXI_NEXT(c, u); }
 
 static void op_cbw(FxiCpu *c, Uop *u) { wr16(c, 0, (uint64_t)(int64_t)(int8_t)c->r[R_AX]); FXI_NEXT(c, u); }
@@ -549,7 +555,7 @@ BIT_OP(lzcnt, { uint64_t r = v ? (uint64_t)(__builtin_clzll(v) - (64 - bits)) : 
 BIT_OP(popcnt, { bitdst(c, u, (uint64_t)__builtin_popcountll(v)); fxi_set_rflags(c, (uint64_t)(v == 0) << 6); })
 
 static void op_cld(FxiCpu *c, Uop *u) { c->df = 0; FXI_NEXT(c, u); }
-static void op_std(FxiCpu *c, Uop *u) { c->df = 1; FXI_NEXT(c, u); }
+static void op_std(FxiCpu *c, Uop *u) { c->df = 1; c->df_rip = u->rip; c->df_how = 1; FXI_NEXT(c, u); }
 static void op_clc(FxiCpu *c, Uop *u) { fxi_set_rflags(c, fxi_rflags(c) & ~1ull); FXI_NEXT(c, u); }
 static void op_stc(FxiCpu *c, Uop *u) { fxi_set_rflags(c, fxi_rflags(c) | 1ull); FXI_NEXT(c, u); }
 static void op_cmc(FxiCpu *c, Uop *u) { fxi_set_rflags(c, fxi_rflags(c) ^ 1ull); FXI_NEXT(c, u); }

@@ -161,6 +161,11 @@ static void log_exception_state(FxiCpu *c, const uint8_t *ctx64, uint64_t rip) {
                 names[i + 3], (unsigned long long)rd64(ctx64 + 0x90 + 8 * i));
     uint32_t ef; memcpy(&ef, ctx64 + 0x44, 4);
     mid_log("[fxi-win]   eflags %08x", ef);
+    uint64_t df_rip;
+    int df_how = fxi_win_df_source(c, &df_rip);
+    static const char *df_names[4] = { "never set", "std", "popf", "a context load" };
+    mid_log("[fxi-win]   DF %u, last set by %s at %#llx", (ef >> 10) & 1, df_names[df_how & 3], (unsigned long long)df_rip);
+    if (df_how) log_code("df code", df_rip > 48 ? df_rip - 48 : df_rip, 64);
     uint64_t from = rip - 160 < (rip & ~0x3fffull) ? (rip & ~0x3fffull) : rip - 160;
     log_code("code before", from, (unsigned)(rip - from));
     log_code("code at", rip, 32);

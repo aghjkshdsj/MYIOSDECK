@@ -60,6 +60,8 @@ int fxi_win_exception(FxiCpu *c, fxi_win_exc *e);
 uint64_t fxi_win_fault_rip(FxiCpu *c, int *is_fetch);
 /// Diagnostics: the rips of the last block lookups (first-time control-flow edges), oldest first.
 int fxi_win_trail(FxiCpu *c, uint64_t *rips, int max);
+/// Diagnostics: how DF was last set (1 std, 2 popf, 3 context load, 0 never), *rip where.
+int fxi_win_df_source(FxiCpu *c, uint64_t *rip);
 
 #ifdef __cplusplus
 }

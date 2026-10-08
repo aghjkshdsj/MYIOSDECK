@@ -66,6 +66,8 @@ struct FxiCpu {
     uint64_t exc_info[2];
     uint64_t trail[16];      // diagnostics: the last block lookups (rip); trail_n is the count
     uint32_t trail_n;
+    uint64_t df_rip;         // diagnostics: where DF was last set (df_how: 1 std, 2 popf, 3 context)
+    uint32_t df_how;
     int stop;                // nonzero: leave the dispatch chain
     long long exit_code;
     char *err;               // fxi_result.error
