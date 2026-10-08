@@ -73,6 +73,8 @@ struct FxiCpu {
     // Return-address prediction: call pushes (return rip, its call uop's link2 slot), ret pops.
     struct { uint64_t rip; Block **slot; } ras[32];
     uint32_t ras_top;
+    // Profiler: calls into native code per target (direct-mapped by target, collisions dropped).
+    struct { uint64_t target, n; } exit_tab[256];
     int stop;                // nonzero: leave the dispatch chain
     long long exit_code;
     char *err;               // fxi_result.error
