@@ -231,7 +231,15 @@ sideload edition (FEX, ~90% of native) stays the full-speed option, from the sam
   Core), triangle drawn (centre-pixel check ok), 1216 frames in 20.0 s at 60 fps, glGetError 0,
   PASS. FXI profile: x64 0.4% / native 99.6%. Hello x64, the suite and both D3D cubes still work.
   Cosmetic: in game mode GL (like D3D) presents to the fullscreen layer while Wine draws the
-  windowed program's frame on top. Not done: the fork's GC64 lua51.dll for LOVE games
+  windowed program's frame on top.
+  **Builds 97-100**: Steam game sheet "Graphics" picker (Default / Direct3D / OpenGL, per App
+  ID, `App/Sources/Steam/GameGraphics.swift`): a Steam launch entry naming the renderer, else
+  the engine's switch (Unity -force-glcore/-force-d3d11, Godot 3/4, Factorio). Stick Fight
+  forced to OpenGL: Unity "Failed to initialize player / InitializeEngineGraphics failed"
+  without a single WGL call, i.e. its build ships no OpenGL renderer (Direct3D 11 only); keep
+  it on Default. `engine/wine/patches/game_dialogs.py`: game-mode dialogs entirely off the
+  virtual screen (Unity's at x = 32767) move to the centre ([game-dialog]); WM_SETTEXT text is
+  logged ([win-text]). Not done: the fork's GC64 lua51.dll for LOVE games
   (`build/luajit-x64`, not built: luajit_compat finds none and changes nothing); gl/ and PE/
   are loose dylibs outside Frameworks/ (to fix for the App Store).
 - Other branches in the repo: `claude/fxr` (FXR's origin), `gpt-astra/interp`.
