@@ -193,13 +193,21 @@ def page_sets(pe):
 
 # --- x18 (the Windows TEB register; iOS does not preserve it) -------------------------------
 # Classifier ported from Madeira's ios_insn_x18_role (build/ntdll-unix/virtual_ios.c).
-ROLE_RN, ROLE_RM, ROLE_RT2 = 1, 2, 3
+ROLE_RN, ROLE_RM, ROLE_RT2, ROLE_RT = 1, 2, 3, 4
 
 
-def x18_role(insn):
-    rn, rm, rt2 = (insn >> 5) & 31, (insn >> 16) & 31, (insn >> 10) & 31
+def x18_patch_stores(pe):
+    """Images whose x18 STORES are rewritten too (ROLE_RT). As in Connor Gow's Madeira fork
+    (ios_x18_patch_stores): only opengl32, whose generated thunks put NtCurrentTeb() into every
+    params struct (`.teb = NtCurrentTeb()`, ~3,100 sites); a zeroed x18 there reached the unix
+    side as teb == NULL (build 94: every GL call faulted reading teb->glTable)."""
+    return pe.name.lower() == "opengl32.dll"
+
+
+def x18_role(insn, stores=False):
+    rt, rn, rm, rt2 = insn & 31, (insn >> 5) & 31, (insn >> 16) & 31, (insn >> 10) & 31
     if 18 not in (rn, rm, rt2):
-        return 0
+        return x18_store_role(insn, rt, rn, rt2) if stores else 0
     top8, top11 = insn >> 24, insn >> 21
     if (top8 & 0x3F) in (0x39, 0x3D) and rn == 18:      # LDR/STR (unsigned immediate)
         return ROLE_RN
@@ -224,11 +232,42 @@ def x18_role(insn):
             return ROLE_RN
         if rm == 18:
             return ROLE_RM
+    return x18_store_role(insn, rt, rn, rt2) if stores else 0
+
+
+def x18_store_role(insn, rt, rn, rt2):
+    """x18 as the VALUE stored (Madeira fork's X18_ROLE_RT): only the plain 64-bit forms
+    STR (unsigned offset), STUR, STP (signed offset); loads into x18 are never patched."""
+    if rt != 18 or rn == 18:
+        return 0
+    if (insn & 0xFFC00000) == 0xF9000000:               # STR  Xt, [Xn, #imm12*8]
+        return ROLE_RT
+    if (insn & 0xFFE00C00) == 0xF8000000:               # STUR Xt, [Xn, #simm9]
+        return ROLE_RT
+    if (insn & 0xFFC00000) == 0xA9000000 and rt2 != 18:  # STP  Xt, Xt2, [Xn, #simm7*8]
+        return ROLE_RT
     return 0
 
 
+def x18_store_sp_fixup(insn):
+    """The trampoline pushes 16 bytes before running the instruction, so an sp-based store
+    must address 16 bytes further up. None when the new offset does not encode."""
+    if (insn >> 5) & 31 != 31:
+        return insn
+    if (insn & 0xFFC00000) == 0xF9000000:               # STR: imm12, scaled by 8
+        imm = ((insn >> 10) & 0xFFF) + 2
+        return None if imm > 0xFFF else (insn & ~(0xFFF << 10)) | (imm << 10)
+    if (insn & 0xFFE00C00) == 0xF8000000:               # STUR: signed imm9, bytes
+        imm = ((insn >> 12) & 0x1FF) - (0x200 if insn & (1 << 20) else 0) + 16
+        return None if imm > 255 else (insn & ~(0x1FF << 12)) | ((imm & 0x1FF) << 12)
+    if (insn & 0xFFC00000) == 0xA9000000:               # STP: signed imm7, scaled by 8
+        imm = ((insn >> 15) & 0x7F) - (0x80 if insn & (1 << 21) else 0) + 2
+        return None if imm > 63 else (insn & ~(0x7F << 15)) | ((imm & 0x7F) << 15)
+    return None
+
+
 def replace_field(insn, role, reg):
-    shift = {ROLE_RN: 5, ROLE_RM: 16, ROLE_RT2: 10}[role]
+    shift = {ROLE_RN: 5, ROLE_RM: 16, ROLE_RT2: 10, ROLE_RT: 0}[role]
     return (insn & ~(31 << shift)) | (reg << shift)
 
 
@@ -248,6 +287,7 @@ def literal_words(words):
 def x18_sites(pe):
     """[(rva, insn, role)] of x18 uses in ARM64 code, and the TSD-read triplet count."""
     sites, tsd = [], 0
+    stores = x18_patch_stores(pe)
     for start, end in pe.arm64_ranges():
         n = (end - start) // 4
         words = struct.unpack_from("<%dI" % n, pe.image, start)
@@ -255,7 +295,7 @@ def x18_sites(pe):
         for i, w in enumerate(words):
             if i in data:
                 continue
-            role = x18_role(w)
+            role = x18_role(w, stores)
             if role:
                 sites.append((start + 4 * i, w, role))
             if (w & 0xFFFFFFE0) == 0xD53BD060 and i + 2 < n:
@@ -275,6 +315,17 @@ def x18_plan(insn, role):
     """(scratch s, scratch t, rewritten insn) or None when the rewrite cannot be done.
     The trampoline pushes s and t, so the instruction must not address memory off sp."""
     rt, rn, rm, rt2 = insn & 31, (insn >> 5) & 31, (insn >> 16) & 31, (insn >> 10) & 31
+    if role == ROLE_RT:                               # `str x18, [sp, #n]`: the TEB as a value
+        used = {rt, rn, rt2, 18}
+        if (insn & 0xFFC00000) != 0xA9000000:
+            used.discard(rt2)                         # STR/STUR: bits 10-14 are offset bits
+        free = [r for r in (17, 16, 15, 14, 13, 12, 11, 10, 9) if r not in used]
+        new = x18_store_sp_fixup(insn)
+        if new is None or len(free) < 2:
+            return None
+        s, t = free[0], free[1]
+        new = replace_field(new, ROLE_RT, s)
+        return None if x18_role(new, True) else (s, t, new)
     is_mov = (insn >> 21) & 0x7FF in (0x150, 0x550) and rn == 31
     if rn == 31 and not is_mov:
         return None                                   # sp-based: our push would move it
