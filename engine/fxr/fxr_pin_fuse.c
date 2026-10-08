@@ -8,7 +8,7 @@
 //   argument setup + call (mov r,r / lea r,[base+disp] / mov r,imm / xor r,r)
 //   pop + pop, pop + ret, push + push; a load + test of the loaded register + jcc
 // Each is specialised like a single instruction (registers, condition code); the lowering in
-// fxr_pin.c pairs them. Flags are recorded only if something after the pair reads them.
+// fxr_pin.c pairs them, only when nothing reads the flags after the pair: they are never recorded.
 
 #include "fxr_pin.h"
 
@@ -17,20 +17,16 @@
 #define DEF_FMI_B(B, SZ, CC)                                                               \
     PH p_fmci_##SZ##_##CC##_##B(FXR_PARAMS) {                                              \
         uint64_t a = ld##SZ(g##B + (uint64_t)u->disp), b = (uint64_t)(int64_t)u->fimm & M##SZ; \
-        if (u->flive) SETF(LF_SUB, SI##SZ, a, b, (a - b) & M##SZ, 0);                      \
         FJ_BR(cc_sub(CC, a, b, SI##SZ)); }                                                 \
     PH p_fmti_##SZ##_##CC##_##B(FXR_PARAMS) {                                              \
         uint64_t a = ld##SZ(g##B + (uint64_t)u->disp), b = (uint64_t)(int64_t)u->fimm & M##SZ, r = a & b; \
-        if (u->flive) SETF(LF_LOGIC, SI##SZ, a, b, r, 0);                                  \
         FJ_BR(cc_logic(CC, r, SI##SZ)); }
 #define DEF_FMI_CC(CC, SZ) R17(DEF_FMI_B, SZ, CC)                                          \
     PH p_fmcit_##SZ##_##CC(FXR_PARAMS) {                                                   \
         uint64_t a = ld##SZ(T), b = (uint64_t)(int64_t)u->fimm & M##SZ;                    \
-        if (u->flive) SETF(LF_SUB, SI##SZ, a, b, (a - b) & M##SZ, 0);                      \
         FJ_BR(cc_sub(CC, a, b, SI##SZ)); }                                                 \
     PH p_fmtit_##SZ##_##CC(FXR_PARAMS) {                                                   \
         uint64_t a = ld##SZ(T), b = (uint64_t)(int64_t)u->fimm & M##SZ, r = a & b;         \
-        if (u->flive) SETF(LF_LOGIC, SI##SZ, a, b, r, 0);                                  \
         FJ_BR(cc_logic(CC, r, SI##SZ)); }
 C16(DEF_FMI_CC, 8) C16(DEF_FMI_CC, 16) C16(DEF_FMI_CC, 32) C16(DEF_FMI_CC, 64)
 #define E_FMI(B, SZ, CC, NAME) p_##NAME##_##SZ##_##CC##_##B,
@@ -45,15 +41,12 @@ const PFn t_fmit[2][4][16] = { SZ_FMIT(fmcit), SZ_FMIT(fmtit) };
 #define DEF_FMR(R, SZ, CC)                                                                 \
     PH p_fmcm_##SZ##_##CC##_##R(FXR_PARAMS) {   /* cmp [mem], reg */                       \
         uint64_t a = ld##SZ(T), b = g##R & M##SZ;                                          \
-        if (u->flive) SETF(LF_SUB, SI##SZ, a, b, (a - b) & M##SZ, 0);                      \
         FJ_BR(cc_sub(CC, a, b, SI##SZ)); }                                                 \
     PH p_fmcr_##SZ##_##CC##_##R(FXR_PARAMS) {   /* cmp reg, [mem] */                       \
         uint64_t a = g##R & M##SZ, b = ld##SZ(T);                                          \
-        if (u->flive) SETF(LF_SUB, SI##SZ, a, b, (a - b) & M##SZ, 0);                      \
         FJ_BR(cc_sub(CC, a, b, SI##SZ)); }                                                 \
     PH p_fmtm_##SZ##_##CC##_##R(FXR_PARAMS) {   /* test [mem], reg */                      \
         uint64_t a = ld##SZ(T), b = g##R & M##SZ, r = a & b;                               \
-        if (u->flive) SETF(LF_LOGIC, SI##SZ, a, b, r, 0);                                  \
         FJ_BR(cc_logic(CC, r, SI##SZ)); }
 #define DEF_FMR_CC(CC, SZ) R16(DEF_FMR, SZ, CC)
 C16(DEF_FMR_CC, 8) C16(DEF_FMR_CC, 16) C16(DEF_FMR_CC, 32) C16(DEF_FMR_CC, 64)
@@ -66,15 +59,12 @@ const PFn t_fmr[3][4][16][16] = { SZ_FMR(fmcm), SZ_FMR(fmcr), SZ_FMR(fmtm) };   
 #define DEF_FJS(D, SZ, CC)                                                                 \
     PH p_fjsc_ri_##SZ##_##CC##_##D(FXR_PARAMS) {                                           \
         uint64_t a = g##D & M##SZ, b = (uint64_t)u->disp & M##SZ;                          \
-        if (u->flive) SETF(LF_SUB, SI##SZ, a, b, (a - b) & M##SZ, 0);                      \
         FJ_BR(cc_sub(CC, a, b, SI##SZ)); }                                                 \
     PH p_fjst_ri_##SZ##_##CC##_##D(FXR_PARAMS) {                                           \
         uint64_t a = g##D & M##SZ, b = (uint64_t)u->disp & M##SZ, r = a & b;               \
-        if (u->flive) SETF(LF_LOGIC, SI##SZ, a, b, r, 0);                                  \
         FJ_BR(cc_logic(CC, r, SI##SZ)); }                                                  \
     PH p_fjst_rr_##SZ##_##CC##_##D(FXR_PARAMS) {   /* test r, r: the same register */      \
         uint64_t a = g##D & M##SZ;                                                         \
-        if (u->flive) SETF(LF_LOGIC, SI##SZ, a, a, a, 0);                                  \
         FJ_BR(cc_logic(CC, a, SI##SZ)); }
 #define DEF_FJS_CC(CC, SZ) R16(DEF_FJS, SZ, CC)
 C16(DEF_FJS_CC, 8) C16(DEF_FJS_CC, 16)
@@ -82,11 +72,9 @@ C16(DEF_FJS_CC, 8) C16(DEF_FJS_CC, 16)
 #define DEF_FJSX(S, D, SZ)                                                                 \
     PH p_fjscx_##SZ##_##D##_##S(FXR_PARAMS) {                                              \
         uint64_t a = g##D & M##SZ, b = g##S & M##SZ;                                       \
-        if (u->flive) SETF(LF_SUB, SI##SZ, a, b, (a - b) & M##SZ, 0);                      \
         FJ_BR(cc_sub(u->cc, a, b, SI##SZ)); }                                              \
     PH p_fjstx_##SZ##_##D##_##S(FXR_PARAMS) {                                              \
         uint64_t a = g##D & M##SZ, b = g##S & M##SZ, r = a & b;                            \
-        if (u->flive) SETF(LF_LOGIC, SI##SZ, a, b, r, 0);                                  \
         FJ_BR(cc_logic(u->cc, r, SI##SZ)); }
 #define DEF_FJSX_ROW(D, SZ) R16B(DEF_FJSX, D, SZ)
 R16(DEF_FJSX_ROW, 8) R16(DEF_FJSX_ROW, 16)
@@ -111,20 +99,16 @@ FXI_INLINE int fcj_cond(unsigned cc, double a, double b) {
 #define DEF_FCJ(S, D, CC)                                                                  \
     PH p_fcjd_##CC##_##D##_##S(FXR_PARAMS) {                                               \
         double a = LD0(XD_##D), b = LD0(XS_##S);                                           \
-        if (u->flive) XCOMIS_SET(a, b);                                                    \
         FJ_BR(fcj_cond(CC, a, b)); }                                                       \
     PH p_fcjs_##CC##_##D##_##S(FXR_PARAMS) {                                               \
         double a = LF0(XD_##D), b = LF0(XS_##S);                                           \
-        if (u->flive) XCOMIS_SET(a, b);                                                    \
         FJ_BR(fcj_cond(CC, a, b)); }
 #define DEF_FCJ_ROW(D, CC) X9B(DEF_FCJ, D, CC)                                             \
     PH p_fcjdt_##CC##_##D(FXR_PARAMS) {                                                    \
         double a = LD0(XD_##D), b = LD0(xldn(T, 8));                                       \
-        if (u->flive) XCOMIS_SET(a, b);                                                    \
         FJ_BR(fcj_cond(CC, a, b)); }                                                       \
     PH p_fcjst_##CC##_##D(FXR_PARAMS) {                                                    \
         double a = LF0(XD_##D), b = LF0(xldn(T, 4));                                       \
-        if (u->flive) XCOMIS_SET(a, b);                                                    \
         FJ_BR(fcj_cond(CC, a, b)); }
 #define DEF_FCJ_CC(CC, _) X9(DEF_FCJ_ROW, CC)
 C16(DEF_FCJ_CC, _)
@@ -160,7 +144,6 @@ FXI_INLINE int fa_add_cond(unsigned cc, uint64_t a, uint64_t b, uint64_t r, unsi
     PH p_fai_##OPN##_##SZ##_##CC##_##D(FXR_PARAMS) {                                       \
         uint64_t a = g##D & M##SZ, b = (uint64_t)u->disp & M##SZ, r = FX_##OPN(a, b) & M##SZ; \
         g##D = r;                                                                          \
-        if (u->flive) SETF(FK_##OPN, SI##SZ, a, b, r, 0);                                  \
         FJ_BR(FC_##OPN(CC, a, b, r, SI##SZ)); }
 #define DEF_FAI_CC(CC, SZ, OPN) R16(DEF_FAI, SZ, CC, OPN)
 #define DEF_FAI_OP(OPN) C16(DEF_FAI_CC, 32, OPN) C16(DEF_FAI_CC, 64, OPN)
@@ -222,7 +205,6 @@ const PFn t_popret[16] = { R16(E1, popret) };
 #define DEF_LTJ(D, B, SZ, CC)                                                              \
     PH p_ltj_##SZ##_##CC##_##B##_##D(FXR_PARAMS) {                                         \
         uint64_t r = ld##SZ(g##B + (uint64_t)u->disp); g##D = r;                           \
-        if (u->flive) SETF(LF_LOGIC, SI##SZ, r, r, r, 0);                                  \
         FJ_BR(cc_logic(CC, r, SI##SZ)); }
 #define DEF_LTJ_B(B, SZ, CC) R16B(DEF_LTJ, B, SZ, CC)
 #define DEF_LTJ_CC(CC, SZ) R17(DEF_LTJ_B, SZ, CC)

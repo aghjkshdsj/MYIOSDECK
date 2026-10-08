@@ -32,6 +32,11 @@ static uint16_t k_cctab[16];   // cmov truth tables per condition code (pcond_ta
 DEF_MISS(p_miss_t, u->ulink, u->imm)     // jump, call or taken branch: the target in imm
 DEF_MISS(p_miss_f, u->ulink2, u->aux)    // a conditional branch's fallthrough (aux)
 DEF_MISS(p_miss_g, u->ulink, u->aux)     // goto (a block split) and syscall: the next instruction
+PX p_miss_c(FXR_PARAMS) {                // a conditional branch (FJ_BR): T says which way it went
+    Block *b = fxi_lookup(c, T ? u->imm : u->aux);
+    if (b != fxi_stop) __atomic_store_n(T ? &u->ulink : &u->ulink2, b->u, __ATOMIC_RELEASE);
+    PGO(b->u);
+}
 PX p_miss_ind(FXR_PARAMS) {
     Block *b = fxi_lookup(c, T);
     if (b != fxi_stop) { __typeof__(c->fxr_ibtc[0]) *e = IBTC(T); e->u = b->u; e->rip = T; }
@@ -53,15 +58,13 @@ PH p_jmp_M(FXR_PARAMS) { SPILL_R(); PIND(ld64(fxi_ea(c, u))); }
 // Conditional branch on the lazy flags, one handler per condition code.
 PX p_jcc_slow(FXR_PARAMS) {
     SPILL_F();
-    if (fxi_cond(c, u->cc)) PCHAIN(u->ulink, p_miss_t);
-    PCHAIN(u->ulink2, p_miss_f);
+    FJ_BR(fxi_cond(c, u->cc));
 }
 #define DEF_JCC(CC, _)                                                                     \
     PH p_jcc_##CC(FXR_PARAMS) {                                                            \
         int s_ = 0, t_ = pcond(CC, F0, F1, F2, F3, &s_);                                   \
         if (FXI_UNLIKELY(s_)) PTAIL(p_jcc_slow);                                           \
-        if (t_) PCHAIN(u->ulink, p_miss_t);                                                \
-        PCHAIN(u->ulink2, p_miss_f);                                                       \
+        FJ_BR(t_);                                                                         \
     }
 C16(DEF_JCC, _)
 PH p_syscall(FXR_PARAMS) {
@@ -307,7 +310,10 @@ static void lower_one(Out *o, const Uop *u) {
         int t = d->a, ri = d->b, s64 = d->c2, cc = d->d;
         if (D < 0 || (!ri && S < 0)) { fprintf(stderr, "fxr: fused branch without register operands\n"); abort(); }
         Uop *x;
-        if (ri) x = put_uop(o, u, t ? t_fjt_ri[s64][cc][D] : t_fjc_ri[s64][cc][D]);
+        if (fl) {   // something reads the flags after the branch: generic forms that record them
+            if (ri) x = put_uop(o, u, t ? t_fjtg_ri[s64][D] : t_fjcg_ri[s64][D]);
+            else x = put_uop(o, u, t ? t_fjt_rrx[s64][D][S] : t_fjcg_rr[s64][D][S]);
+        } else if (ri) x = put_uop(o, u, t ? t_fjt_ri[s64][cc][D] : t_fjc_ri[s64][cc][D]);
         else if (!t) x = put_uop(o, u, t_fjc_rr[s64][cc][D][S]);
         else x = put_uop(o, u, D == S ? t_fjt_rr[s64][cc][D] : t_fjt_rrx[s64][D][S]);
         x->cc = (uint8_t)cc;
@@ -389,7 +395,9 @@ static int try_fuse(Out *o, const Uop *u, uint32_t left) {
     if (!a || !b) return 0;
     int D = greg(u->dst), S = greg(u->src);
     Uop *x = 0;
-    if (is_named(b, N_JCC)) {   // compare-and-branch forms FXI does not fuse, ALU + jcc
+    // The fused handlers never record flags: pairs that write them fuse only when nothing reads
+    // them after the pair (v->flive).
+    if (is_named(b, N_JCC) && !v->flive) {   // compare-and-branch forms FXI does not fuse, ALU + jcc
         unsigned cc = v->cc & 15;
         if (a->fam == FAM_ALU && (a->a == ALU_CMP || a->a == ALU_TEST)) {
             int t = a->a == ALU_TEST, fm = a->b, si = a->c2;
@@ -446,7 +454,7 @@ static int try_fuse(Out *o, const Uop *u, uint32_t left) {
         return 0;
     }
     // mov D, [base + disp] + FXI's fused test D, D / jcc
-    if (a->fam == FAM_MOV && a->a == F_RM && a->b >= 2 && D >= 0 && simple_mem(u) && b->fam == FAM_FJCC &&
+    if (a->fam == FAM_MOV && a->a == F_RM && a->b >= 2 && D >= 0 && simple_mem(u) && b->fam == FAM_FJCC && !v->flive &&
         b->a == 1 && !b->b && b->c2 == (a->b == 3) && greg(v->dst) == D && greg(v->src) == D) {
         unsigned cc = b->d;
         int ci = cc == 4 ? 0 : cc == 5 ? 1 : cc == 8 ? 2 : cc == 9 ? 3 : cc == 14 ? 4 : cc == 15 ? 5 : -1;
@@ -456,7 +464,7 @@ static int try_fuse(Out *o, const Uop *u, uint32_t left) {
         return 2;
     }
     // loop step: add/sub D, imm|reg + FXI's fused cmp (D, S | S, D | D, imm) / jcc
-    if (a->fam == FAM_ALU && (a->a == ALU_ADD || a->a == ALU_SUB) && a->c2 >= 2 && D >= 0 &&
+    if (a->fam == FAM_ALU && (a->a == ALU_ADD || a->a == ALU_SUB) && a->c2 >= 2 && D >= 0 && !v->flive &&
         b->fam == FAM_FJCC && b->a == 0 && b->c2 == (a->c2 == 3) && cc10(b->d) >= 0) {
         int op = a->a == ALU_SUB, s64 = a->c2 == 3, ci = cc10(b->d), cd = greg(v->dst), cs = greg(v->src);
         if (a->b == F_RI) {
@@ -470,7 +478,7 @@ static int try_fuse(Out *o, const Uop *u, uint32_t left) {
         }
     }
     // mov D, S ; op D, imm -> D = S op imm (the op no wider than the move)
-    if (a->fam == FAM_MOV && a->a == F_RR && a->b >= 2 && D >= 0 && S >= 0 && D != S && greg(v->dst) == D) {
+    if (a->fam == FAM_MOV && a->a == F_RR && a->b >= 2 && D >= 0 && S >= 0 && D != S && greg(v->dst) == D && !v->flive) {
         if (b->fam == FAM_ALU && b->b == F_RI && b->c2 >= 2 && b->c2 <= a->b) {
             int k = b->a == ALU_ADD ? 0 : b->a == ALU_SUB ? 1 : b->a == ALU_AND ? 2 : b->a == ALU_OR ? 3 : b->a == ALU_XOR ? 4 : -1;
             if (k >= 0) { put_uop(o, v, t_3op[k][b->c2 - 2][D][S]); return 2; }

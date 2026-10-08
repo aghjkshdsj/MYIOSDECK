@@ -7,13 +7,12 @@
 //   sicr  add/sub D, imm (fimm) ; cmp S, D ; jcc
 //   sii   add/sub D, imm (fimm) ; cmp D, imm (disp) ; jcc
 //   sri   add/sub D, R          ; cmp D, imm (disp) ; jcc
-// The flags are recorded (as the cmp leaves them) only if something after the branch reads them.
+// They fuse only when nothing reads the flags after the branch: the flags are not recorded.
 
 #define SOP_add(a, b) ((a) + (b))
 #define SOP_sub(a, b) ((a) - (b))
 #define STEP_BR(SZ, CC, A, B) do {                                                         \
         uint64_t a_ = (A) & M##SZ, b_ = (B) & M##SZ;                                       \
-        if (u->flive) SETF(LF_SUB, SI##SZ, a_, b_, (a_ - b_) & M##SZ, 0);                  \
         FJ_BR(cc_sub(CC, a_, b_, SI##SZ));                                                 \
     } while (0)
 #define STEP_IMM(OP, D, SZ) (g##D = SOP_##OP(g##D, (uint64_t)(int64_t)u->fimm) & M##SZ)

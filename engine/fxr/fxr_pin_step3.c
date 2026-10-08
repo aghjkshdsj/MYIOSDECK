@@ -52,7 +52,6 @@ const PFn t_sii[2][2][10][16] = { { { C10(CC_SII, add, 32) }, { C10(CC_SII, add,
     PH p_op3_##OPN##_##SZ##_##D##_##S(FXR_PARAMS) {                                        \
         uint64_t a = g##S & M##SZ, b = u->imm & M##SZ, r = T3_##OPN(a, b, SZ) & M##SZ;     \
         g##D = r;                                                                          \
-        if (F3_##OPN && u->flive) SETF(K3_##OPN, SI##SZ, a, b, r, 0);                      \
         PNEXT(); }
 #define DEF_3OP_ROW(D, SZ, OPN) R16B(DEF_3OP, D, SZ, OPN)
 #define DEF_3OP_ALL(OPN) R16(DEF_3OP_ROW, 32, OPN) R16(DEF_3OP_ROW, 64, OPN)

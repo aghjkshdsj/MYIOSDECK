@@ -79,12 +79,14 @@ PX fxr_p_miss_t(FXR_PARAMS);
 PX fxr_p_miss_f(FXR_PARAMS);
 PX fxr_p_miss_g(FXR_PARAMS);
 PX fxr_p_miss_ind(FXR_PARAMS);
+PX fxr_p_miss_c(FXR_PARAMS);
 #define p_slow fxr_p_slow
 #define p_jcc_slow fxr_p_jcc_slow
 #define p_miss_t fxr_p_miss_t
 #define p_miss_f fxr_p_miss_f
 #define p_miss_g fxr_p_miss_g
 #define p_miss_ind fxr_p_miss_ind
+#define p_miss_c fxr_p_miss_c
 
 static const uint64_t kMask[4] = { M8, M16, M32, M64 };
 static const uint64_t kSign[4] = { 0x80ull, 0x8000ull, 0x80000000ull, 0x8000000000000000ull };
@@ -192,7 +194,15 @@ FXI_INLINE int pcond_tab(uint64_t tab, uint64_t F0, uint64_t F1, uint64_t F2, ui
 // an out-of-line handler looks the block up and fills the link (release: Windows threads).
 #define PCHAIN(LINK, MISS) do { Uop *l_ = (LINK); if (FXI_LIKELY(l_ != 0)) PGO(l_); PTAIL(MISS); } while (0)
 // A conditional branch's two successors (imm: taken target, aux: fallthrough)
-#define FJ_BR(TAKEN) do { if (TAKEN) PCHAIN(u->ulink, p_miss_t); PCHAIN(u->ulink2, p_miss_f); } while (0)
+// No conditional host branch: the successor is selected (csel) and reached by the one indirect
+// jump every handler ends with, so a taken guest branch costs no extra taken host branch. A link
+// still missing (first use) is resolved by p_miss_c (T: 1 taken, 0 fallthrough).
+#define FJ_BR(TAKEN) do {                                                                  \
+        uint64_t t_ = (TAKEN) != 0;                                                        \
+        Uop *l1_ = u->ulink, *l2_ = u->ulink2, *n_ = t_ ? l1_ : l2_;                       \
+        if (FXI_UNLIKELY(!n_)) { T = t_; PTAIL(p_miss_c); }                                \
+        PGO(n_);                                                                           \
+    } while (0)
 // Indirect branches (ret, jmp/call through a register or memory): a per-thread direct-mapped
 // cache of target -> first uop; a miss looks the block up (target in T) and fills the entry.
 #define IBTC_MASK 1023u
@@ -370,7 +380,7 @@ typedef struct { const char *name; PFn h[9]; } XShift;
     X(t_un, [2][2][4][16]) X(t_imul2, [2][2][16][16]) X(t_imul3, [2][2][16][16]) X(t_imul2t, [2][2][16]) \
     X(t_imul3t, [2][2][16]) X(t_cmov, [2][16][16]) X(t_cmovt, [2][16]) \
     X(t_fjc_rr, [2][16][16][16]) X(t_fjc_ri, [2][16][16]) X(t_fjt_ri, [2][16][16]) X(t_fjt_rr, [2][16][16]) \
-    X(t_fjt_rrx, [2][16][16]) \
+    X(t_fjt_rrx, [2][16][16]) X(t_fjcg_rr, [2][16][16]) X(t_fjcg_ri, [2][16]) X(t_fjtg_ri, [2][16]) \
     X(t_xl_movx, [9][17][17]) X(t_xs_movx, [9][17][17]) X(t_xl_movss, [9][17]) X(t_xl_movsd, [9][17]) \
     X(t_xs_movss, [9][17]) X(t_xs_movsd, [9][17]) X(t_xlt_movss, [9]) X(t_xlt_movsd, [9]) X(t_xlt_movlps, [9]) \
     X(t_xlt_movhps, [9]) X(t_xst_movss, [9]) X(t_xst_movsd, [9]) X(t_xst_movhps, [9]) X(t_xst_movx, [9]) \
@@ -416,6 +426,9 @@ FXR_TABLES(FXR_DECL_TABLE)
 #define t_fjt_ri fxr_t_fjt_ri
 #define t_fjt_rr fxr_t_fjt_rr
 #define t_fjt_rrx fxr_t_fjt_rrx
+#define t_fjcg_rr fxr_t_fjcg_rr
+#define t_fjcg_ri fxr_t_fjcg_ri
+#define t_fjtg_ri fxr_t_fjtg_ri
 #define t_xl_movx fxr_t_xl_movx
 #define t_xs_movx fxr_t_xs_movx
 #define t_xl_movss fxr_t_xl_movss
