@@ -1,0 +1,81 @@
+name: Astra evaluation (fusion on/off, general guests)
+
+# Independent check of gpt-astra/interp's engine: its benchmark with the loop-fusion library
+# on and off (ASTRA_NO_FUSION=1), and MYIOSDECK's general test guests (difftest, atomics, x87,
+# hello) compared with native. Runs only on this evaluation branch.
+on:
+  push:
+    branches: ["claude/astra-eval"]
+
+permissions:
+  contents: read
+
+jobs:
+  guests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq xxd > /dev/null
+      - run: bash engine/guest/build.sh "$RUNNER_TEMP/guests"
+      - name: Native reference outputs (x86)
+        run: |
+          cd "$RUNNER_TEMP/guests"
+          for t in difftest atomics x87; do ./$t.elf > native_$t.txt; done
+      - uses: actions/upload-artifact@v5
+        with:
+          name: eval-guests
+          path: ${{ runner.temp }}/guests/*
+
+  eval:
+    needs: guests
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04-arm, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
+        with:
+          name: eval-guests
+          path: guests
+      - name: clang 19
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang-19 > /dev/null || (wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh && sudo bash /tmp/llvm.sh 19 > /dev/null)
+      - name: Build Astra, FXI, FXR
+        run: |
+          chmod +x guests/*.elf
+          CXX=clang++-19 bash engine/astra/build.sh "$RUNNER_TEMP/astra"
+          CC=clang-19 bash engine/fxi/build.sh "$RUNNER_TEMP/fxi" > /dev/null
+          CC=clang-19 bash engine/fxr/build.sh "$RUNNER_TEMP/fxr" > /dev/null
+      - name: General guests under Astra (exact output vs native)
+        run: |
+          for t in hello difftest atomics x87; do
+            if timeout 120 "$RUNNER_TEMP/astra/astra" guests/$t.elf > /tmp/astra_$t.txt 2> /tmp/astra_${t}_err.txt; then st=ran; else st="FAILED: $(tail -c 300 /tmp/astra_${t}_err.txt; tail -c 300 /tmp/astra_$t.txt)"; fi
+            if [ "$t" != hello ] && [ "$st" = ran ]; then
+              if cmp -s guests/native_$t.txt /tmp/astra_$t.txt; then st="ran, output identical to native"; else st="ran, OUTPUT DIFFERS ($(diff guests/native_$t.txt /tmp/astra_$t.txt | grep -c '^<') lines)"; fi
+            fi
+            echo "$t: $st" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+      - name: Benchmark, median of 3 (fusion on, fusion off, FXI, FXR)
+        run: |
+          if [ "$(uname -m)" = x86_64 ]; then nat() { guests/bench_sse2.elf "$1" "$2"; }; else nat() { "$RUNNER_TEMP/astra/native" "$1" "$2"; }; fi
+          field() { sed -n "s/.*$1=\([0-9]*\).*/\1/p"; }
+          med() { printf '%s\n' "$@" | sort -n | sed -n 2p; }
+          pct() { awk -v a="$1" -v b="$2" 'BEGIN { printf "%.2f", (b > 0 ? 100 * a / b : 0) }'; }
+          echo "| kernel | Astra fused | Astra NO fusion | FXI | FXR | checksums |" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|---|---|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          for spec in integer:3 float:16 memory:50 branch:6 simd:150; do
+            k="${spec%%:*}"; s="${spec##*:}"; n=(); a=(); u=(); f=(); r=(); sums=""
+            for i in 1 2 3; do
+              o=$(nat "$k" "$s" | grep RESULT); n+=("$(field ns <<< "$o")"); sums="$sums $(field sum <<< "$o")"
+              o=$("$RUNNER_TEMP/astra/astra" guests/bench_sse2.elf "$k" "$s" | grep RESULT); a+=("$(field ns <<< "$o")"); sums="$sums $(field sum <<< "$o")"
+              o=$(ASTRA_NO_FUSION=1 "$RUNNER_TEMP/astra/astra" guests/bench_sse2.elf "$k" "$s" | grep RESULT); u+=("$(field ns <<< "$o")"); sums="$sums $(field sum <<< "$o")"
+              o=$("$RUNNER_TEMP/fxi/fxi" guests/bench_sse2.elf "$k" "$s" 2>/dev/null | grep RESULT); f+=("$(field ns <<< "$o")"); sums="$sums $(field sum <<< "$o")"
+              o=$("$RUNNER_TEMP/fxr/fxr" guests/bench_sse2.elf "$k" "$s" 2>/dev/null | grep RESULT); r+=("$(field ns <<< "$o")"); sums="$sums $(field sum <<< "$o")"
+            done
+            uq=$(tr ' ' '\n' <<< "$sums" | sed '/^$/d' | sort -u | wc -l)
+            nm=$(med "${n[@]}")
+            echo "| $k | $(pct "$nm" "$(med "${a[@]}")")% | $(pct "$nm" "$(med "${u[@]}")")% | $(pct "$nm" "$(med "${f[@]}")")% | $(pct "$nm" "$(med "${r[@]}")")% | $([ "$uq" = 1 ] && echo match || echo MISMATCH) |" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
