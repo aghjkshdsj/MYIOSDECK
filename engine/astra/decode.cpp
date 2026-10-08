@@ -167,6 +167,16 @@ Op *block(Cpu *c,U pc) {
         if(p.kind==CALL||p.kind==JMP||p.kind==JCC||p.kind==RET||p.kind==SYSCALL)break;
         if(i==127) { Op jump; jump.kind=JMP; jump.a.mode=IMM; jump.imm=cur; jump.pc=cur; jump.end=cur; ops.push_back(jump); }
     }
+    // A backward edge can reveal a loop leader inside this block. Split the
+    // prefix now: the first iteration must enter the same optimized loop block
+    // as later iterations, rather than execute a duplicated scalar prefix.
+    if(ops.back().kind==JCC && ops.back().imm>pc && ops.back().imm<ops.back().pc) {
+        U leader=ops.back().imm;
+        for(size_t i=1;i<ops.size();i++) if(ops[i].pc==leader) {
+            ops.resize(i);Op jump;jump.kind=JMP;jump.a.mode=IMM;
+            jump.pc=leader;jump.end=leader;jump.imm=leader;ops.push_back(jump);break;
+        }
+    }
     // Only discard flags when a later full writer dominates every read.
     bool live=true;
     for(auto it=ops.rbegin();it!=ops.rend();++it) {

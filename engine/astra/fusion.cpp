@@ -27,6 +27,10 @@ static bool stream_valid(Cpu *c,U address,U stride,U count,size_t width,bool sto
     if(store && address<c->code_hi && address+(U)span>c->code_lo)return false;
     return true;
 }
+static bool bytes_valid(Cpu *c,U address,U bytes,bool store=false) {
+    if(!bytes || bytes>c->memsize || address-(U)c->mem>c->memsize-bytes)return false;
+    return !store || address>=c->code_hi || address+bytes<=c->code_lo;
+}
 static bool counted(const Op *p,size_t n,unsigned add_index) {
     if(n<3 || p[n-1].kind!=JCC || p[n-1].aux!=5 || p[n-1].imm!=p[0].pc)return false;
     const Op &add=p[add_index],&cmp=p[n-2];
@@ -44,16 +48,20 @@ template<int Code> inline Xmm arithmetic(Xmm a,Xmm b) {
     if constexpr(Code==0xef)a.q^=b.q;
     return a;
 }
-template<int Code,bool ExtraAdd> ASTRA_CC void vector_map(Cpu *c,Op *p) {
+template<int Code,bool ExtraAdd,bool UnitStride> ASTRA_CC void vector_map(Cpu *c,Op *p) {
     constexpr int store=ExtraAdd?3:2,inc=store+1,cmp=inc+1,jcc=cmp+1;
     unsigned reg=p[inc].a.reg;
-    U counter=c->r[reg], step=p[inc].b.disp, limit=read_compare(c,p[cmp].b);
+    U counter=c->r[reg], step=UnitStride?16:p[inc].b.disp, limit=read_compare(c,p[cmp].b);
     U src=ea(c,p[0].b),dst=ea(c,p[store].b),other=ExtraAdd?ea(c,p[2].b):0;
-    U srcstep=step_address(p[0].b,reg,step),dststep=step_address(p[store].b,reg,step);
-    U otherstep=ExtraAdd?step_address(p[2].b,reg,step):0;
+    U srcstep=UnitStride?16:step_address(p[0].b,reg,step),dststep=UnitStride?16:step_address(p[store].b,reg,step);
+    U otherstep=ExtraAdd?(UnitStride?16:step_address(p[2].b,reg,step)):0;
     Xmm rhs=c->x[p[1].b.reg],v{};
     U count=step && limit>counter && (limit-counter)%step==0?(limit-counter)/step:0;
-    bool proven=stream_valid(c,src,srcstep,count,16) && stream_valid(c,dst,dststep,count,16,true) &&
+    bool proven;
+    if constexpr(UnitStride) {
+        proven=count && bytes_valid(c,src,limit-counter) && bytes_valid(c,dst,limit-counter,true) &&
+            (!ExtraAdd || bytes_valid(c,other,limit-counter));
+    } else proven=stream_valid(c,src,srcstep,count,16) && stream_valid(c,dst,dststep,count,16,true) &&
         (!ExtraAdd || stream_valid(c,other,otherstep,count,16));
     auto loop=[&](auto guards) {
         do {
@@ -88,8 +96,9 @@ template<int Code,bool ExtraAdd> ASTRA_CC void vector_map(Cpu *c,Op *p) {
     setflags<CMP,8>(c,counter,limit,counter-limit);
     GO(target(c,p+jcc,p[jcc].end,0));
 }
-template<int Code> Handler vector_map_form(bool extra) {
-    return extra?vector_map<Code,true>:vector_map<Code,false>;
+template<int Code> Handler vector_map_form(bool extra,bool unit) {
+    if(unit)return extra?vector_map<Code,true,true>:vector_map<Code,false,true>;
+    return extra?vector_map<Code,true,false>:vector_map<Code,false,false>;
 }
 template<int LoadWidth,bool WithXor> ASTRA_CC void sum_loop(Cpu *c,Op *p) {
     constexpr int add=WithXor?3:2,cmp=add+1,jcc=cmp+1;
@@ -248,12 +257,15 @@ void optimize_block(Cpu *,Op *p,size_t n) {
         if(packed_load(p[0]) && packed_store(p[store]) && p[store].a.reg==xmm &&
            p[1].kind==SSE && p[1].a.reg==xmm && p[1].b.mode==REG && p[1].b.reg!=xmm &&
            (!extra || (p[2].kind==SSE && p[2].aux==0x58 && p[2].a.reg==xmm && p[2].b.mode==MEM))) {
+            unsigned counter=p[n-3].a.reg;
+            bool unit=p[n-3].b.disp==16 && step_address(p[0].b,counter,16)==16 &&
+                step_address(p[store].b,counter,16)==16 && (!extra || step_address(p[2].b,counter,16)==16);
             switch(p[1].aux) {
-            case 0x1d4:p[0].fn=vector_map_form<0xd4>(extra);return;
-            case 0x1fe:p[0].fn=vector_map_form<0xfe>(extra);return;
-            case 0x1ef:p[0].fn=vector_map_form<0xef>(extra);return;
-            case 0x58:p[0].fn=vector_map_form<0x58>(extra);return;
-            case 0x59:p[0].fn=vector_map_form<0x59>(extra);return;
+            case 0x1d4:p[0].fn=vector_map_form<0xd4>(extra,unit);return;
+            case 0x1fe:p[0].fn=vector_map_form<0xfe>(extra,unit);return;
+            case 0x1ef:p[0].fn=vector_map_form<0xef>(extra,unit);return;
+            case 0x58:p[0].fn=vector_map_form<0x58>(extra,unit);return;
+            case 0x59:p[0].fn=vector_map_form<0x59>(extra,unit);return;
             }
         }
     }
