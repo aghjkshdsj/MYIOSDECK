@@ -16,14 +16,18 @@ CFLAGS=(-O2 -march=x86-64-v2 -fPIE -static-pie -nostdlib -ffreestanding -fno-bui
 
 # bench_sse2: the same benchmark for baseline x86-64 (SSE2 only), for the
 # interpreter, which does not implement every SSE4 instruction.
-for prog in hello bench bench_sse2; do
+# heldout: the held-out benchmark (heldout.c, frozen), built the same way as bench_sse2.
+for prog in hello bench bench_sse2 heldout; do
     src="$HERE/$prog.c"; flags=()
     if [ "$prog" = bench_sse2 ]; then src="$HERE/bench.c"; flags=(-march=x86-64); fi
+    if [ "$prog" = heldout ]; then flags=(-march=x86-64); fi
     gcc "${CFLAGS[@]}" "${flags[@]}" -o "$OUT/$prog.elf" "$src"
     strip "$OUT/$prog.elf"
     file "$OUT/$prog.elf"
     # Sanity check on the build host: the guest runs natively on x86-64 Linux.
-    if [ "$prog" = hello ]; then "$OUT/$prog.elf"; else "$OUT/$prog.elf" integer 2; "$OUT/$prog.elf" simd 10; fi
+    if [ "$prog" = hello ]; then "$OUT/$prog.elf"
+    elif [ "$prog" = heldout ]; then "$OUT/$prog.elf" crc32 2; "$OUT/$prog.elf" tree 1
+    else "$OUT/$prog.elf" integer 2; "$OUT/$prog.elf" simd 10; fi
     (cd "$OUT" && xxd -i -n "guest_${prog}_elf" "$prog.elf" > "guest_${prog}.h")
 done
 

@@ -1,50 +1,69 @@
 #!/bin/bash
-# FXR vs FXI vs native on this host, median of 3 (rotating order), checksums must match.
-#   engine/fxr/compare.sh <guest-dir> <fxr> <fxi> <native: "elf" or a native driver binary>
+# Speed of FXR and FXI as a share of native, on this host: median of N runs (default 5) with the
+# engine order rotated every run, raw nanoseconds, every checksum must match. Two sets:
+#   standard  bench_sse2.elf (engine/guest/bench_kernels.h) at the CI interpreter scales
+#   held-out  heldout.elf (engine/guest/heldout.c, frozen) at its default scales / 20
+#   engine/fxr/compare.sh <guest-dir> <fxr> <fxi> <native-bench> <native-heldout> [runs]
+# native-*: a native driver binary (clang -O2 -ffp-contract=off), or "elf" to run the guest itself
+# (x86-64 hosts). Prints one "ROW set kernel native fxr fxi" line per kernel and the means.
 set -uo pipefail
-G="$1"; FXR="$2"; FXI="$3"; NATIVE="$4"
+G="$1"; FXR="$2"; FXI="$3"; NAT_STD="$4"; NAT_HO="$5"; RUNS="${6:-5}"
 summary="${GITHUB_STEP_SUMMARY:-/dev/null}"
-fail=0
 arch=$(uname -m)
-run_native() { if [ "$NATIVE" = elf ]; then "$G/bench_sse2.elf" "$1" "$2"; else "$NATIVE" "$1" "$2"; fi; }
+fail=0
 field() { sed -n "s/.*$1=\([0-9]*\).*/\1/p"; }
-median() { printf '%s\n' "$@" | sort -n | sed -n 2p; }
+median() { printf '%s\n' "$@" | sort -n | sed -n "$(( ($# + 1) / 2 ))p"; }
+pct() { awk -v n="$1" -v e="$2" 'BEGIN { if (e > 0) printf "%.2f", 100 * n / e; else printf "0" }'; }
 
-for t in hello atomics x87 difftest; do
-    [ -f "$G/$t.elf" ] || continue
-    if "$FXR" "$G/$t.elf" > "/tmp/fxr_$t.txt" 2> "/tmp/fxr_${t}_err.txt"; then echo "$t: fxr ran ok"; else echo "$t: FXR FAILED: $(tail -1 /tmp/fxr_${t}_err.txt)"; fail=1; fi
-    if [ "$NATIVE" = elf ] && [ "$t" != hello ]; then
-        "$G/$t.elf" > "/tmp/nat_$t.txt"
-        if cmp -s "/tmp/nat_$t.txt" "/tmp/fxr_$t.txt"; then echo "$t: output identical to native"; else echo "$t: OUTPUT DIFFERS"; diff "/tmp/nat_$t.txt" "/tmp/fxr_$t.txt" | head -20; fail=1; fi
-    fi
-done
-cat /tmp/fxr_hello.txt
+run_one() {   # engine elf native-driver kernel scale -> RESULT line (empty on failure)
+    local e="$1" elf="$2" nat="$3" k="$4" s="$5"
+    case $e in
+        native) if [ "$nat" = elf ]; then "$G/$elf" "$k" "$s"; else "$nat" "$k" "$s"; fi ;;
+        fxr) "$FXR" "$G/$elf" "$k" "$s" 2>> /tmp/fxr_err.txt ;;
+        fxi) "$FXI" "$G/$elf" "$k" "$s" 2>> /tmp/fxi_err.txt ;;
+    esac | grep RESULT
+}
 
-{ echo "## FXR vs FXI vs native ($arch, median of 3)"; echo "| kernel | native | FXR | FXR % | FXI | FXI % | checksum |"; echo "|---|---|---|---|---|---|---|"; } >> "$summary"
-sum_fxr=0; sum_fxi=0
-for spec in integer:3 float:16 memory:50 branch:6 simd:150; do
-    k="${spec%%:*}"; s="${spec##*:}"
-    n=(); r=(); f=(); sums=""
-    for i in 1 2 3; do
-        for e in native fxr fxi; do
-            case $e in
-                native) out=$(run_native "$k" "$s" | grep RESULT); n+=("$(field ns <<< "$out")");;
-                fxr) out=$("$FXR" "$G/bench_sse2.elf" "$k" "$s" 2>/tmp/fxr_err.txt | grep RESULT) || true; r+=("$(field ns <<< "$out")");;
-                fxi) out=$("$FXI" "$G/bench_sse2.elf" "$k" "$s" 2>/dev/null | grep RESULT) || true; f+=("$(field ns <<< "$out")");;
-            esac
-            sums="$sums $(field sum <<< "$out")"
+bench_set() {   # set-name elf native-driver "kernel:scale ..."
+    local set="$1" elf="$2" nat="$3" specs="$4"
+    local sum_r=0 sum_f=0 count=0
+    { echo "### $set set ($arch, median of $RUNS, rotating order)"; echo
+      echo "| kernel | native ns | FXR ns | FXR % | FXI ns | FXI % | checksum |"; echo "|---|---|---|---|---|---|---|"; } >> "$summary"
+    for spec in $specs; do
+        local k="${spec%%:*}" s="${spec##*:}"
+        local n=() r=() f=() sums="" engines=(native fxr fxi)
+        for ((i = 0; i < RUNS; i++)); do
+            for ((j = 0; j < 3; j++)); do
+                local e="${engines[$(( (i + j) % 3 ))]}" out
+                out=$(run_one "$e" "$elf" "$nat" "$k" "$s") || true
+                local ns; ns=$(field ns <<< "$out")
+                sums="$sums $(field sum <<< "$out")"
+                case $e in native) n+=("${ns:-0}");; fxr) r+=("${ns:-0}");; fxi) f+=("${ns:-0}");; esac
+            done
         done
+        local uniq; uniq=$(tr ' ' '\n' <<< "$sums" | sed '/^$/d' | sort -u | wc -l)
+        local nsum; nsum=$(tr ' ' '\n' <<< "$sums" | sed '/^$/d' | wc -l)
+        local nm rm fm; nm=$(median "${n[@]}"); rm=$(median "${r[@]}"); fm=$(median "${f[@]}")
+        local ck=match
+        if [ "$uniq" != 1 ] || [ "$nsum" != $((3 * RUNS)) ]; then ck="MISMATCH/FAIL"; fail=1; fi
+        local rp fp; rp=$(pct "$nm" "$rm"); fp=$(pct "$nm" "$fm")
+        sum_r=$(awk -v a="$sum_r" -v b="$rp" 'BEGIN { print a + b }'); sum_f=$(awk -v a="$sum_f" -v b="$fp" 'BEGIN { print a + b }')
+        count=$((count + 1))
+        echo "ROW $set $k native=$nm fxr=$rm fxi=$fm fxr%=$rp fxi%=$fp checksum=$ck"
+        echo "RAW $set $k native=[${n[*]}] fxr=[${r[*]}] fxi=[${f[*]}]"
+        echo "| $k | $nm | $rm | **$rp%** | $fm | $fp% | $ck |" >> "$summary"
     done
-    uniq=$(tr ' ' '\n' <<< "$sums" | sed '/^$/d' | sort -u | wc -l)
-    nm=$(median "${n[@]}"); rm=$(median "${r[@]}"); fm=$(median "${f[@]}")
-    if [ "$uniq" != 1 ] || [ -z "$rm" ]; then ck="MISMATCH/FAIL: $(tail -1 /tmp/fxr_err.txt)"; fail=1; else ck=match; fi
-    rp=$(awk -v a="$nm" -v b="$rm" 'BEGIN { printf "%.2f", (b > 0 ? 100 * a / b : 0) }')
-    fp=$(awk -v a="$nm" -v b="$fm" 'BEGIN { printf "%.2f", (b > 0 ? 100 * a / b : 0) }')
-    sum_fxr=$(awk -v a="$sum_fxr" -v b="$rp" 'BEGIN { print a + b }'); sum_fxi=$(awk -v a="$sum_fxi" -v b="$fp" 'BEGIN { print a + b }')
-    echo "$k: native $nm ns | FXR $rm ns = $rp% | FXI $fm ns = $fp% | checksum $ck"
-    echo "| $k | $nm | $rm | **$rp%** | $fm | $fp% | $ck |" >> "$summary"
+    local mr mf; mr=$(awk -v a="$sum_r" -v c="$count" 'BEGIN { printf "%.2f", a / c }'); mf=$(awk -v a="$sum_f" -v c="$count" 'BEGIN { printf "%.2f", a / c }')
+    echo "MEAN $set ($arch): FXR $mr% | FXI $mf%"
+    { echo; echo "**$set mean: FXR $mr% of native, FXI $mf%**"; echo; } >> "$summary"
+}
+
+: > /tmp/fxr_err.txt; : > /tmp/fxi_err.txt
+bench_set standard bench_sse2.elf "$NAT_STD" "integer:3 float:16 memory:50 branch:6 simd:150"
+bench_set held-out heldout.elf "$NAT_HO" \
+    "crc32:75 sort:5 hash:10 vm:15 sha256:40 lz77:100 nbody:50 huffman:65 search:100 tree:3 particles:100"
+# The CLIs print a stats line per run ("[fxi] ... ok=1 ..."); show anything else.
+for e in fxr fxi; do
+    if grep -qv ' ok=1 ' "/tmp/${e}_err.txt"; then echo "$e stderr:"; grep -v ' ok=1 ' "/tmp/${e}_err.txt" | sort | uniq -c | head -20; fi
 done
-mr=$(awk -v a="$sum_fxr" 'BEGIN { printf "%.2f", a / 5 }'); mf=$(awk -v a="$sum_fxi" 'BEGIN { printf "%.2f", a / 5 }')
-echo "MEAN ($arch): FXR $mr% | FXI $mf%"
-echo "**Mean: FXR $mr% of native, FXI $mf%**" >> "$summary"
 exit $fail

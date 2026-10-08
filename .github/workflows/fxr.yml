@@ -1,12 +1,15 @@
-name: FXR interpreter (experimental)
+name: FXR interpreter
 
-# FXR = FXI with the guest registers pinned in host registers (engine/fxr). Guests built once
-# on x86, then FXR, FXI and native compared on the ARM64 and x86 runners with the same clang;
-# plus an iOS compile check (the app links FXR next to FXI, so no global fxi_* symbols).
+# FXR = FXI with the guest registers pinned in host registers (engine/fxr), the fast no-JIT engine.
+# Guests are built once on x86 (gcc), then on the ARM64 and x86 runners: correctness gates for FXR
+# and FXI (hello; atomics, x87, difftest identical to native; --scan-pe of Madeira's x64 programs),
+# then speed as a share of native on the standard and held-out sets (engine/fxr/compare.sh: median
+# of 5, rotating order, checksums must match; native = the same clang 19 at -O2 -ffp-contract=off).
+# Plus an iOS compile check (the app links FXR next to FXI, so no global fxi_* symbols).
 on:
   push:
     branches: ["main", "claude/**"]
-    paths: ["engine/fxr/**", ".github/workflows/fxr.yml"]
+    paths: ["engine/fxr/**", "engine/fxi/**", "engine/guest/**", ".github/workflows/fxr.yml"]
   workflow_dispatch:
 
 permissions:
@@ -21,12 +24,34 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - name: The held-out benchmark is frozen (commit 57ce94e)
+        run: |
+          blob=$(git rev-parse HEAD:engine/guest/heldout.c)
+          echo "engine/guest/heldout.c blob $blob"
+          test "$blob" = 1728cd7f759f26c9d063baaf72ea91501982fb12
       - run: sudo apt-get update -qq && sudo apt-get install -y -qq xxd > /dev/null
       - run: bash engine/guest/build.sh "$RUNNER_TEMP/guests"
+      - name: Native reference outputs (for the gates on ARM64)
+        run: |
+          mkdir -p "$RUNNER_TEMP/native-out"
+          for t in atomics x87 difftest; do "$RUNNER_TEMP/guests/$t.elf" > "$RUNNER_TEMP/native-out/$t.txt"; done
+          wc -l "$RUNNER_TEMP"/native-out/*.txt
+      - name: Madeira x64 test programs (for --scan-pe)
+        run: |
+          . engine/wine/PIN
+          mkdir -p "$RUNNER_TEMP/pe"
+          for exe in hello-x64 fib-x64 clocktest-x64 heap-x64 fileio-x64 calltest-x64 fpconf-x64 child-test-x64 cube-x64 d3d12-cube-x64; do
+            curl -fsSL -o "$RUNNER_TEMP/pe/$exe.exe" \
+              "https://raw.githubusercontent.com/willfaust/Madeira/$MADEIRA_SHA/app/Madeira/arm64ec-windows/$exe.exe" || echo "no $exe"
+          done
+          ls -la "$RUNNER_TEMP/pe"
       - uses: actions/upload-artifact@v5
         with:
           name: fxr-guests
-          path: ${{ runner.temp }}/guests/*.elf
+          path: |
+            ${{ runner.temp }}/guests/*.elf
+            ${{ runner.temp }}/native-out/*.txt
+            ${{ runner.temp }}/pe/*.exe
 
   compare:
     needs: guests
@@ -40,22 +65,55 @@ jobs:
       - uses: actions/download-artifact@v5
         with:
           name: fxr-guests
-          path: guests
+          path: in
       - name: clang 19 (preserve_none on ARM64)
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq clang-19 > /dev/null || (wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh && sudo bash /tmp/llvm.sh 19 > /dev/null)
           clang-19 --version | head -1
-      - name: Build FXR, FXI and the native driver
+          uname -a; lscpu | grep -E 'Model name|Vendor|MHz|^CPU\(s\)' || true
+      - name: Build FXR, FXI and the native drivers (all clang 19)
         run: |
+          mkdir -p guests; cp in/guests/*.elf guests/ 2>/dev/null || cp in/*.elf guests/
           chmod +x guests/*.elf
+          ls in in/* | head -40
           CC=clang-19 bash engine/fxr/build.sh "$RUNNER_TEMP/fxr"
           CC=clang-19 bash engine/fxi/build.sh "$RUNNER_TEMP/fxi"
-          gcc -O2 -ffp-contract=off -o "$RUNNER_TEMP/native" engine/fxr/native.c
-      - name: FXR vs FXI vs native
+          clang-19 -O2 -ffp-contract=off -o "$RUNNER_TEMP/native" engine/fxr/native.c
+          clang-19 -O2 -ffp-contract=off -DHELDOUT_HOSTED -o "$RUNNER_TEMP/native_heldout" engine/guest/heldout.c
+      - name: Correctness gates (FXR and FXI)
         run: |
-          if [ "$(uname -m)" = x86_64 ]; then N=elf; else N="$RUNNER_TEMP/native"; fi
-          bash engine/fxr/compare.sh "$PWD/guests" "$RUNNER_TEMP/fxr/fxr" "$RUNNER_TEMP/fxi/fxi" "$N"
+          NAT=$( [ "$(uname -m)" = x86_64 ] && echo run || echo "$(dirname "$(find in -name difftest.txt | head -1)")" )
+          PE=$(dirname "$(find in -name 'hello-x64.exe' | head -1)")
+          rc=0
+          bash engine/fxr/gates.sh "$PWD/guests" "$RUNNER_TEMP/fxr/fxr" fxr "$NAT" "$PE" || rc=1
+          bash engine/fxr/gates.sh "$PWD/guests" "$RUNNER_TEMP/fxi/fxi" fxi "$NAT" "$PE" || rc=1
+          exit $rc
+      - name: Speed vs native (standard + held-out)
+        run: |
+          if [ "$(uname -m)" = x86_64 ]; then
+            # x86 hosts lack preserve_none's argument registers: checksums only (one run).
+            bash engine/fxr/compare.sh "$PWD/guests" "$RUNNER_TEMP/fxr/fxr" "$RUNNER_TEMP/fxi/fxi" elf elf 1
+          else
+            bash engine/fxr/compare.sh "$PWD/guests" "$RUNNER_TEMP/fxr/fxr" "$RUNNER_TEMP/fxi/fxi" "$RUNNER_TEMP/native" "$RUNNER_TEMP/native_heldout" 5
+          fi
+      - name: perf (ARM64, where the runner exposes the PMU)
+        if: runner.arch == 'ARM64'
+        continue-on-error: true
+        run: |
+          sudo apt-get install -y -qq linux-tools-common "linux-tools-$(uname -r)" > /dev/null 2>&1 || sudo apt-get install -y -qq linux-tools-generic > /dev/null 2>&1 || true
+          sudo sysctl -w kernel.perf_event_paranoid=-1 kernel.kptr_restrict=0 || true
+          PERF=$(ls /usr/lib/linux-tools/*/perf 2>/dev/null | head -1); PERF=${PERF:-perf}
+          for k in integer:3 float:16 memory:50 branch:6 simd:150; do
+            echo "== perf stat FXR ${k%%:*}"
+            sudo "$PERF" stat -e cycles,instructions,branches,branch-misses,L1-icache-load-misses,L1-dcache-load-misses \
+              "$RUNNER_TEMP/fxr/fxr" guests/bench_sse2.elf "${k%%:*}" "${k##*:}" 2>&1 | grep -vE '^\s*$' | tail -12
+          done
+          echo "== perf record FXR (all five standard kernels)"
+          for k in integer:3 float:16 memory:50 branch:6 simd:150; do
+            sudo "$PERF" record -q -o "/tmp/perf_${k%%:*}.data" "$RUNNER_TEMP/fxr/fxr" guests/bench_sse2.elf "${k%%:*}" "${k##*:}" > /dev/null 2>&1
+            echo "-- ${k%%:*}"; sudo "$PERF" report -i "/tmp/perf_${k%%:*}.data" --stdio --sort symbol 2>/dev/null | grep -v '^#' | grep -v '^$' | head -25
+          done
 
   ios:
     runs-on: macos-26
@@ -64,6 +122,7 @@ jobs:
       - name: Compile FXR for iOS arm64
         run: |
           cd engine/fxr
+          xcrun -sdk iphoneos clang --version | head -1
           for f in fxi_core.c fxi_decode.c fxi_flags.c fxi_ops.c fxi_sse.c fxi_atomic.c fxi_x87.c fxi_win.c fxr_pin.c; do
             xcrun -sdk iphoneos clang -arch arm64 -O2 -std=gnu11 -ffp-contract=off -miphoneos-version-min=17.0 -c "$f" -o "/tmp/${f%.c}.o"
           done
