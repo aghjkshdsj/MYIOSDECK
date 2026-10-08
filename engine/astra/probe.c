@@ -20,6 +20,15 @@ int guest_main(int argc,char **argv) {
         PROBE("addq");PROBE("subq");PROBE("xorq");
         // CMP sets carry before ADC/SBB and has no externally visible result.
         PROBE("cmpq $1,%0; adcq");PROBE("cmpq $1,%0; sbbq");
+        unsigned long long v;
+        __asm__ volatile("movq %1,%0; shrq $13,%0; xorq %1,%0; cmpq %0,%0"
+                         :"=&r"(v):"r"(inputs[i]):"cc");number(v);
+        __asm__ volatile("movq %1,%0; shlq $25,%0; xorq %1,%0; cmpq %0,%0"
+                         :"=&r"(v):"r"(inputs[i]):"cc");number(v);
+        __asm__ volatile("movq %1,%0; shrq $0,%0; xorq %1,%0; cmpq %0,%0"
+                         :"=&r"(v):"r"(inputs[i]):"cc");number(v);
+        __asm__ volatile("movq %1,%0; imulq %2,%0; cmpq %0,%0"
+                         :"=&r"(v):"r"(inputs[i]),"r"(inputs[j]):"cc");number(v);
     }
     // Different registers, trip counts, data and counter steps from benchmarks.
     for(unsigned i=0;i<128;i++) { a[i]=i*1234567ull;b[i]=19; }

@@ -126,7 +126,23 @@ template<int LoadWidth,bool WithXor> ASTRA_CC void sum_loop(Cpu *c,Op *p) {
             sum+=value;src+=srcstep;
         } while(counter!=limit);
     };
-    if(proven)loop(std::false_type{});else loop(std::true_type{});
+    if(proven) {
+        auto element=[&](U offset) {
+            U v=0;std::memcpy(&v,(void *)(src+offset*srcstep),LoadWidth);
+            if constexpr(WithXor) {U rhs;std::memcpy(&rhs,(void *)(other+offset*otherstep),8);v^=rhs;}
+            return v;
+        };
+        U remaining=count,s0=0,s1=0,s2=0,s3=0;
+        // Integer reduction is associative modulo 2^64. Separate accumulators
+        // remove the serial dependency without changing any observable flags.
+        while(remaining>=4) {
+            s0+=element(0);s1+=element(1);s2+=element(2);value=element(3);s3+=value;
+            src+=4*srcstep;other+=4*otherstep;remaining-=4;
+        }
+        sum+=s0+s1+s2+s3;
+        while(remaining) {value=element(0);sum+=value;src+=srcstep;other+=otherstep;--remaining;}
+        counter=limit;
+    } else loop(std::true_type{});
     c->r[counter_reg]=counter;c->r[accumulator]=sum;c->r[temporary]=value;
     U a=reverse?limit:counter,b=reverse?counter:limit;
     setflags<CMP,8>(c,a,b,a-b);
@@ -205,6 +221,64 @@ static bool packed_load(const Op &p) {
 static bool packed_store(const Op &p) {
     return p.kind==SSE && p.b.mode==MEM && (p.aux==0x29 || p.aux==0x129 || p.aux==0x17f || p.aux==0x27f || p.aux==0x11 || p.aux==0x111);
 }
+template<int W,Kind K> ASTRA_CC void move_shift_xor(Cpu *c,Op *p) {
+    U v=c->r[p[0].b.reg]&mask<W>(),shift=p[1].b.disp&(W==8?63:31);
+    if constexpr(K==ROL||K==ROR)shift%=W*8;
+    if(shift) {
+        if constexpr(K==SHL)v=shift<W*8?v<<shift:0;
+        if constexpr(K==SHR)v=shift<W*8?v>>shift:0;
+        if constexpr(K==SAR)v=(U)(signedval<W>(v)>>std::min<U>(shift,W*8-1));
+        if constexpr(K==ROL)v=(v<<shift)|(v>>(W*8-shift));
+        if constexpr(K==ROR)v=(v>>shift)|(v<<(W*8-shift));
+    }
+    c->r[p[0].a.reg]=v&mask<W>();
+    c->r[p[2].a.reg]=(c->r[p[2].a.reg]^c->r[p[2].b.reg])&mask<W>();
+    GO(p+3);
+}
+template<int W,Kind K,bool Immediate> ASTRA_CC void move_alu(Cpu *c,Op *p) {
+    U a=c->r[p[0].b.reg]&mask<W>();
+    U b=Immediate?p[1].b.disp:(p[1].b.reg==p[0].a.reg?a:c->r[p[1].b.reg]);
+    U v=0;
+    if constexpr(K==ADD)v=a+b;
+    if constexpr(K==SUB)v=a-b;
+    if constexpr(K==XOR)v=a^b;
+    if constexpr(K==AND)v=a&b;
+    if constexpr(K==OR)v=a|b;
+    if constexpr(K==IMUL)v=a*b;
+    c->r[p[0].a.reg]=v&mask<W>();GO(p+2);
+}
+template<int W> Handler shift_xor_form(Kind k) {
+    switch(k) {
+    case SHL:return move_shift_xor<W,SHL>;case SHR:return move_shift_xor<W,SHR>;
+    case SAR:return move_shift_xor<W,SAR>;case ROL:return move_shift_xor<W,ROL>;
+    case ROR:return move_shift_xor<W,ROR>;default:return nullptr;
+    }
+}
+template<int W,Kind K> Handler move_alu_form(bool immediate) {
+    return immediate?move_alu<W,K,true>:move_alu<W,K,false>;
+}
+template<int W> Handler move_alu_kind(Kind k,bool immediate) {
+    switch(k) {
+    case ADD:return move_alu_form<W,ADD>(immediate);case SUB:return move_alu_form<W,SUB>(immediate);
+    case XOR:return move_alu_form<W,XOR>(immediate);case OR:return move_alu_form<W,OR>(immediate);
+    case AND:return move_alu_form<W,AND>(immediate);case IMUL:return move_alu_form<W,IMUL>(immediate);
+    default:return nullptr;
+    }
+}
+static void scalar_patterns(Op *p,size_t n) {
+    for(size_t i=0;i+2<n;i++) {
+        Op *q=p+i;unsigned w=q[0].width;
+        if((w!=4&&w!=8)||!simple(q[0],MOV,w,REG,REG))continue;
+        if(q[1].width!=w || q[1].a.mode!=REG || q[1].a.reg!=q[0].a.reg || q[1].flags || q[1].aux)continue;
+        if(q[1].b.mode==IMM && !q[2].flags && simple(q[2],XOR,w,REG,REG)) {
+            Handler h=w==8?shift_xor_form<8>(q[1].kind):shift_xor_form<4>(q[1].kind);
+            if(h) {q[0].fn=h;i+=2;continue;}
+        }
+        if(q[1].b.mode!=REG && q[1].b.mode!=IMM)continue;
+        Handler h=w==8?move_alu_kind<8>(q[1].kind,q[1].b.mode==IMM):move_alu_kind<4>(q[1].kind,q[1].b.mode==IMM);
+        if(h) {q[0].fn=h;++i;}
+    }
+}
 ASTRA_CC void fill_loop(Cpu *c,Op *p) {
     unsigned inc=p[0].source_width,cmp=p[0].aux,reg=p[inc].a.reg;
     U counter=c->r[reg],step=p[inc].b.disp;
@@ -274,6 +348,7 @@ void optimize_block(Cpu *,Op *p,size_t n) {
        p[4].kind==JCC && p[4].aux==6 && p[4].imm==p[0].pc &&
        p[0].b.reg==p[1].a.reg && p[3].a.reg==p[1].a.reg &&
        p[0].a.reg!=p[1].a.reg && p[1].b.reg!=p[0].a.reg && p[1].b.reg!=p[1].a.reg)
-        p[0].fn=strided_bytes;
+        {p[0].fn=strided_bytes;return;}
+    scalar_patterns(p,n);
 }
 }
