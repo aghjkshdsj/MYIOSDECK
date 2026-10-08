@@ -11,6 +11,7 @@
 
 #include <mach/mach.h>
 #include <pthread.h>
+#include <pthread/qos.h>
 #include <time.h>
 
 #include "fxi.h"
@@ -309,6 +310,28 @@ static int prof_modules(uint8_t *teb, prof_mod *m, int max) {
     return n;
 }
 
+// The export of a module closest below addr ("name+0x10"), from its PE export directory.
+static void prof_export_name(const prof_mod *m, uint64_t addr, char *out, size_t outsz) {
+    snprintf(out, outsz, "?");
+    uint32_t lfanew, dir_rva, nnames, funcs_rva, names_rva, ords_rva;
+    uint64_t b = m->base;
+    if (!vmr(b + 0x3c, &lfanew, 4) || !vmr(b + lfanew + 24 + 112, &dir_rva, 4) || !dir_rva) return;
+    if (!vmr(b + dir_rva + 0x18, &nnames, 4) || !vmr(b + dir_rva + 0x1c, &funcs_rva, 4) ||
+        !vmr(b + dir_rva + 0x20, &names_rva, 4) || !vmr(b + dir_rva + 0x24, &ords_rva, 4) || nnames > 20000) return;
+    uint32_t rva = (uint32_t)(addr - b), best_rva = 0, best_name = 0;
+    for (uint32_t i = 0; i < nnames; i++) {
+        uint16_t ord; uint32_t f, nm;
+        if (!vmr(b + ords_rva + 2ull * i, &ord, 2) || !vmr(b + funcs_rva + 4ull * ord, &f, 4)) return;
+        if (f <= rva && f >= best_rva && vmr(b + names_rva + 4ull * i, &nm, 4)) { best_rva = f; best_name = nm; }
+    }
+    if (!best_name) return;
+    char name[64] = { 0 };
+    if (!vmr(b + best_name, name, sizeof name - 1)) return;
+    name[sizeof name - 1] = 0;
+    if (rva == best_rva) snprintf(out, outsz, "%s", name);
+    else snprintf(out, outsz, "%s+%#x", name, rva - best_rva);
+}
+
 static int prof_cmp_hit(const void *a, const void *b) {
     uint64_t x = ((const prof_hit *)a)->n, y = ((const prof_hit *)b)->n;
     return x < y ? 1 : x > y ? -1 : 0;
@@ -389,6 +412,33 @@ static void prof_report(uint64_t period_samples) {
                 (unsigned long long)off, (unsigned long long)sorted[i].rip, hex);
     }
     mid_log("[fxi-prof]   blocks translated so far: %llu", (unsigned long long)blocks);
+    // Calls from x64 into native code per target, all threads: each costs a full transition.
+    static prof_hit calls[1024];
+    memset(calls, 0, sizeof calls);
+    uint64_t total_calls = 0;
+    for (int i = 0; i < FAULT_THREADS; i++) {
+        if (!g_fault_threads[i].thread || !g_fault_threads[i].cpu) continue;
+        uint64_t tg[256], ct[256];
+        int k = fxi_win_exit_counts(g_fault_threads[i].cpu, tg, ct, 256);
+        for (int j = 0; j < k; j++) {
+            total_calls += ct[j];
+            uint64_t h = (tg[j] * 0x9E3779B97F4A7C15ull) >> 54;
+            for (int probe = 0; probe < 64; probe++, h = (h + 1) & 1023) {
+                if (calls[h].rip == tg[j]) { calls[h].n += ct[j]; break; }
+                if (!calls[h].n) { calls[h].rip = tg[j]; calls[h].n = ct[j]; break; }
+            }
+        }
+    }
+    if (!total_calls) return;
+    qsort(calls, 1024, sizeof calls[0], prof_cmp_hit);
+    mid_log("[fxi-prof]   calls into native code: %llu/s; top targets:", (unsigned long long)(total_calls / PROF_PERIOD_S));
+    for (int i = 0; i < 12 && calls[i].n; i++) {
+        const char *mod = "?"; char fn[96] = "?";
+        for (int k = 0; k < nm; k++)
+            if (calls[i].rip - mods[k].base < mods[k].size) { mod = mods[k].name; prof_export_name(&mods[k], calls[i].rip, fn, sizeof fn); break; }
+        mid_log("[fxi-prof]   native %2d: %5.1f%% %llu/s %s!%s (%#llx)", i + 1, 100.0 * calls[i].n / (double)total_calls,
+                (unsigned long long)(calls[i].n / PROF_PERIOD_S), mod, fn, (unsigned long long)calls[i].rip);
+    }
 }
 
 static void *prof_thread(void *arg) {
@@ -488,6 +538,11 @@ static long host_thread_init(void) {
         fxi_win_set_teb(*slot, (uint64_t)(uintptr_t)teb);
     }
     fault_thread_register(area, teb, *slot);
+    // Game threads at user-interactive QoS: the scheduler keeps them on the performance cores.
+    // Build 88's log had the busiest thread (Stick Fight's audio) spending 113 of 249 ms on an
+    // efficiency core, at about half the speed; one interpreted thread cannot use more than one
+    // core, so it should at least be a fast one.
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
     static pthread_once_t prof_once = PTHREAD_ONCE_INIT;
     pthread_once(&prof_once, prof_start);
     mid_log("[fxi-win] thread ready: TEB %p, CPU area %p, emulator stack %p", (void *)teb, (void *)area,

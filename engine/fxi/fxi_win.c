@@ -65,11 +65,28 @@ FxiCpu *fxi_win_cpu_new(void) {
     return c;
 }
 
+// Entering x64 code: usually a return from a native call, whose x64 call pushed this rip on
+// the return-address ring with its call site's return-block slot (build 89: Stick Fight's main
+// thread made 2.1M native calls/s and paid a hash lookup for every return).
+static Block *entry_block(FxiCpu *c, uint64_t rip) {
+    uint32_t top = (c->ras_top - 1) & 31;
+    if (c->ras[top].rip == rip && c->ras[top].slot) {
+        Block **slot = c->ras[top].slot;
+        c->ras_top--;
+        Block *b = __atomic_load_n(slot, __ATOMIC_ACQUIRE);
+        if (b) return b;
+        b = fxi_lookup(c, rip);
+        if (b != fxi_stop) __atomic_store_n(slot, b, __ATOMIC_RELEASE);
+        return b;
+    }
+    return fxi_lookup(c, rip);
+}
+
 uint64_t fxi_win_run(FxiCpu *c) {
     c->stop = 0;
     c->cur = NULL;
     if (c->err) c->err[0] = 0;
-    Block *b = fxi_lookup(c, c->rip);
+    Block *b = entry_block(c, c->rip);
     if (!c->stop) b->u[0].fn(c, b->u);   // returns when the chain stops
     if (c->stop == FXI_STOP_EC) {
         c->stop = 0;
@@ -105,6 +122,16 @@ uint64_t fxi_win_profile(FxiCpu *c, uint64_t *lookups, uint64_t *exits, uint64_t
     Uop *u = __atomic_load_n(&c->cur, __ATOMIC_RELAXED);
     *lookups = c->n_lookups; *exits = c->n_exits; *blocks = c->vm->blocks;
     return u ? u->rip : c->rip;
+}
+
+// Profiler: calls into native code per target since the last call (counts are reset).
+int fxi_win_exit_counts(FxiCpu *c, uint64_t *targets, uint64_t *counts, int max) {
+    int n = 0;
+    for (int i = 0; i < 256 && n < max; i++) {
+        uint64_t k = __atomic_exchange_n(&c->exit_tab[i].n, 0, __ATOMIC_RELAXED);
+        if (k) { targets[n] = c->exit_tab[i].target; counts[n] = k; n++; }
+    }
+    return n;
 }
 
 // Diagnostics: the last block lookups, oldest first.
