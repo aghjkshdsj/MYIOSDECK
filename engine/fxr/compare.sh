@@ -10,7 +10,7 @@ run_native() { if [ "$NATIVE" = elf ]; then "$G/bench_sse2.elf" "$1" "$2"; else 
 field() { sed -n "s/.*$1=\([0-9]*\).*/\1/p"; }
 median() { printf '%s\n' "$@" | sort -n | sed -n 2p; }
 
-for t in hello atomics x87; do
+for t in hello atomics x87 difftest; do
     [ -f "$G/$t.elf" ] || continue
     if "$FXR" "$G/$t.elf" > "/tmp/fxr_$t.txt" 2> "/tmp/fxr_${t}_err.txt"; then echo "$t: fxr ran ok"; else echo "$t: FXR FAILED: $(tail -1 /tmp/fxr_${t}_err.txt)"; fail=1; fi
     if [ "$NATIVE" = elf ] && [ "$t" != hello ]; then

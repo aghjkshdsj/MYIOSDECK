@@ -30,7 +30,8 @@ done
 # atomics: cmpxchg/xadd/xchg/lock ALU/cmpxchg16b/bt* results and flags (FXI must match exactly).
 # -mno-red-zone: the test reads flags with pushfq inside inline asm.
 # x87: the x87 FPU and the 0F AE group (fxsave, ldmxcsr, fences).
-for prog in atomics x87; do
+# difftest: every common integer instruction form on random inputs and flags (one hash per form).
+for prog in atomics x87 difftest; do
     gcc "${CFLAGS[@]}" -march=x86-64 -mno-red-zone -o "$OUT/$prog.elf" "$HERE/$prog.c"
     strip "$OUT/$prog.elf"
     "$OUT/$prog.elf" | tail -1

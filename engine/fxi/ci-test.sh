@@ -16,7 +16,7 @@ else
 fi
 
 # Exact-output tests: atomics (cmpxchg/xadd/xchg/lock ALU/cmpxchg16b/bt*/shld/shrd), x87.
-for t in atomics x87; do
+for t in atomics x87 difftest; do
     echo "== $t =="
     "$G/$t.elf" > "/tmp/native_$t.txt"
     "$FXI" "$G/$t.elf" > "/tmp/fxi_$t.txt" 2> "/tmp/fxi_${t}_err.txt"
