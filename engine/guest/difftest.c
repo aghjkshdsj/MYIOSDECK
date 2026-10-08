@@ -345,6 +345,130 @@ static void x_togpr(void) {
     out("x_togpr", h);
 }
 
+// ---- instruction pairs FXR runs as one uop (superinstructions), for all 16 conditions: cmp/test
+// of 8/16-bit registers and of memory, ALU + jcc, dec/inc + jcc, load + test + jcc, (u)comis + jcc.
+// The flags are read after the branch too (the fused uop records them only when something does).
+#define JX(X) "\n\tj" #X " 1f\n\tmovq $0, %[j]\n\tjmp 2f\n1:\n\tmovq $1, %[j]\n2:\n\tpushfq\n\tpopq %[f]"
+#define JN(X) "\n\tj" #X " 1f\n\tmovq $0, %[j]\n\tjmp 2f\n1:\n\tmovq $1, %[j]\n2:"
+static u64 g_m[4];
+#define FUSED_CC(X)                                                                           \
+    static void fz_##X(void) {                                                                \
+        u64 h = 14695981039346656037ull;                                                      \
+        for (int i = 0; i < N; i++) {                                                         \
+            u64 a = val(), b = (i & 3) ? val() : a, fi = flags_in(), j, f, r, k = 0, *p = g_m; \
+            g_m[1] = (i & 4) ? b : a;                                                         \
+            __asm__ volatile("cmpb %b[b], %b[a]" JX(X) : [j] "=&r"(j), [f] "=&r"(f) : [a] "r"(a), [b] "r"(b) : "cc", "memory"); \
+            h = mix(mix(h, j), f & ARITH);                                                    \
+            __asm__ volatile("cmpw $0x7ff0, %w[a]" JX(X) : [j] "=&r"(j), [f] "=&r"(f) : [a] "r"(a) : "cc", "memory"); \
+            h = mix(mix(h, j), f & ARITH);                                                    \
+            __asm__ volatile("testb %b[a], %b[a]" JX(X) : [j] "=&r"(j), [f] "=&r"(f) : [a] "r"(a) : "cc", "memory"); \
+            h = mix(mix(h, j), f & LOGIC);                                                    \
+            __asm__ volatile("testw $0x8001, %w[a]" JX(X) : [j] "=&r"(j), [f] "=&r"(f) : [a] "r"(a) : "cc", "memory"); \
+            h = mix(mix(h, j), f & LOGIC);                                                    \
+            __asm__ volatile("cmpl $0x7fffff00, %[m]" JX(X) : [j] "=&r"(j), [f] "=&r"(f) : [m] "m"(g_m[1]) : "cc", "memory"); \
+            h = mix(mix(h, j), f & ARITH);                                                    \
+            __asm__ volatile("cmpq %[b], 8(%[p],%[k],8)" JX(X) : [j] "=&r"(j), [f] "=&r"(f) : [b] "r"(b), [p] "r"(p), [k] "r"(k) : "cc", "memory"); \
+            h = mix(mix(h, j), f & ARITH);                                                    \
+            __asm__ volatile("cmpq 8(%[p],%[k],8), %[a]" JX(X) : [j] "=&r"(j), [f] "=&r"(f) : [a] "r"(a), [p] "r"(p), [k] "r"(k) : "cc", "memory"); \
+            h = mix(mix(h, j), f & ARITH);                                                    \
+            __asm__ volatile("testb $0x81, %[m]" JX(X) : [j] "=&r"(j), [f] "=&r"(f) : [m] "m"(g_m[1]) : "cc", "memory"); \
+            h = mix(mix(h, j), f & LOGIC);                                                    \
+            __asm__ volatile("testq %[a], %[m]" JX(X) : [j] "=&r"(j), [f] "=&r"(f) : [a] "r"(a), [m] "m"(g_m[1]) : "cc", "memory"); \
+            h = mix(mix(h, j), f & LOGIC);                                                    \
+            r = a; __asm__ volatile(PRE "subl $7, %k[r]" JX(X) : [r] "+r"(r), [j] "=&r"(j), [f] "=&r"(f) : [fi] "r"(fi) : "cc", "memory"); \
+            h = mix(mix(mix(h, r), j), f & ARITH);                                            \
+            r = a; __asm__ volatile(PRE "addq $-3, %[r]" JX(X) : [r] "+r"(r), [j] "=&r"(j), [f] "=&r"(f) : [fi] "r"(fi) : "cc", "memory"); \
+            h = mix(mix(mix(h, r), j), f & ARITH);                                            \
+            r = a; __asm__ volatile(PRE "andl $0xff00, %k[r]" JX(X) : [r] "+r"(r), [j] "=&r"(j), [f] "=&r"(f) : [fi] "r"(fi) : "cc", "memory"); \
+            h = mix(mix(mix(h, r), j), f & LOGIC);                                            \
+            r = a; __asm__ volatile(PRE "orq $1, %[r]" JX(X) : [r] "+r"(r), [j] "=&r"(j), [f] "=&r"(f) : [fi] "r"(fi) : "cc", "memory"); \
+            h = mix(mix(mix(h, r), j), f & LOGIC);                                            \
+            r = a; __asm__ volatile(PRE "xorl $0x55, %k[r]" JX(X) : [r] "+r"(r), [j] "=&r"(j), [f] "=&r"(f) : [fi] "r"(fi) : "cc", "memory"); \
+            h = mix(mix(mix(h, r), j), f & LOGIC);                                            \
+            r = (i & 8) ? 1 : a; __asm__ volatile(PRE "decl %k[r]" JX(X) : [r] "+r"(r), [j] "=&r"(j), [f] "=&r"(f) : [fi] "r"(fi) : "cc", "memory"); \
+            h = mix(mix(mix(h, r), j), f & ARITH);                                            \
+            r = a; __asm__ volatile(PRE "incq %[r]" JX(X) : [r] "+r"(r), [j] "=&r"(j), [f] "=&r"(f) : [fi] "r"(fi) : "cc", "memory"); \
+            h = mix(mix(mix(h, r), j), f & ARITH);                                            \
+            __asm__ volatile("movq %[m], %[r]\n\ttestq %[r], %[r]" JX(X) : [r] "=&r"(r), [j] "=&r"(j), [f] "=&r"(f) : [m] "m"(g_m[(i & 8) ? 0 : 1]) : "cc", "memory"); \
+            h = mix(mix(mix(h, r), j), f & LOGIC);                                            \
+            /* the same pairs with nothing reading the flags afterwards */                    \
+            r = (i & 8) ? 1 : a; __asm__ volatile("decl %k[r]" JN(X) : [r] "+r"(r), [j] "=&r"(j) : : "cc", "memory"); \
+            h = mix(mix(h, r), j);                                                            \
+            r = a; __asm__ volatile("subq $9, %[r]" JN(X) : [r] "+r"(r), [j] "=&r"(j) : : "cc", "memory"); \
+            h = mix(mix(h, r), j);                                                            \
+            __asm__ volatile("cmpl $0x7fffff00, %[m]" JN(X) : [j] "=&r"(j) : [m] "m"(g_m[1]) : "cc", "memory"); \
+            h = mix(h, j);                                                                    \
+            __asm__ volatile("cmpb %b[b], %b[a]" JN(X) : [j] "=&r"(j) : [a] "r"(a), [b] "r"(b) : "cc", "memory"); \
+            h = mix(h, j);                                                                    \
+            __asm__ volatile("movl %[m], %k[r]\n\ttestl %k[r], %k[r]" JN(X) : [r] "=&r"(r), [j] "=&r"(j) : [m] "m"(g_m[(i & 8) ? 0 : 1]) : "cc", "memory"); \
+            h = mix(mix(h, r), j);                                                            \
+        }                                                                                     \
+        out("fz_" #X, h);                                                                     \
+    }
+FUSED_CC(o) FUSED_CC(no) FUSED_CC(b) FUSED_CC(ae) FUSED_CC(e) FUSED_CC(ne) FUSED_CC(be) FUSED_CC(a)
+FUSED_CC(s) FUSED_CC(ns) FUSED_CC(p) FUSED_CC(np) FUSED_CC(l) FUSED_CC(ge) FUSED_CC(le) FUSED_CC(g)
+// (u)comis + jcc: small exact values, equal ones, and quiet NaNs (unordered)
+static double dval(int i) {
+    union { u64 u; double d; } x;
+    if (i % 7 == 0) { x.u = 0x7ff8000000000000ull; return x.d; }
+    return (double)((long long)(rnd() % 41) - 20) / 4.0;
+}
+#define FUSED_COM(X)                                                                          \
+    static void fc_##X(void) {                                                                \
+        u64 h = 14695981039346656037ull;                                                      \
+        for (int i = 0; i < N; i++) {                                                         \
+            double d = dval(i), e = (i & 3) ? dval(i + 3) : d;                                \
+            float fd = (float)d, fe = (float)e;                                               \
+            u64 j, f;                                                                         \
+            __asm__ volatile("comisd %[e], %[d]" JX(X) : [j] "=&r"(j), [f] "=&r"(f) : [d] "x"(d), [e] "x"(e) : "cc", "memory"); \
+            h = mix(mix(h, j), f & ARITH);                                                    \
+            __asm__ volatile("ucomisd %[m], %[d]" JX(X) : [j] "=&r"(j), [f] "=&r"(f) : [d] "x"(d), [m] "m"(e) : "cc", "memory"); \
+            h = mix(mix(h, j), f & ARITH);                                                    \
+            __asm__ volatile("comiss %[e], %[d]" JX(X) : [j] "=&r"(j), [f] "=&r"(f) : [d] "x"(fd), [e] "x"(fe) : "cc", "memory"); \
+            h = mix(mix(h, j), f & ARITH);                                                    \
+            __asm__ volatile("ucomiss %[m], %[d]" JX(X) : [j] "=&r"(j), [f] "=&r"(f) : [d] "x"(fd), [m] "m"(fe) : "cc", "memory"); \
+            h = mix(mix(h, j), f & ARITH);                                                    \
+            __asm__ volatile("ucomisd %[e], %[d]" JN(X) : [j] "=&r"(j) : [d] "x"(d), [e] "x"(e) : "cc", "memory"); \
+            h = mix(h, j);                                                                    \
+        }                                                                                     \
+        out("fc_" #X, h);                                                                     \
+    }
+FUSED_COM(o) FUSED_COM(no) FUSED_COM(b) FUSED_COM(ae) FUSED_COM(e) FUSED_COM(ne) FUSED_COM(be) FUSED_COM(a)
+FUSED_COM(s) FUSED_COM(ns) FUSED_COM(p) FUSED_COM(np) FUSED_COM(l) FUSED_COM(ge) FUSED_COM(le) FUSED_COM(g)
+// argument setup + call, push/pop pairs, pop + ret
+static void fz_call(void) {
+    u64 h = 14695981039346656037ull;
+    for (int i = 0; i < N; i++) {
+        u64 a = val(), b = val(), r, s, t, z, c, d, e;
+        __asm__ volatile("movq %[a], %%rdi\n\tcall 1f\n\tjmp 2f\n1:\n\tmovq %%rdi, %[r]\n\tret\n2:" : [r] "=&r"(r) : [a] "r"(a) : "rdi", "memory");
+        __asm__ volatile("leaq 24(%[a]), %%rsi\n\tcall 1f\n\tjmp 2f\n1:\n\tmovq %%rsi, %[r]\n\tret\n2:" : [r] "=&r"(s) : [a] "r"(a) : "rsi", "memory");
+        __asm__ volatile("movl $0x89abcdef, %%edx\n\tcall 1f\n\tjmp 2f\n1:\n\tmovq %%rdx, %[r]\n\tret\n2:" : [r] "=&r"(t) : : "rdx", "memory");
+        __asm__ volatile("xorl %%ecx, %%ecx\n\tcall 1f\n\tjmp 2f\n1:\n\tmovq %%rcx, %[r]\n\tret\n2:" : [r] "=&r"(z) : : "rcx", "cc", "memory");
+        __asm__ volatile("pushq %[a]\n\tpushq %[b]\n\tpopq %[c]\n\tpopq %[d]" : [c] "=&r"(c), [d] "=&r"(d) : [a] "r"(a), [b] "r"(b) : "memory");
+        __asm__ volatile("call 1f\n\tjmp 2f\n1:\n\tpushq %[b]\n\tpopq %[e]\n\tret\n2:" : [e] "=&r"(e) : [b] "r"(b) : "memory");
+        h = mix(mix(mix(mix(mix(mix(mix(h, r), s), t), z), c), d), e);
+    }
+    out("fz_call", h);
+}
+// loads and stores with [base + index*scale + disp]
+static void fz_index(void) {
+    static u64 arr[48];
+    u64 h = 14695981039346656037ull;
+    for (int i = 0; i < N; i++) {
+        for (int q = 0; q < 48; q++) arr[q] = val();
+        u64 k = rnd() & 7, v = val(), r1, r2, r3, r4;
+        __asm__ volatile("movq 8(%[p],%[k],8), %[r]" : [r] "=r"(r1) : [p] "r"(arr), [k] "r"(k) : "memory");
+        __asm__ volatile("movl 4(%[p],%[k],4), %k[r]" : [r] "=r"(r2) : [p] "r"(arr), [k] "r"(k) : "memory");
+        __asm__ volatile("movzbl 3(%[p],%[k]), %k[r]" : [r] "=r"(r3) : [p] "r"(arr), [k] "r"(k) : "memory");
+        __asm__ volatile("movzbl 7(%[p]), %k[r]" : [r] "=r"(r4) : [p] "r"(arr) : "memory");
+        __asm__ volatile("movb %b[v], 5(%[p],%[k],2)\n\tmovl %k[v], 32(%[p],%[k],4)\n\tmovq %[v], 64(%[p],%[k],1)"
+                         : : [p] "r"(arr), [k] "r"(k), [v] "r"(v) : "memory");
+        h = mix(mix(mix(mix(h, r1), r2), r3), r4);
+        for (int q = 0; q < 48; q++) h = mix(h, arr[q]);
+    }
+    out("fz_index", h);
+}
+
 typedef void (*test_fn)(void);
 #define ALU_LIST(OP) OP##_q, OP##_l, OP##_w, OP##_b, OP##_mr_q, OP##_rm_l, OP##_mr_b,
 static const test_fn kTests[] = {
@@ -372,6 +496,9 @@ static const test_fn kTests[] = {
     x_cvtps2pd, x_addss, x_divss, x_cvtss2sd, x_addpd, x_mulpd, x_divpd, x_minpd, x_maxsd, x_subsd,
     x_cvtpd2dq, x_cvttpd2dq, x_cvtpd2ps, x_cvtsd2ss, x_cmpsd_le, x_cvtdq2ps, x_cvtdq2pd,
     x_movsd_rr, x_movss_rr, x_movhlps, x_movlhps, x_movq_rr, x_unpcklps, x_pinsrw, x_togpr,
+    fz_o, fz_no, fz_b, fz_ae, fz_e, fz_ne, fz_be, fz_a, fz_s, fz_ns, fz_p, fz_np, fz_l, fz_ge, fz_le, fz_g,
+    fc_o, fc_no, fc_b, fc_ae, fc_e, fc_ne, fc_be, fc_a, fc_s, fc_ns, fc_p, fc_np, fc_l, fc_ge, fc_le, fc_g,
+    fz_call, fz_index,
 };
 
 int guest_main(int argc, char **argv) {

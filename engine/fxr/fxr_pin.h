@@ -29,6 +29,11 @@
     M(11, __VA_ARGS__) M(12, __VA_ARGS__) M(13, __VA_ARGS__) M(14, __VA_ARGS__) M(15, __VA_ARGS__)
 #define R17(M, ...) R16(M, __VA_ARGS__) M(Z, __VA_ARGS__)
 #define R17B(M, ...) R16B(M, __VA_ARGS__) M(Z, __VA_ARGS__)
+// A third level, for handlers specialised on three registers (base, index, data)
+#define R16C(M, ...) M(0, __VA_ARGS__) M(1, __VA_ARGS__) M(2, __VA_ARGS__) M(3, __VA_ARGS__) M(4, __VA_ARGS__) \
+    M(5, __VA_ARGS__) M(6, __VA_ARGS__) M(7, __VA_ARGS__) M(8, __VA_ARGS__) M(9, __VA_ARGS__) M(10, __VA_ARGS__) \
+    M(11, __VA_ARGS__) M(12, __VA_ARGS__) M(13, __VA_ARGS__) M(14, __VA_ARGS__) M(15, __VA_ARGS__)
+#define R17C(M, ...) R16C(M, __VA_ARGS__) M(Z, __VA_ARGS__)
 // The 16 x86 condition codes (a third expansion level, for handlers specialised on cc and registers)
 #define C16(M, ...) M(0, __VA_ARGS__) M(1, __VA_ARGS__) M(2, __VA_ARGS__) M(3, __VA_ARGS__) M(4, __VA_ARGS__) \
     M(5, __VA_ARGS__) M(6, __VA_ARGS__) M(7, __VA_ARGS__) M(8, __VA_ARGS__) M(9, __VA_ARGS__) M(10, __VA_ARGS__) \
@@ -186,6 +191,8 @@ FXI_INLINE int pcond_tab(uint64_t tab, uint64_t F0, uint64_t F1, uint64_t F2, ui
 // Direct successors: the link holds the target block's first uop once known. The first time,
 // an out-of-line handler looks the block up and fills the link (release: Windows threads).
 #define PCHAIN(LINK, MISS) do { Uop *l_ = (LINK); if (FXI_LIKELY(l_ != 0)) PGO(l_); PTAIL(MISS); } while (0)
+// A conditional branch's two successors (imm: taken target, aux: fallthrough)
+#define FJ_BR(TAKEN) do { if (TAKEN) PCHAIN(u->ulink, p_miss_t); PCHAIN(u->ulink2, p_miss_f); } while (0)
 // Indirect branches (ret, jmp/call through a register or memory): a per-thread direct-mapped
 // cache of target -> first uop; a miss looks the block up (target in T) and fills the entry.
 #define IBTC_MASK 1023u
@@ -253,6 +260,10 @@ FXI_INLINE FxrV xlo_f(FxrV d, float v) { VF r = (VF)d; r[0] = v; return (FxrV)r;
 FXI_INLINE FxrV xlo_d(FxrV d, double v) { VD r = (VD)d; r[0] = v; return (FxrV)r; }
 FXI_INLINE FxrV xlo_u32(FxrV d, uint32_t v) { VU4 r = (VU4)d; r[0] = v; return (FxrV)r; }
 #define XSEL(m, a, b) ((((FxrV)(m)) & (a)) | (~((FxrV)(m)) & (b)))   // per lane: m ? a : b
+// (u)comiss/(u)comisd flags: ZF PF CF from the compare, OF SF AF clear, as raw lazy flags (F0 only)
+#define XCOMIS_SET(a, b) do { double a_ = (a), b_ = (b);                                   \
+        F0 = (uint64_t)LF(LF_RAW, 3) | ((uint64_t)((a_ != a_) | (b_ != b_)) * 0x45 | (uint64_t)(a_ < b_) | (uint64_t)(a_ == b_) << 6) << 32;   /* branch-free */ \
+    } while (0)
 // A memory operand of W bytes, zero-extended to 16
 FXI_INLINE FxrV xldn(uint64_t a, int w) {
     if (w == 16) return xld((const void *)(uintptr_t)a);
@@ -347,6 +358,7 @@ enum { PS_SHL, PS_SHR, PS_SAR, PS_ROL, PS_ROR };
 enum { XG_SI2SS32, XG_SI2SS64, XG_SI2SD32, XG_SI2SD64, XG_MOVD32, XG_MOVD64, XG_COUNT };
 enum { GX_TSS32, GX_SS32, GX_TSD32, GX_SD32, GX_TSS64, GX_SS64, GX_TSD64, GX_SD64, GX_MOVD32, GX_MOVD64,
        GX_PMOVMSKB, GX_MOVMSKPS, GX_MOVMSKPD, GX_COUNT };
+enum { FL_LD32, FL_LD64, FL_LDZ8, FL_ST8, FL_ST32, FL_ST64, FL_COUNT };   // [base + index*scale + disp] forms
 typedef struct { const char *name; PFn rr[9][9]; PFn rt[9]; } XOp;
 typedef struct { const char *name; PFn h[9]; } XShift;
 #define FXR_TABLES(X) \
@@ -362,7 +374,12 @@ typedef struct { const char *name; PFn h[9]; } XShift;
     X(t_xl_movx, [9][17][17]) X(t_xs_movx, [9][17][17]) X(t_xl_movss, [9][17]) X(t_xl_movsd, [9][17]) \
     X(t_xs_movss, [9][17]) X(t_xs_movsd, [9][17]) X(t_xlt_movss, [9]) X(t_xlt_movsd, [9]) X(t_xlt_movlps, [9]) \
     X(t_xlt_movhps, [9]) X(t_xst_movss, [9]) X(t_xst_movsd, [9]) X(t_xst_movhps, [9]) X(t_xst_movx, [9]) \
-    X(t_xg, [XG_COUNT][9][16]) X(t_gx, [GX_COUNT][9][16]) X(t_xgt, [4][9])
+    X(t_xg, [XG_COUNT][9][16]) X(t_xgt, [4][9]) X(t_gx, [GX_COUNT][9][16]) \
+    X(t_ldi, [FL_COUNT][17][16][16]) X(t_ldz8s, [17][16]) \
+    X(t_fmi, [2][4][16][17]) X(t_fmit, [2][4][16]) X(t_fmr, [3][4][16][16]) X(t_fjs_ri, [2][2][16][16]) \
+    X(t_fjs_rr, [2][2][16][16]) X(t_fjs_rrx, [2][2][16][16]) X(t_fcj, [2][16][9][9]) X(t_fcjt, [2][16][9]) \
+    X(t_fai, [5][2][16][16]) X(t_fid, [2][2][4][16]) X(t_amr, [2][16][16]) X(t_alea, [17][16]) X(t_ami, [2][16]) \
+    X(t_axz, [16]) X(t_pop2, [16][16]) X(t_push2, [16][16]) X(t_popret, [16]) X(t_ltj, [2][6][17][16])
 #define FXR_DECL_TABLE(NAME, DIMS) extern const PFn fxr_##NAME DIMS;
 FXR_TABLES(FXR_DECL_TABLE)
 #define t_setcc fxr_t_setcc
@@ -414,6 +431,26 @@ FXR_TABLES(FXR_DECL_TABLE)
 #define t_xg fxr_t_xg
 #define t_gx fxr_t_gx
 #define t_xgt fxr_t_xgt
+#define t_ldi fxr_t_ldi
+#define t_ldz8s fxr_t_ldz8s
+#define t_fmi fxr_t_fmi
+#define t_fmit fxr_t_fmit
+#define t_fmr fxr_t_fmr
+#define t_fjs_ri fxr_t_fjs_ri
+#define t_fjs_rr fxr_t_fjs_rr
+#define t_fjs_rrx fxr_t_fjs_rrx
+#define t_fcj fxr_t_fcj
+#define t_fcjt fxr_t_fcjt
+#define t_fai fxr_t_fai
+#define t_fid fxr_t_fid
+#define t_amr fxr_t_amr
+#define t_alea fxr_t_alea
+#define t_ami fxr_t_ami
+#define t_axz fxr_t_axz
+#define t_pop2 fxr_t_pop2
+#define t_push2 fxr_t_push2
+#define t_popret fxr_t_popret
+#define t_ltj fxr_t_ltj
 extern const XOp fxr_xops[];
 extern const size_t fxr_n_xops;
 extern const XShift fxr_xshift[];

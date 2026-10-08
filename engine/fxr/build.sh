@@ -13,7 +13,7 @@ if [ "$(uname -m)" = x86_64 ]; then ARCH_FLAGS=(-mcx16); fi
 CFLAGS=(-O2 -std=gnu11 -g -Wall -Wextra -Wno-unused-parameter -Wno-unused-function -Wno-unused-variable
         -Wno-unused-but-set-variable -Wno-sign-compare -ffp-contract=off -fno-math-errno "${ARCH_FLAGS[@]}")
 SRCS=(fxi_core.c fxi_decode.c fxi_flags.c fxi_ops.c fxi_sse.c fxi_atomic.c fxi_x87.c fxi_win.c fxi_main.c
-      fxr_pin.c fxr_pin_alu.c fxr_pin_br.c fxr_pin_sse.c)
+      fxr_pin.c fxr_pin_alu.c fxr_pin_br.c fxr_pin_sse.c fxr_pin_fuse.c fxr_pin_mem.c)
 pids=()
 for f in "${SRCS[@]}"; do
     "$CC" "${CFLAGS[@]}" -c "$HERE/$f" -o "$OUT/obj/${f%.c}.o" & pids+=($!)

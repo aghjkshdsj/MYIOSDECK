@@ -125,6 +125,7 @@ struct Uop {
     uint8_t base, index, scale, cc;
     uint64_t rip;            // the instruction's address (exceptions, faults)
     uint8_t flive;           // FXR: arithmetic flags live after this uop (decoder liveness, across blocks)
+    int32_t fimm;            // FXR: a fused uop's second immediate (imm and disp are taken)
 };
 
 struct Block {

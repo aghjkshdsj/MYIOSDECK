@@ -110,6 +110,13 @@ jobs:
             sudo "$PERF" stat -e cycles,instructions,branches,branch-misses,L1-icache-load-misses,L1-dcache-load-misses \
               "$RUNNER_TEMP/fxr/fxr" guests/bench_sse2.elf "${k%%:*}" "${k##*:}" 2>&1 | grep -vE '^\s*$' | tail -12
           done
+          echo "== run-to-run spread: 4 runs each, with stall counters"
+          for k in memory:50 branch:6; do
+            for i in 1 2 3 4; do
+              sudo taskset -c 1 "$PERF" stat -x, -e cycles,instructions,stalled-cycles-frontend,stalled-cycles-backend,L1-dcache-load-misses,dTLB-load-misses \
+                "$RUNNER_TEMP/fxr/fxr" guests/bench_sse2.elf "${k%%:*}" "${k##*:}" 2>&1 >/dev/null | grep -v '^\[fxi\]' | awk -F, -v k="${k%%:*}" '{ printf "%s %s=%s ", k, $3, $1 } END { print "" }'
+            done
+          done
           echo "== perf record FXR (all five standard kernels)"
           hot=""
           for k in integer:3 float:16 memory:50 branch:6 simd:150; do
@@ -130,7 +137,7 @@ jobs:
         run: |
           cd engine/fxr
           xcrun -sdk iphoneos clang --version | head -1
-          srcs="fxi_core.c fxi_decode.c fxi_flags.c fxi_ops.c fxi_sse.c fxi_atomic.c fxi_x87.c fxi_win.c fxr_pin.c fxr_pin_alu.c fxr_pin_br.c fxr_pin_sse.c"
+          srcs="fxi_core.c fxi_decode.c fxi_flags.c fxi_ops.c fxi_sse.c fxi_atomic.c fxi_x87.c fxi_win.c fxr_pin.c fxr_pin_alu.c fxr_pin_br.c fxr_pin_sse.c fxr_pin_fuse.c fxr_pin_mem.c"
           pids=""
           for f in $srcs; do
             xcrun -sdk iphoneos clang -arch arm64 -O2 -std=gnu11 -ffp-contract=off -miphoneos-version-min=17.0 -c "$f" -o "/tmp/${f%.c}.o" & pids="$pids $!"

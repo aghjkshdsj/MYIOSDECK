@@ -121,7 +121,7 @@ XLIST(DEF_XOP)
 XRLIST(DEF_XRONLY)
 // (u)comiss / (u)comisd: ZF PF CF, the others clear, as raw lazy flags
 #define XCOMIS(F, a, b) do { double a_ = (a), b_ = (b);                                    \
-        F0 = (uint64_t)LF(LF_RAW, 3) | (uint64_t)((a_ != a_ || b_ != b_) ? 0x45 : a_ < b_ ? 0x01 : a_ == b_ ? 0x40 : 0) << 32; \
+        F0 = (uint64_t)LF(LF_RAW, 3) | ((uint64_t)((a_ != a_) | (b_ != b_)) * 0x45 | (uint64_t)(a_ < b_) | (uint64_t)(a_ == b_) << 6) << 32;   /* branch-free */ \
     } while (0)
 #define DEF_XCOM(S, D)                                                                     \
     PH xr_comiss_##D##_##S(FXR_PARAMS) { XCOMIS(F0, LF0(XD_##D), LF0(XS_##S)); PNEXT(); }  \

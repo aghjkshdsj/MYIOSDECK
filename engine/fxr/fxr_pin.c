@@ -228,10 +228,11 @@ static void lower_one(Out *o, const Uop *u) {
         if (fm == F_RI && si >= 2 && D >= 0) { put_uop(o, u, t_mov_ri[si - 2][D]); return; }
         if (fm == F_RM && si >= 2 && D >= 0) {
             if (simple_mem(u)) { put_uop(o, u, t_ld[si - 2][u->base][D]); return; }
-            if (ea_ok(u)) { with_ea(o, u, t_ldt[si == 3 ? KL64 : KL32][D]); return; }
+            if (ea_ok(u)) { put_uop(o, u, t_ldi[si == 3 ? FL_LD64 : FL_LD32][u->base][u->index][D]); return; }
         }
         if (fm == F_MR && S >= 0) {
             if (simple_mem(u)) { put_uop(o, u, t_st[si][u->base][S]); return; }
+            if (ea_ok(u) && si != 1) { put_uop(o, u, t_ldi[si == 0 ? FL_ST8 : si == 2 ? FL_ST32 : FL_ST64][u->base][u->index][S]); return; }
             if (ea_ok(u)) { with_ea(o, u, t_stt[si][S]); return; }
         }
         if (fm == F_MI) {
@@ -257,6 +258,8 @@ static void lower_one(Out *o, const Uop *u) {
         else if (ds == 3) k = KS32_64;
         if (k < 0 || D < 0) break;
         if (!rm && S >= 0) { put_uop(o, u, t_ext[k][D][S]); return; }
+        if (rm && k == KZ8 && simple_mem(u)) { put_uop(o, u, t_ldz8s[u->base][D]); return; }
+        if (rm && k == KZ8 && ea_ok(u)) { put_uop(o, u, t_ldi[FL_LDZ8][u->base][u->index][D]); return; }
         if (rm && ea_ok(u)) { with_ea(o, u, t_ldt[k][D]); return; }
         break;
     }
@@ -376,11 +379,112 @@ static void lower_one(Out *o, const Uop *u) {
     put_uop(o, u, p_slow);
 }
 
+// Superinstructions (fxr_pin_fuse.c): u and the uop after it as one uop. Returns 2 when fused.
+// The fused uop starts as a copy of the second uop (a branch keeps its targets and links).
+static int is_named(const Desc *d, int id) { return d && d->fam == FAM_NAMED && d->a == id; }
+static int try_fuse(Out *o, const Uop *u, uint32_t left) {
+    if (left < 2) return 0;
+    const Uop *v = u + 1;
+    const Desc *a = find(u->fn), *b = find(v->fn);
+    if (!a || !b) return 0;
+    int D = greg(u->dst), S = greg(u->src);
+    Uop *x = 0;
+    if (is_named(b, N_JCC)) {   // compare-and-branch forms FXI does not fuse, ALU + jcc
+        unsigned cc = v->cc & 15;
+        if (a->fam == FAM_ALU && (a->a == ALU_CMP || a->a == ALU_TEST)) {
+            int t = a->a == ALU_TEST, fm = a->b, si = a->c2;
+            if (fm == F_MI && ea_ok(u)) {
+                if (simple_mem(u)) { x = put_uop(o, v, t_fmi[t][si][cc][u->base]); x->disp = u->disp; }
+                else { put_uop(o, u, t_ea[u->base][u->index]); x = put_uop(o, v, t_fmit[t][si][cc]); }
+                x->fimm = (int32_t)u->imm;
+                return 2;
+            }
+            if (fm == F_MR && S >= 0 && ea_ok(u)) {   // cmp/test [mem], reg
+                put_uop(o, u, t_ea[u->base][u->index]);
+                put_uop(o, v, t_fmr[t ? 2 : 0][si][cc][S]);
+                return 2;
+            }
+            if (fm == F_RM && !t && D >= 0 && ea_ok(u)) {   // cmp reg, [mem]
+                put_uop(o, u, t_ea[u->base][u->index]);
+                put_uop(o, v, t_fmr[1][si][cc][D]);
+                return 2;
+            }
+            if (fm == F_RI && si < 2 && D >= 0) {   // 8/16-bit register
+                x = put_uop(o, v, t_fjs_ri[t][si][cc][D]);
+                x->disp = (int64_t)u->imm;
+                return 2;
+            }
+            if (fm == F_RR && si < 2 && D >= 0 && S >= 0) {
+                x = put_uop(o, v, t && D == S ? t_fjs_rr[0][si][cc][D] : t_fjs_rrx[t][si][D][S]);
+                x->dst = u->dst; x->src = u->src;
+                return 2;
+            }
+            return 0;
+        }
+        if (a->fam == FAM_X && a->d) {   // (u)comiss / (u)comisd
+            int dbl = !strcmp(fxr_xops[a->a].name, "comisd");
+            if (!a->b) x = put_uop(o, v, t_fcj[dbl][cc][xcls(u->dst)][xcls(u->src)]);
+            else if (ea_ok(u)) { put_uop(o, u, t_ea[u->base][u->index]); x = put_uop(o, v, t_fcjt[dbl][cc][xcls(u->dst)]); }
+            else return 0;
+            x->dst = u->dst; x->src = u->src;
+            return 2;
+        }
+        if (a->fam == FAM_ALU && a->b == F_RI && a->c2 >= 2 && D >= 0) {   // add/sub/and/or/xor reg, imm
+            int k = a->a == ALU_ADD ? 0 : a->a == ALU_SUB ? 1 : a->a == ALU_AND ? 2 : a->a == ALU_OR ? 3 : a->a == ALU_XOR ? 4 : -1;
+            if (k < 0) return 0;
+            x = put_uop(o, v, t_fai[k][a->c2 - 2][cc][D]);
+            x->disp = (int64_t)u->imm; x->dst = u->dst;
+            return 2;
+        }
+        if (a->fam == FAM_UNARY && !a->b && a->c2 >= 2 && D >= 0 && (a->a == U_INC || a->a == U_DEC) && !v->flive) {
+            int ci = cc == 4 ? 0 : cc == 5 ? 1 : cc == 8 ? 2 : cc == 9 ? 3 : -1;
+            if (ci < 0) return 0;
+            x = put_uop(o, v, t_fid[a->a == U_INC][a->c2 - 2][ci][D]);
+            x->dst = u->dst;
+            return 2;
+        }
+        return 0;
+    }
+    // mov D, [base + disp] + FXI's fused test D, D / jcc
+    if (a->fam == FAM_MOV && a->a == F_RM && a->b >= 2 && D >= 0 && simple_mem(u) && b->fam == FAM_FJCC &&
+        b->a == 1 && !b->b && b->c2 == (a->b == 3) && greg(v->dst) == D && greg(v->src) == D) {
+        unsigned cc = b->d;
+        int ci = cc == 4 ? 0 : cc == 5 ? 1 : cc == 8 ? 2 : cc == 9 ? 3 : cc == 14 ? 4 : cc == 15 ? 5 : -1;
+        if (ci < 0) return 0;
+        x = put_uop(o, v, t_ltj[a->b == 3][ci][u->base][D]);
+        x->disp = u->disp;
+        return 2;
+    }
+    if (is_named(b, N_CALL)) {   // argument setup + direct call
+        if (a->fam == FAM_MOV && a->a == F_RR && a->b >= 2 && D >= 0 && S >= 0) x = put_uop(o, v, t_amr[a->b - 2][D][S]);
+        else if (a->fam == FAM_LEA && a->a == 3 && D >= 0 && simple_mem(u)) { x = put_uop(o, v, t_alea[u->base][D]); x->disp = u->disp; }
+        else if (a->fam == FAM_MOV && a->a == F_RI && a->b >= 2 && D >= 0 &&
+                 (a->b == 2 || (int64_t)(int32_t)u->imm == (int64_t)u->imm)) { x = put_uop(o, v, t_ami[a->b - 2][D]); x->fimm = (int32_t)u->imm; }
+        else if (a->fam == FAM_ALU && a->a == ALU_XOR && a->b == F_RR && a->c2 == 2 && D >= 0 && D == S && !u->flive)
+            x = put_uop(o, v, t_axz[D]);
+        return x ? 2 : 0;
+    }
+    if (is_named(a, N_POP_R) && D >= 0 && D != R_SP) {
+        int D2 = greg(v->dst);
+        if (is_named(b, N_POP_R) && D2 >= 0 && D2 != R_SP) { put_uop(o, u, t_pop2[D][D2]); return 2; }
+        if (is_named(b, N_RET)) { x = put_uop(o, v, t_popret[D]); x->dst = u->dst; return 2; }
+        return 0;
+    }
+    if (is_named(a, N_PUSH_R) && is_named(b, N_PUSH_R) && S >= 0 && S != R_SP) {
+        int S2 = greg(v->src);
+        if (S2 >= 0 && S2 != R_SP) { put_uop(o, u, t_push2[S][S2]); return 2; }
+    }
+    return 0;
+}
+
 Block *fxr_lower(struct Fxi *vm, Block *b) {
     (void)vm;
     pthread_once(&g_once, init_desc);
     Out o = { malloc(sizeof(Uop) * (2 * (size_t)b->n + 1)), 0 };
-    for (uint32_t i = 0; i < b->n; i++) lower_one(&o, &b->u[i]);
+    for (uint32_t i = 0; i < b->n; i++) {
+        if (try_fuse(&o, &b->u[i], b->n - i)) { i++; continue; }
+        lower_one(&o, &b->u[i]);
+    }
     Block *nb = malloc(sizeof(Block) + sizeof(Uop) * (size_t)o.n);
     nb->rip = b->rip;
     nb->n = (uint32_t)o.n;
