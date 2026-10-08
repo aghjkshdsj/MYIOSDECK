@@ -1,0 +1,51 @@
+name: heldout benchmark self-check (no interpreter)
+on:
+  push:
+    branches: ["claude/heldout-check"]
+permissions:
+  contents: read
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang-19 > /dev/null
+          clang-19 --version | head -1; gcc --version | head -1
+      - name: guest build (x86 only, flags of bench_sse2)
+        if: runner.arch == 'X64'
+        run: |
+          cd engine/guest
+          gcc -O2 -march=x86-64-v2 -fPIE -static-pie -nostdlib -ffreestanding -fno-builtin -fno-strict-aliasing \
+            -fno-stack-protector -fno-asynchronous-unwind-tables -fno-tree-loop-distribute-patterns \
+            -Wl,--no-dynamic-linker -Wl,--build-id=none -Wl,-z,norelro -Wl,-z,noexecstack -Wl,-z,max-page-size=0x4000 \
+            -Wl,-z,separate-code -I. -march=x86-64 -Wall -Wextra -o /tmp/heldout.elf heldout.c
+          for k in crc32 sort hash vm sha256 lz77 nbody huffman search tree particles; do /tmp/heldout.elf $k 3; done | tee /tmp/guest.txt
+      - name: hosted build, sanitizers
+        run: |
+          clang-19 -O1 -g -ffp-contract=off -fsanitize=address,undefined -fno-sanitize-recover=all -DHELDOUT_HOSTED -Wall -Wextra \
+            -o /tmp/heldout_san engine/guest/heldout.c
+          for k in crc32 sort hash vm sha256 lz77 nbody huffman search tree particles; do /tmp/heldout_san $k 3; done | tee /tmp/san.txt
+      - name: hosted build, release (the native baseline)
+        run: |
+          clang-19 -O2 -ffp-contract=off -DHELDOUT_HOSTED -Wall -Wextra -o /tmp/heldout_native engine/guest/heldout.c
+          for k in crc32 sort hash vm sha256 lz77 nbody huffman search tree particles; do /tmp/heldout_native $k 3; done | tee /tmp/native.txt
+          echo "default-scale native timings:"
+          for k in crc32 sort hash vm sha256 lz77 nbody huffman search tree particles; do /tmp/heldout_native $k; done
+      - name: compare checksums
+        run: |
+          sums() { sed -n 's/.*kernel=\([a-z0-9]*\).* sum=\([0-9]*\).*/\1 \2/p' "$1"; }
+          sums /tmp/native.txt > /tmp/a; sums /tmp/san.txt > /tmp/b; cat /tmp/a
+          diff /tmp/a /tmp/b && echo "sanitizer build = release build"
+          if [ -f /tmp/guest.txt ]; then sums /tmp/guest.txt > /tmp/c; diff /tmp/a /tmp/c && echo "x86 guest = native"; fi
+          [ "$(wc -l < /tmp/a)" = 11 ]
+      - uses: actions/upload-artifact@v5
+        with:
+          name: sums-${{ matrix.os }}
+          path: /tmp/native.txt
