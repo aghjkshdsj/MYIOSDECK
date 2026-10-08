@@ -110,7 +110,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          RUN=$(gh run list -R "$GITHUB_REPOSITORY" --workflow wine-unix.yml --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+          RUN=$(bash tools/latest-run.sh wine-unix.yml)
           if [ -z "$RUN" ]; then echo "No successful Wine unix build yet"; exit 1; fi
           gh run download "$RUN" -R "$GITHUB_REPOSITORY" -n wine-unix-libs -D engine/wine/out
           bash engine/wine/stage-app.sh
@@ -123,7 +123,7 @@ jobs:
         run: |
           # Step 5: the D3D/Metal DLLs rebuilt with 16 KB sections (dxmt-pe.yml) replace Madeira's
           # 4 KB-aligned prebuilt ones, which cannot become signed dylibs.
-          D3D_RUN=$(gh run list -R "$GITHUB_REPOSITORY" --workflow dxmt-pe.yml --status success --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null || true)
+          D3D_RUN=$(bash tools/latest-run.sh dxmt-pe.yml || true)
           if [ -n "$D3D_RUN" ] && gh run download "$D3D_RUN" -R "$GITHUB_REPOSITORY" -n d3d-pe-dlls -D "$RUNNER_TEMP/d3d-pe"; then
             cp "$RUNNER_TEMP"/d3d-pe/*.dll engine/wine/madeira/app/Madeira/arm64ec-windows/
             echo "- D3D DLLs: 16 KB-aligned rebuild from run $D3D_RUN ($(ls "$RUNNER_TEMP"/d3d-pe | tr '\n' ' '))" | tee -a "$GITHUB_STEP_SUMMARY"
@@ -168,7 +168,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          RUN=$(gh run list -R "$GITHUB_REPOSITORY" --workflow dxmt.yml --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+          RUN=$(bash tools/latest-run.sh dxmt.yml)
           if [ -z "$RUN" ]; then echo "No successful DXMT build yet"; exit 1; fi
           gh run download "$RUN" -R "$GITHUB_REPOSITORY" -n dxmt-libs -D engine/dxmt/out
           bash engine/dxmt/stage-app.sh
