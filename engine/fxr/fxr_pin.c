@@ -344,7 +344,8 @@ static const PFn t_ext[K_COUNT][16][16] = {
     [KS32_64] = { R16(ROW_EXT, KS32_64) },
 };
 
-// ---- shifts/rotates of a register (32/64). Count: imm (I) or CL (C). Zero count: no change.
+// ---- shifts/rotates of a register (32/64). Count: imm (I) or CL (C). Zero count: no change,
+// except that a 32-bit destination is still zero-extended.
 // Rotates get a pinned form only when their flags are dead (lowering checks u->cc).
 #define SH_shl(a, n, SZ) ((a) << (n))
 #define SH_shr(a, n, SZ) ((a) >> (n))
@@ -364,7 +365,7 @@ static const PFn t_ext[K_COUNT][16][16] = {
 #define DEF_SH(D, OPN, SZ, CNT, CV)                                                        \
     PH p_sh_##OPN##_##SZ##_##CNT##_##D(FXR_PARAMS) {                                       \
         unsigned n = (unsigned)(CV) & (SZ == 64 ? 63u : 31u);                              \
-        if (FXI_UNLIKELY(n == 0)) PNEXT();                                                 \
+        if (FXI_UNLIKELY(n == 0)) { if (SZ == 32) g##D &= M32; PNEXT(); }                  \
         uint64_t a = g##D & M##SZ, r = SH_##OPN(a, n, SZ) & M##SZ;                         \
         g##D = r;                                                                          \
         if (SHF_##OPN) SETF(SHK_##OPN, SI##SZ, a, n, r, 0);                                \
