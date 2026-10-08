@@ -1,0 +1,32 @@
+name: FXR superinstruction corpus
+
+# Instruction-pair frequencies in real x86-64 code that is not the benchmark (engine/fxr/corpus.sh):
+# the corpus FXR's superinstructions are chosen from.
+on:
+  push:
+    branches: ["claude/**"]
+    paths: ["engine/fxr/corpus.sh", ".github/workflows/corpus.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  corpus:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Madeira x64 Windows programs (part of the corpus)
+        run: |
+          . engine/wine/PIN
+          mkdir -p "$RUNNER_TEMP/pe"
+          for exe in hello-x64 fib-x64 clocktest-x64 heap-x64 fileio-x64 calltest-x64 fpconf-x64 child-test-x64 cube-x64 d3d12-cube-x64; do
+            curl -fsSL -o "$RUNNER_TEMP/pe/$exe.exe" \
+              "https://raw.githubusercontent.com/willfaust/Madeira/$MADEIRA_SHA/app/Madeira/arm64ec-windows/$exe.exe" || true
+          done
+      - name: Pair frequencies
+        run: bash engine/fxr/corpus.sh "$RUNNER_TEMP"/pe/*.exe | tee "$RUNNER_TEMP/corpus.txt"
+      - uses: actions/upload-artifact@v5
+        with:
+          name: corpus
+          path: ${{ runner.temp }}/corpus.txt
