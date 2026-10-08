@@ -9,7 +9,14 @@ set -uo pipefail
 files=()
 for f in /usr/bin/python3.12 /usr/lib/x86_64-linux-gnu/libc.so.6 /usr/lib/x86_64-linux-gnu/libstdc++.so.6 \
          /usr/lib/gcc/x86_64-linux-gnu/13/cc1 /usr/bin/perl /usr/bin/git /usr/lib/x86_64-linux-gnu/libcrypto.so.3 \
-         /usr/bin/bash /usr/lib/x86_64-linux-gnu/libz.so.1 /usr/lib/x86_64-linux-gnu/libsqlite3.so.0 "$@"; do
+         /usr/bin/bash /usr/lib/x86_64-linux-gnu/libz.so.1 /usr/lib/x86_64-linux-gnu/libsqlite3.so.0 \
+         /usr/lib/x86_64-linux-gnu/libm.so.6 /usr/lib/x86_64-linux-gnu/libBulletDynamics.so.* \
+         /usr/lib/x86_64-linux-gnu/libBulletCollision.so.* /usr/lib/x86_64-linux-gnu/libLinearMath.so.* \
+         /usr/lib/x86_64-linux-gnu/libbox2d.so.* /usr/lib/x86_64-linux-gnu/liblua5.4.so.0 \
+         /usr/lib/x86_64-linux-gnu/libSDL2-2.0.so.0 /usr/lib/x86_64-linux-gnu/libvorbis.so.0 \
+         /usr/lib/x86_64-linux-gnu/libopenal.so.1 /usr/lib/x86_64-linux-gnu/libfreetype.so.6 \
+         /usr/lib/x86_64-linux-gnu/libharfbuzz.so.0 /usr/lib/x86_64-linux-gnu/libjpeg.so.8 \
+         /usr/lib/x86_64-linux-gnu/libpng16.so.16 "$@"; do
     f=$(readlink -f "$f" 2>/dev/null) && [ -f "$f" ] && files+=("$f")
 done
 echo "corpus: ${#files[@]} files"; ls -la "${files[@]}" | awk '{print $5, $NF}'
@@ -74,7 +81,7 @@ mode == 2 && /^ *[0-9a-f]+:\t/ {
         fam = ""
         if (pmn == "mov" && prev ~ /^mov r(32|64),r(32|64)$/ && rel == " [same dst]" && mn ~ /^(add|sub|and|or|xor|shl|shr|sar|rol|ror|imul|neg|not)$/) fam = "mov r,r ; ALU same dst (3-operand)"
         else if (shape == "jcc" && pmn ~ /^(add|sub|and|or|xor|inc|dec|neg|shl|shr|sar)$/ && prev ~ / r(32|64)/) fam = "ALU reg ; jcc"
-        else if (shape == "jcc" && pmn ~ /^(cmp|test)$/ && prev ~ /m/) fam = "cmp/test with memory ; jcc"
+        else if (shape == "jcc" && pmn ~ /^(cmp|test)$/ && prev ~ /( m,|,m$)/) fam = "cmp/test with memory ; jcc"
         else if (shape == "jcc" && pmn ~ /^(cmp|test)$/ && prev ~ / r(8|16)/) fam = "cmp/test 8/16-bit reg ; jcc"
         else if (shape == "jcc" && pmn ~ /^(cmp|test)$/) fam = "cmp/test 32/64-bit reg ; jcc (fused already)"
         else if (shape == "jcc" && pmn ~ /^v?u?comis[sd]$/) fam = "(u)comis ; jcc"

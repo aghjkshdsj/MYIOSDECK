@@ -16,6 +16,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - name: Game-adjacent libraries (physics, scripting, audio, fonts, images)
+        run: |
+          sudo apt-get update -qq
+          for p in libbullet3.24 libbullet3.06 libbullet2.88 libbox2d2 libbox2d2.4.1 liblua5.4-0 libsdl2-2.0-0 libvorbis0a \
+                   libopenal1 libfreetype6 libharfbuzz0b libjpeg-turbo8 libpng16-16t64 libpng16-16; do
+            sudo apt-get install -y -qq "$p" > /dev/null 2>&1 && echo "installed $p" || echo "no $p"
+          done
       - name: Madeira x64 Windows programs (part of the corpus)
         run: |
           . engine/wine/PIN
