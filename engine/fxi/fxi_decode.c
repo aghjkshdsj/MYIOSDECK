@@ -473,6 +473,10 @@ static int decode_one_inner(Dec *d) {
     case 0x8d: {
         modrm(d);
         if (!d->is_mem) return unimplemented(d, "lea reg");
+        // 67 lea: the address is computed in 32 bits. Its low 32 bits equal the 64-bit sum, so a
+        // 32/16-bit destination is unchanged, and a 64-bit one gets the zero-extended 32-bit
+        // address, which is exactly lea_32 (Dokimon: 67 8d 04 0a, lea eax, [edx+ecx]).
+        if (d->addr32 && !d->riprel) { d->addr32_used = 0; if (bits == 64) bits = 32; }
         Uop *u = emit(d, fxi_lea_tab[si_of(bits)]); u->dst = gpr(d, d->reg, bits); set_mem(d, u);
         return 0;
     }

@@ -145,6 +145,9 @@ RR(movzwl, "movzwl %w[b], %k[r]", ARITH) RR(movzbw, "movzbw %b[b], %w[r]", ARITH
 RR(movw_keep, "movw %w[b], %w[r]", ARITH) RR(movb_keep, "movb %b[b], %b[r]", ARITH)
 RR(lea_q, "leaq 0x12(%[r],%[b],4), %[r]", ARITH) RR(lea_l, "leal -3(%[r],%[b],8), %k[r]", ARITH)
 RR(lea_w, "leaw 7(%[r],%[b]), %w[r]", ARITH)
+// 67 lea (32-bit address registers make the assembler emit the prefix; Dokimon: lea eax, [edx+ecx])
+RR(lea_a32_l, "leal 5(%k[r],%k[b],2), %k[r]", ARITH) RR(lea_a32_q, "leaq -9(%k[r],%k[b],8), %[r]", ARITH)
+RR(lea_a32_w, "leaw 3(%k[r],%k[b]), %w[r]", ARITH)
 RR(xchg_q, "xchgq %[b], %[r]", ARITH) RR(xchg_b, "xchgb %b[b], %b[r]", ARITH)
 RR(xadd_q, "xaddq %[b], %[r]", ARITH) RR(xadd_w, "xaddw %w[b], %w[r]", ARITH)
 RR(bt_q, "btq %[b], %[r]", 0x1ull) RR(bts_l, "btsl %k[b], %k[r]", 0x1ull) RR(btr_q, "btrq %[b], %[r]", 0x1ull)
@@ -358,7 +361,7 @@ static const test_fn kTests[] = {
     shld_q, shld_l, shld_w, shrd_q, shrd_l, shrd_w,
     imul2_q, imul2_l, imul2_w, imul3_q, imul3_l, imul3_w,
     movsbq, movswq, movslq, movsbl, movsbw, movzbl, movzwl, movzbw, movl_zext, movw_keep, movb_keep,
-    lea_q, lea_l, lea_w, xchg_q, xchg_b, xadd_q, xadd_w, bt_q, bts_l, btr_q, btc_w, bt_imm_q, bts_imm_l,
+    lea_q, lea_l, lea_w, lea_a32_l, lea_a32_q, lea_a32_w, xchg_q, xchg_b, xadd_q, xadd_w, bt_q, bts_l, btr_q, btc_w, bt_imm_q, bts_imm_l,
     bsf_q, bsr_q,
     cc_o, cc_no, cc_b, cc_ae, cc_e, cc_ne, cc_be, cc_a, cc_s, cc_ns, cc_p, cc_np, cc_l, cc_ge, cc_le, cc_g,
     muldiv, misc,
