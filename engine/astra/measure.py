@@ -95,7 +95,7 @@ for kernel, row in data["trials"].items():
     lines.append(f"| {kernel} | {row['scale']} | {med['native']} | {med['astra']} | {pct['astra']:.2f}% | {med['fxi']} | {pct['fxi']:.2f}% | {checksum} |")
 means = {k: statistics.mean(v) if len(v) == 5 else None for k, v in percentages.items()}
 data["mean_percent"] = means
-data["performance_gate"] = (not data["errors"] and means["astra"] is not None and means["astra"] >= 12) if arm else None
+data["performance_gate"] = (not data["errors"] and means["astra"] is not None and means["astra"] >= 35) if arm else None
 gate_label = str(data["performance_gate"]) if arm else "not applicable (gate runs on ARM64)"
 lines += ["", f"Arithmetic means: {means}", "",
           f"ARM64 performance gate (approved hello field rules): **{gate_label}**.",

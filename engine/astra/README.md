@@ -51,8 +51,9 @@ warm-up and clock boundaries. Native x86 executes the guest ELF directly.
 For each kernel, three measurements per engine run in rotating order. The
 reported percentage is `100 * median(native_ns) / median(interpreter_ns)`;
 the overall percentage is the arithmetic mean of the five percentages. All
-nine checksums per kernel must agree. An ARM64 mean below 12% fails CI, as does
-any execution or correctness failure. Raw trial data are archived under
+nine checksums per kernel must agree. An ARM64 mean below **35%** fails CI, as
+does any execution or correctness failure. The original 12% target passed
+before the owner raised the gate. Raw trial data are archived under
 `astra-results-*`, and tables are written to the job summary.
 
 The approved hello comparison requires exactly five lines and exit status zero:

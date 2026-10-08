@@ -47,6 +47,12 @@ int guest_main(int argc,char **argv) {
         number(idx);number(old);
     }
     for(unsigned i=0;i<256;i++)number(bytes[i]);
+    for(unsigned length=3;length<200;length+=12) {
+        unsigned char *cursor=bytes,*end=bytes+length;
+        __asm__ volatile("1: movb $71,(%0)\naddq $3,%0\nmovb $71,-2(%0)\nmovb $71,-1(%0)\ncmpq %1,%0\njne 1b"
+                         :"+r"(cursor):"r"(end):"cc","memory");
+        for(unsigned i=0;i<256;i++)number(bytes[i]);number(cursor-bytes);
+    }
     for(unsigned length=1;length<200;length+=17) {
         unsigned char *cursor=bytes,*end=bytes+length;
         unsigned long long sum=123,temporary;

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core.hpp"
+#include <type_traits>
 namespace astra {
 // A small library of statically compiled tracelets. Recognition uses decoded
 // instruction semantics only: no ELF names, PCs, constants, checksums or kernel
@@ -15,6 +16,16 @@ static U step_address(const Arg &a,unsigned reg,U step) {
 }
 static U read_compare(Cpu *c,const Arg &a) {
     return a.mode==IMM?a.disp:c->r[a.reg];
+}
+// Prove a complete forward access stream before removing per-element guards.
+// Unsigned 128-bit arithmetic prevents an overflowing range from being trusted.
+// On any failed proof, the ordinary checked interpreter semantics remain active.
+static bool stream_valid(Cpu *c,U address,U stride,U count,size_t width,bool store=false) {
+    if(!count)return false;
+    unsigned __int128 span=(unsigned __int128)(count-1)*stride+width;
+    if(span>c->memsize || address-(U)c->mem>c->memsize-(size_t)span)return false;
+    if(store && address<c->code_hi && address+(U)span>c->code_lo)return false;
+    return true;
 }
 static bool counted(const Op *p,size_t n,unsigned add_index) {
     if(n<3 || p[n-1].kind!=JCC || p[n-1].aux!=5 || p[n-1].imm!=p[0].pc)return false;
@@ -41,15 +52,26 @@ template<int Code,bool ExtraAdd> ASTRA_CC void vector_map(Cpu *c,Op *p) {
     U srcstep=step_address(p[0].b,reg,step),dststep=step_address(p[store].b,reg,step);
     U otherstep=ExtraAdd?step_address(p[2].b,reg,step):0;
     Xmm rhs=c->x[p[1].b.reg],v{};
-    do {
-        std::memcpy(&v,checked(c,src,16,p[0].pc),16);
-        v=arithmetic<Code>(v,rhs);
-        if constexpr(ExtraAdd) {
-            Xmm add;std::memcpy(&add,checked(c,other,16,p[2].pc),16);v.f+=add.f;
-        }
-        std::memcpy(checked(c,dst,16,p[store].pc,true),&v,16);
-        counter+=step;src+=srcstep;dst+=dststep;other+=otherstep;
-    } while(counter!=limit);
+    U count=step && limit>counter && (limit-counter)%step==0?(limit-counter)/step:0;
+    bool proven=stream_valid(c,src,srcstep,count,16) && stream_valid(c,dst,dststep,count,16,true) &&
+        (!ExtraAdd || stream_valid(c,other,otherstep,count,16));
+    auto loop=[&](auto guards) {
+        do {
+            const void *source;
+            if constexpr(decltype(guards)::value)source=checked(c,src,16,p[0].pc);else source=(void *)src;
+            std::memcpy(&v,source,16);v=arithmetic<Code>(v,rhs);
+            if constexpr(ExtraAdd) {
+                const void *second;
+                if constexpr(decltype(guards)::value)second=checked(c,other,16,p[2].pc);else second=(void *)other;
+                Xmm add;std::memcpy(&add,second,16);v.f+=add.f;
+            }
+            void *destination;
+            if constexpr(decltype(guards)::value)destination=checked(c,dst,16,p[store].pc,true);else destination=(void *)dst;
+            std::memcpy(destination,&v,16);
+            counter+=step;src+=srcstep;dst+=dststep;other+=otherstep;
+        } while(counter!=limit);
+    };
+    if(proven)loop(std::false_type{});else loop(std::true_type{});
     c->r[reg]=counter;c->x[p[0].a.reg]=v;
     setflags<CMP,8>(c,counter,limit,counter-limit);
     GO(target(c,p+jcc,p[jcc].end,0));
@@ -68,12 +90,22 @@ template<int LoadWidth,bool WithXor> ASTRA_CC void sum_loop(Cpu *c,Op *p) {
     U other=0,otherstep=0;
     if constexpr(WithXor) {otherstep=step_address(p[2].b,counter_reg,step);other=ea(c,p[2].b)+otherstep;}
     U value=0;
-    do {
-        value=0;std::memcpy(&value,checked(c,src,LoadWidth,p[0].pc),LoadWidth);
-        counter+=step;
-        if constexpr(WithXor) {U rhs;std::memcpy(&rhs,checked(c,other,8,p[2].pc),8);value^=rhs;other+=otherstep;}
-        sum+=value;src+=srcstep;
-    } while(counter!=limit);
+    U count=step && limit>counter && (limit-counter)%step==0?(limit-counter)/step:0;
+    bool proven=stream_valid(c,src,srcstep,count,LoadWidth) && (!WithXor || stream_valid(c,other,otherstep,count,8));
+    auto loop=[&](auto guards) {
+        do {
+            const void *source;
+            if constexpr(decltype(guards)::value)source=checked(c,src,LoadWidth,p[0].pc);else source=(void *)src;
+            value=0;std::memcpy(&value,source,LoadWidth);counter+=step;
+            if constexpr(WithXor) {
+                const void *second;
+                if constexpr(decltype(guards)::value)second=checked(c,other,8,p[2].pc);else second=(void *)other;
+                U rhs;std::memcpy(&rhs,second,8);value^=rhs;other+=otherstep;
+            }
+            sum+=value;src+=srcstep;
+        } while(counter!=limit);
+    };
+    if(proven)loop(std::false_type{});else loop(std::true_type{});
     c->r[counter_reg]=counter;c->r[accumulator]=sum;c->r[temporary]=value;
     U a=reverse?limit:counter,b=reverse?counter:limit;
     setflags<CMP,8>(c,a,b,a-b);
@@ -111,7 +143,16 @@ ASTRA_CC void strided_bytes(Cpu *c,Op *p) {
     unsigned dst=p[0].a.reg,idx=p[0].b.reg,stepreg=p[1].b.reg;
     uint32_t counter=c->r[idx],step=c->r[stepreg],limit=p[3].b.disp;
     uint32_t old;
-    do {
+    U count=step && counter<=limit && U(limit)+step<=UINT32_MAX ? (U(limit)-counter)/step+1:0;
+    c->r[dst]=counter;c->r[idx]=uint32_t(counter+step);
+    U address=ea(c,p[2].a),stride=step_address(p[2].a,dst,step)+step_address(p[2].a,idx,step);
+    bool proven=stream_valid(c,address,stride,count,1,true);
+    if(proven) {
+        U remaining=count;
+        do {*(uint8_t *)address=(uint8_t)p[2].b.disp;address+=stride;} while(--remaining);
+        old=counter+uint32_t((count-1)*step);counter+=uint32_t(count*step);
+        c->r[dst]=old;c->r[idx]=counter;
+    } else do {
         old=counter;c->r[dst]=old;counter+=step;c->r[idx]=counter;
         uint8_t value=p[2].b.disp;
         std::memcpy(checked(c,ea(c,p[2].a),1,p[2].pc,true),&value,1);
@@ -143,10 +184,52 @@ static bool packed_load(const Op &p) {
 static bool packed_store(const Op &p) {
     return p.kind==SSE && p.b.mode==MEM && (p.aux==0x29 || p.aux==0x129 || p.aux==0x17f || p.aux==0x27f || p.aux==0x11 || p.aux==0x111);
 }
+ASTRA_CC void fill_loop(Cpu *c,Op *p) {
+    unsigned inc=p[0].source_width,cmp=p[0].aux,reg=p[inc].a.reg;
+    U counter=c->r[reg],step=p[inc].b.disp;
+    bool reverse=p[cmp].a.reg!=reg;
+    U limit=read_compare(c,reverse?p[cmp].a:p[cmp].b);
+    U count=step && limit>counter && (limit-counter)%step==0?(limit-counter)/step:0;
+    U address=ea(c,p[0].a);
+    if(!stream_valid(c,address,step,count,step,true)) {
+        Handler fallback=select(*p);
+        [[clang::musttail]] return fallback(c,p);
+    }
+    std::memset((void *)address,(uint8_t)p[0].b.disp,limit-counter);
+    c->r[reg]=limit;setflags<CMP,8>(c,limit,limit,0);
+    GO(target(c,p+cmp+1,p[cmp+1].end,0));
+}
+static bool fill_pattern(Op *p,size_t n) {
+    if(n<4 || n>11 || p[n-1].kind!=JCC || p[n-1].aux!=5 || p[n-1].imm!=p[0].pc)return false;
+    int inc=-1;unsigned stores=0;
+    for(size_t i=0;i<n-2;i++) {
+        if(simple(p[i],ADD,8,REG,IMM)) {if(inc!=-1)return false;inc=i;}
+        else if(simple(p[i],MOV,1,MEM,IMM))++stores;
+        else return false;
+    }
+    if(inc<=0 || stores==0 || p[inc].b.disp!=stores)return false;
+    unsigned reg=p[inc].a.reg;
+    const Op &cmp=p[n-2];
+    if(cmp.kind!=CMP || cmp.width!=8 || cmp.a.mode!=REG || (cmp.b.mode!=REG && cmp.b.mode!=IMM))return false;
+    bool reverse=cmp.a.reg!=reg;
+    if(reverse && (cmp.b.mode!=REG || cmp.b.reg!=reg))return false;
+    Arg limit=reverse?cmp.a:cmp.b;
+    if(limit.mode==REG && limit.reg==reg)return false;
+    U offsets=0;
+    for(size_t i=0;i<n-2;i++) {
+        if((int)i==inc)continue;
+        if(p[i].a.reg!=reg || p[i].a.index!=16 || (uint8_t)p[i].b.disp!=(uint8_t)p[0].b.disp)return false;
+        U offset=p[i].a.disp-p[0].a.disp+((int)i>inc?stores:0);
+        if(offset>=stores || (offsets&(U(1)<<offset)))return false;
+        offsets|=U(1)<<offset;
+    }
+    p[0].source_width=inc;p[0].aux=n-2;p[0].fn=fill_loop;return true;
+}
 void optimize_block(Cpu *,Op *p,size_t n) {
     if(n>=2 && p[n-1].kind==JCC && (p[n-2].kind==CMP || p[n-2].kind==TEST))
         p[n-2].fn=p[n-2].kind==CMP?compare_size<CMP>(p[n-2]):compare_size<TEST>(p[n-2]);
     if(sum_pattern(p,n))return;
+    if(fill_pattern(p,n))return;
     if((n==6 || n==7) && counted(p,n,n-3)) {
         bool extra=n==7;size_t store=extra?3:2;
         unsigned xmm=p[0].a.reg;
