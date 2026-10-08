@@ -10,6 +10,8 @@
 #include <string.h>
 
 #include <mach/mach.h>
+#include <pthread.h>
+#include <time.h>
 
 #include "fxi.h"
 #include "jit_core.h"
@@ -236,7 +238,7 @@ static long host_reset_to_consistent(const uint8_t *rec, const uint8_t *arm_ctx)
 // values), the thread is redirected to fault_entry, which raises the x64 access violation the
 // way host_reset_to_consistent does. Everything else stays Madeira's.
 #define FAULT_THREADS 1024
-static struct { mach_port_t thread; uint8_t *area; } g_fault_threads[FAULT_THREADS];
+static struct { mach_port_t thread; uint8_t *area, *teb; } g_fault_threads[FAULT_THREADS];
 
 static uint8_t *fault_thread_area(mach_port_t thread) {
     for (int i = 0; i < FAULT_THREADS; i++)
@@ -244,7 +246,7 @@ static uint8_t *fault_thread_area(mach_port_t thread) {
     return NULL;
 }
 
-static void fault_thread_register(uint8_t *area) {
+static void fault_thread_register(uint8_t *area, uint8_t *teb) {
     mach_port_t self = mach_thread_self();
     int slot = -1;
     for (int i = 0; i < FAULT_THREADS && slot < 0; i++)
@@ -256,7 +258,169 @@ static void fault_thread_register(uint8_t *area) {
     }
     if (slot < 0) return;
     g_fault_threads[slot].area = area;
+    g_fault_threads[slot].teb = teb;
     __atomic_store_n(&g_fault_threads[slot].thread, self, __ATOMIC_RELEASE);
+}
+
+// ---- Sampling profiler (build 87) ----
+// Where does a no-JIT game spend its time? A host thread samples every running FXI thread
+// 500 times a second: in x64 code (InSimulation) it records the rip of the instruction that
+// last touched memory (FXI keeps it for exact faults), otherwise it counts native (Wine, the
+// D3D/Metal DLLs). Every 10 s it logs [fxi-prof] lines: x64 vs native time per busy thread,
+// block lookups and calls into native code per second, x64 time per module (from the PEB's
+// loader list; Mono's generated code is outside every module) and the hottest instructions.
+// Sampling is racy by design and costs the game nothing (one Mach call per running thread).
+#define PROF_HZ 500
+#define PROF_PERIOD_S 10
+#define PROF_SLOTS 16384
+typedef struct { uint64_t rip, n; } prof_hit;
+static prof_hit g_prof_hits[PROF_SLOTS];
+static struct { uint64_t x64, native, last_lookups, last_exits; } g_prof_thr[FAULT_THREADS];
+
+static int vmr(uint64_t a, void *out, size_t n) {
+    vm_size_t got = 0;
+    return vm_read_overwrite(mach_task_self(), (vm_address_t)a, n, (vm_address_t)out, &got) == KERN_SUCCESS && got == n;
+}
+
+typedef struct { uint64_t base, size, x64; char name[48]; } prof_mod;
+// The process's modules, from PEB->Ldr->InLoadOrderModuleList (read without faulting).
+static int prof_modules(uint8_t *teb, prof_mod *m, int max) {
+    uint64_t peb, ldr, head, e;
+    if (!vmr((uint64_t)(uintptr_t)teb + 0x60, &peb, 8) || !vmr(peb + 0x18, &ldr, 8)) return 0;
+    head = ldr + 0x10;
+    if (!vmr(head, &e, 8)) return 0;
+    int n = 0;
+    for (int guard = 0; e && e != head && n < max && guard < 512; guard++) {
+        uint64_t base, size, buf, next; uint16_t len;
+        if (!vmr(e + 0x30, &base, 8) || !vmr(e + 0x40, &size, 8) || !vmr(e + 0x58, &len, 2) ||
+            !vmr(e + 0x60, &buf, 8) || !vmr(e, &next, 8)) break;
+        uint32_t s32 = (uint32_t)size;
+        m[n].base = base; m[n].size = s32; m[n].x64 = 0;
+        uint16_t w[47]; unsigned chars = len / 2 < 47 ? len / 2 : 47;
+        if (!chars || !vmr(buf, w, chars * 2)) chars = 0;
+        for (unsigned i = 0; i < chars; i++) m[n].name[i] = (char)(w[i] < 128 ? w[i] : '?');
+        m[n].name[chars] = 0;
+        n++;
+        e = next;
+    }
+    return n;
+}
+
+static int prof_cmp_hit(const void *a, const void *b) {
+    uint64_t x = ((const prof_hit *)a)->n, y = ((const prof_hit *)b)->n;
+    return x < y ? 1 : x > y ? -1 : 0;
+}
+
+static void prof_report(uint64_t period_samples) {
+    static prof_hit sorted[PROF_SLOTS];
+    static prof_mod mods[256];
+    uint8_t *teb = NULL;
+    uint64_t x64 = 0, native = 0, blocks = 0;
+    for (int i = 0; i < FAULT_THREADS; i++) {
+        if (!g_fault_threads[i].thread) continue;
+        if (!teb) teb = g_fault_threads[i].teb;
+        x64 += g_prof_thr[i].x64; native += g_prof_thr[i].native;
+    }
+    if (!x64 && !native) return;
+    mid_log("[fxi-prof] last %d s: %llu samples of running FXI threads, x64 %.1f%%, native %.1f%%",
+            PROF_PERIOD_S, (unsigned long long)(x64 + native), 100.0 * x64 / (double)(x64 + native),
+            100.0 * native / (double)(x64 + native));
+    // Busiest threads: running share of the period, x64 vs native, lookups and native calls per second.
+    for (int shown = 0; shown < 6; shown++) {
+        int best = -1; uint64_t bestn = 0;
+        for (int i = 0; i < FAULT_THREADS; i++) {
+            uint64_t t = g_prof_thr[i].x64 + g_prof_thr[i].native;
+            if (g_fault_threads[i].thread && t > bestn) { bestn = t; best = i; }
+        }
+        if (best < 0 || bestn * 50 < period_samples) break;   // under 2% of the period: skip
+        FxiCpu *c = *(FxiCpu **)(g_fault_threads[best].area + 0x30);
+        uint64_t lk = 0, ex = 0;
+        if (c) fxi_win_profile(c, &lk, &ex, &blocks);
+        mid_log("[fxi-prof]   thread TEB %p: running %.0f%% of the time, x64 %.0f%% / native %.0f%%, "
+                "%llu lookups/s, %llu native calls/s", (void *)g_fault_threads[best].teb,
+                100.0 * bestn / (double)period_samples, 100.0 * g_prof_thr[best].x64 / (double)bestn,
+                100.0 * g_prof_thr[best].native / (double)bestn,
+                (unsigned long long)((lk - g_prof_thr[best].last_lookups) / PROF_PERIOD_S),
+                (unsigned long long)((ex - g_prof_thr[best].last_exits) / PROF_PERIOD_S));
+        g_prof_thr[best].x64 = g_prof_thr[best].native = 0;   // shown: do not pick it again
+    }
+    for (int i = 0; i < FAULT_THREADS; i++) {                 // counters for the next period
+        if (!g_fault_threads[i].thread) continue;
+        FxiCpu *c = *(FxiCpu **)(g_fault_threads[i].area + 0x30);
+        if (c) fxi_win_profile(c, &g_prof_thr[i].last_lookups, &g_prof_thr[i].last_exits, &blocks);
+        g_prof_thr[i].x64 = g_prof_thr[i].native = 0;
+    }
+    // x64 time per module, then the hottest instructions.
+    int nm = teb ? prof_modules(teb, mods, 256) : 0;
+    int nh = 0; uint64_t other = 0;
+    for (int i = 0; i < PROF_SLOTS; i++) {
+        if (!g_prof_hits[i].n) continue;
+        sorted[nh++] = g_prof_hits[i];
+        int found = 0;
+        for (int k = 0; k < nm; k++)
+            if (g_prof_hits[i].rip - mods[k].base < mods[k].size) { mods[k].x64 += g_prof_hits[i].n; found = 1; break; }
+        if (!found) other += g_prof_hits[i].n;
+    }
+    memset(g_prof_hits, 0, sizeof g_prof_hits);
+    if (!x64) return;
+    char line[512]; int o = 0;
+    for (int shown = 0; shown < 10; shown++) {
+        int best = -1;
+        for (int k = 0; k < nm; k++) if (mods[k].x64 && (best < 0 || mods[k].x64 > mods[best].x64)) best = k;
+        if (best < 0) break;
+        o += snprintf(line + o, sizeof line - (size_t)o, "%s%s %.1f%%", shown ? ", " : "", mods[best].name,
+                      100.0 * mods[best].x64 / (double)x64);
+        mods[best].x64 = 0;
+        if (o > 400) break;
+    }
+    mid_log("[fxi-prof]   x64 time by module: %s%s(no module: generated/JIT code) %.1f%%", line, o ? ", " : "",
+            100.0 * other / (double)x64);
+    qsort(sorted, (size_t)nh, sizeof sorted[0], prof_cmp_hit);
+    for (int i = 0; i < nh && i < 16; i++) {
+        const char *mod = "(generated)"; uint64_t off = sorted[i].rip;
+        for (int k = 0; k < nm; k++)
+            if (sorted[i].rip - mods[k].base < mods[k].size) { mod = mods[k].name; off = sorted[i].rip - mods[k].base; break; }
+        uint8_t code[16]; char hex[49] = "?";
+        if (vmr(sorted[i].rip, code, 16)) for (int b = 0; b < 16; b++) snprintf(hex + 3 * b, 4, "%02x ", code[b]);
+        mid_log("[fxi-prof]   hot %2d: %5.2f%% %s+%#llx (%#llx): %s", i + 1, 100.0 * sorted[i].n / (double)x64, mod,
+                (unsigned long long)off, (unsigned long long)sorted[i].rip, hex);
+    }
+    mid_log("[fxi-prof]   blocks translated so far: %llu", (unsigned long long)blocks);
+}
+
+static void *prof_thread(void *arg) {
+    (void)arg;
+    uint64_t ticks = 0;
+    for (;;) {
+        struct timespec ts = { 0, 1000000000 / PROF_HZ };
+        nanosleep(&ts, NULL);
+        for (int i = 0; i < FAULT_THREADS; i++) {
+            mach_port_t t = __atomic_load_n(&g_fault_threads[i].thread, __ATOMIC_ACQUIRE);
+            if (!t) continue;
+            thread_basic_info_data_t bi;
+            mach_msg_type_number_t cnt = THREAD_BASIC_INFO_COUNT;
+            if (thread_info(t, THREAD_BASIC_INFO, (thread_info_t)&bi, &cnt) != KERN_SUCCESS || bi.run_state != TH_STATE_RUNNING)
+                continue;
+            uint8_t *area = g_fault_threads[i].area;
+            FxiCpu *c = *(FxiCpu **)(area + 0x30);
+            if (!c) continue;
+            if (!__atomic_load_n(area, __ATOMIC_RELAXED)) { g_prof_thr[i].native++; continue; }   // InSimulation
+            g_prof_thr[i].x64++;
+            uint64_t lk, ex, bl, rip = fxi_win_profile(c, &lk, &ex, &bl);
+            uint64_t h = (rip * 0x9E3779B97F4A7C15ull) >> 50;
+            for (int probe = 0; probe < 32; probe++, h = (h + 1) & (PROF_SLOTS - 1)) {
+                if (g_prof_hits[h].rip == rip) { g_prof_hits[h].n++; break; }
+                if (!g_prof_hits[h].n) { g_prof_hits[h].rip = rip; g_prof_hits[h].n = 1; break; }
+            }
+        }
+        if (++ticks % (PROF_HZ * PROF_PERIOD_S) == 0) prof_report(PROF_HZ * PROF_PERIOD_S);
+    }
+    return NULL;
+}
+
+static void prof_start(void) {
+    pthread_t t;
+    if (pthread_create(&t, NULL, prof_thread, NULL) == 0) pthread_detach(t);
 }
 
 static void __attribute__((noreturn, used)) fault_entry(uint64_t addr, uint64_t is_write) {
@@ -313,7 +477,9 @@ static long host_thread_init(void) {
         mid_log("[fxi-win] ThreadInit: no CPU area (teb %p)", (void *)teb);
         return (long)0xC0000001;   // STATUS_UNSUCCESSFUL
     }
-    fault_thread_register(area);
+    fault_thread_register(area, teb);
+    static pthread_once_t prof_once = PTHREAD_ONCE_INIT;
+    pthread_once(&prof_once, prof_start);
     FxiCpu **slot = (FxiCpu **)(area + 0x30);                   // EmulatorData[0]
     if (!*slot) {
         *slot = fxi_win_cpu_new();

@@ -99,6 +99,14 @@ uint64_t fxi_win_fault_rip(FxiCpu *c, int *is_fetch) {
 // Diagnostics: where DF was last set (1 std, 2 popf, 3 context load, 0 never) and its rip.
 int fxi_win_df_source(FxiCpu *c, uint64_t *rip) { *rip = c->df_rip; return (int)c->df_how; }
 
+// Profiler (sampled from another thread, racy by design): the last memory-touching instruction
+// (or the block being looked up), block lookups, exits to native code, blocks translated.
+uint64_t fxi_win_profile(FxiCpu *c, uint64_t *lookups, uint64_t *exits, uint64_t *blocks) {
+    Uop *u = __atomic_load_n(&c->cur, __ATOMIC_RELAXED);
+    *lookups = c->n_lookups; *exits = c->n_exits; *blocks = c->vm->blocks;
+    return u ? u->rip : c->rip;
+}
+
 // Diagnostics: the last block lookups, oldest first.
 int fxi_win_trail(FxiCpu *c, uint64_t *rips, int max) {
     int n = c->trail_n < 16 ? (int)c->trail_n : 16;

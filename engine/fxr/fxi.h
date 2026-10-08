@@ -62,6 +62,9 @@ uint64_t fxi_win_fault_rip(FxiCpu *c, int *is_fetch);
 int fxi_win_trail(FxiCpu *c, uint64_t *rips, int max);
 /// Diagnostics: how DF was last set (1 std, 2 popf, 3 context load, 0 never), *rip where.
 int fxi_win_df_source(FxiCpu *c, uint64_t *rip);
+/// Profiler sample, safe to call from another thread (racy by design): the rip of the last
+/// memory-touching x64 instruction, and the lookup / native-exit / translated-block counters.
+uint64_t fxi_win_profile(FxiCpu *c, uint64_t *lookups, uint64_t *exits, uint64_t *blocks);
 
 #ifdef __cplusplus
 }

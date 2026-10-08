@@ -55,6 +55,7 @@
 #define fxi_win_set_teb fxr_win_set_teb
 #define fxi_win_trail fxr_win_trail
 #define fxi_win_df_source fxr_win_df_source
+#define fxi_win_profile fxr_win_profile
 #define fxi_x87_fxrstor fxr_x87_fxrstor
 #define fxi_x87_fxsave fxr_x87_fxsave
 #define fxi_x87_init fxr_x87_init

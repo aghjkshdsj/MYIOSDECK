@@ -420,7 +420,7 @@ static void op_ret(FxiCpu *c, Uop *u) {
 static void op_goto(FxiCpu *c, Uop *u) { CHAIN(c, u->link, u->aux); }
 static void op_stop(FxiCpu *c, Uop *u) { (void)c; (void)u; }
 // Windows mode: the next block is native ARM64EC code; leave for the transition glue.
-static void op_ec_exit(FxiCpu *c, Uop *u) { c->rip = u->imm; c->stop = FXI_STOP_EC; }
+static void op_ec_exit(FxiCpu *c, Uop *u) { c->rip = u->imm; c->stop = FXI_STOP_EC; c->n_exits++; }
 static void op_fail_ud(FxiCpu *c, Uop *u) {
     c->rip = u->aux;
     fxi_fail(c, "unimplemented instruction at %#llx: %s", (unsigned long long)u->aux, (const char *)(uintptr_t)u->imm);
