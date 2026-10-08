@@ -42,7 +42,7 @@ sideload edition (FEX, ~90% of native) stays the full-speed option, from the sam
   Madeira's FEX fork at `...\claude\fex` (ARM64EC frontend: `Source/Windows/ARM64EC/Module.S`,
   `Module.cpp` = the reference for Wine's emulator interface).
 
-## State (2026-10-08, build 76)
+## State (2026-10-08, build 84)
 - **FXI**: no-JIT x86-64 interpreter (`engine/fxi`), 8.1% of native on device. Since build 57 it
   also has a Windows mode (`fxi_win.c`): FS/GS segment slots (r[17]/r[18], `gs:[0x30]` = TEB),
   a thread-safe shared block cache, cached `ec_exit` blocks for jumps into native ARM64EC code.
@@ -185,6 +185,26 @@ sideload edition (FEX, ~90% of native) stays the full-speed option, from the sam
   Risks ahead for Unity/Mono games: Mono patches call sites in code it generated (FXI has no
   code invalidation yet), and its GC suspends threads and reads their context while they run in
   FXI (Wine's NtGetContextThread on an ARM64EC thread in simulation).
+- **Builds 77-82: Stick Fight's wild pointer.** 76/77 wrote through rdi = 0x1000803a9355a0.
+  Diagnostics (77): the first 3 x64 exceptions log GPRs, eflags, code before/at rip and the last
+  16 block lookups (`fxi_win_trail`; first-time edges, recorded in fxi_lookup, off the hot path),
+  read with vm_read_overwrite. 77 never got there: Madeira's Mach server could not attribute the
+  fault (FXI runs on the emulator stack, x18 = 0) and its best-effort delivery hung the thread.
+  **Build 80**: `engine/wine/patches/nojit_fault_hook.py` makes the server call
+  `mid_fxi_mach_fault` (fxi_win_host.c) before its last-resort delivery: in simulation and
+  unmapped address -> the thread is redirected to `fault_entry` -> raise_x64. Dump: eflags 0x616,
+  DF set; `rep stosw` filled backwards over an array header. **Build 81** logs where DF was set
+  (`fxi_win_df_source`): a popf in Unity's CPUID check, whose ID-bit flip FXI dropped, so the
+  code's never-taken failure branch skipped a push and popfq loaded a saved register.
+  **Build 82**: FXI keeps EFLAGS.ID/AC (`c->sysflags`). Stick Fight then ran Mono, created the
+  D3D11 device (feature level 11_1), ~30 Unity threads, and stopped at cvtpd2dq.
+- **Differential instruction test** (`engine/guest/difftest.c`, in ci-test.sh and compare.sh):
+  265 instruction forms (integer in all sizes and memory forms, shifts/rotates, mul/div, cmov/
+  setcc/fused jcc x16, SSE2 integer and float) x 300 random/edge inputs with random flags, one
+  hash per form, FXI and FXR output must equal native line for line. First run found that a
+  32-bit shift/rotate whose count masks to 0 did not zero-extend (FXI and FXR's pinned shifts).
+  **Build 84**: cvtpd2dq plus the rest of missing SSE2 (XMM-count shifts, saturating add/sub,
+  pavg, pmulh(u)w, pmaddwd, pinsrw/pextrw, movnt*). Add every new instruction to the difftest.
 - Other branches in the repo: `claude/fxr` (FXR's origin), `gpt-astra/interp`.
 
 ## Next steps (in order)
