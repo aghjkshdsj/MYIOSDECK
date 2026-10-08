@@ -226,7 +226,12 @@ sideload edition (FEX, ~90% of native) stays the full-speed option, from the sam
   Vulkan 1.4 (Apple A17 Pro GPU (MOLTENVK)) | 4.1 Core Mesa 25.0.7"), then every opengl32 call
   faulted reading teb->glTable with teb == NULL: opengl32's thunks store x18 as a value
   (`.teb = NtCurrentTeb()`). **Build 95**: pe2dylib rewrites those stores for opengl32 only (the
-  fork's ios_x18_patch_stores rule): 3,154 sites (3,102 stores), 0 unpatchable. Not done: the fork's GC64 lua51.dll for LOVE games
+  fork's ios_x18_patch_stores rule): 3,154 sites (3,102 stores), 0 unpatchable.
+  **Build 95 result: OpenGL runs without JIT** (2026-10-08): 3.3 core context on Zink (GL 4.1
+  Core), triangle drawn (centre-pixel check ok), 1216 frames in 20.0 s at 60 fps, glGetError 0,
+  PASS. FXI profile: x64 0.4% / native 99.6%. Hello x64, the suite and both D3D cubes still work.
+  Cosmetic: in game mode GL (like D3D) presents to the fullscreen layer while Wine draws the
+  windowed program's frame on top. Not done: the fork's GC64 lua51.dll for LOVE games
   (`build/luajit-x64`, not built: luajit_compat finds none and changes nothing); gl/ and PE/
   are loose dylibs outside Frameworks/ (to fix for the App Store).
 - Other branches in the repo: `claude/fxr` (FXR's origin), `gpt-astra/interp`.
