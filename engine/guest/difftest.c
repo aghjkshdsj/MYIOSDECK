@@ -402,6 +402,15 @@ static u64 g_m[4];
             h = mix(h, j);                                                                    \
             __asm__ volatile("movl %[m], %k[r]\n\ttestl %k[r], %k[r]" JN(X) : [r] "=&r"(r), [j] "=&r"(j) : [m] "m"(g_m[(i & 8) ? 0 : 1]) : "cc", "memory"); \
             h = mix(mix(h, r), j);                                                            \
+            /* loop steps: add/sub, then cmp with a register (both orders) or an immediate */ \
+            r = a; __asm__ volatile("addq $3, %[r]\n\tcmpq %[b], %[r]" JX(X) : [r] "+r"(r), [j] "=&r"(j), [f] "=&r"(f) : [b] "r"(b) : "cc", "memory"); \
+            h = mix(mix(mix(h, r), j), f & ARITH);                                            \
+            r = a; __asm__ volatile("subl $1, %k[r]\n\tcmpl %k[r], %k[b]" JN(X) : [r] "+r"(r), [j] "=&r"(j) : [b] "r"(b) : "cc", "memory"); \
+            h = mix(mix(h, r), j);                                                            \
+            r = (i & 8) ? 0xff8 : a; __asm__ volatile("addq $8, %[r]\n\tcmpq $0x1000, %[r]" JN(X) : [r] "+r"(r), [j] "=&r"(j) : : "cc", "memory"); \
+            h = mix(mix(h, r), j);                                                            \
+            r = a; __asm__ volatile("addl %k[b], %k[r]\n\tcmpl $2000000, %k[r]" JX(X) : [r] "+r"(r), [j] "=&r"(j), [f] "=&r"(f) : [b] "r"(b) : "cc", "memory"); \
+            h = mix(mix(mix(h, r), j), f & ARITH);                                            \
         }                                                                                     \
         out("fz_" #X, h);                                                                     \
     }
@@ -449,6 +458,30 @@ static void fz_call(void) {
         h = mix(mix(mix(mix(mix(mix(mix(h, r), s), t), z), c), d), e);
     }
     out("fz_call", h);
+}
+// mov D, S ; op D, imm (3-operand pairs), flags read after and not
+static void fz_3op(void) {
+    u64 h = 14695981039346656037ull;
+    for (int i = 0; i < N; i++) {
+        u64 a = val(), fi = flags_in(), f, r;
+        __asm__ volatile("movq %[a], %[r]\n\tshrq $12, %[r]" : [r] "=&r"(r) : [a] "r"(a) : "cc");
+        h = mix(h, r);
+        __asm__ volatile(PRE "movq %[a], %[r]\n\tshlq $25, %[r]" POST : [r] "=&r"(r), [f] "=&r"(f) : [a] "r"(a), [fi] "r"(fi) : "cc", "memory");
+        h = mix(mix(h, r), f & 0xc5ull);
+        __asm__ volatile(PRE "movl %k[a], %k[r]\n\tsarl $7, %k[r]" POST : [r] "=&r"(r), [f] "=&r"(f) : [a] "r"(a), [fi] "r"(fi) : "cc", "memory");
+        h = mix(mix(h, r), f & 0xc5ull);
+        __asm__ volatile("movq %[a], %[r]\n\trolq $13, %[r]" : [r] "=&r"(r) : [a] "r"(a) : "cc");
+        h = mix(h, r);
+        __asm__ volatile("movl %k[a], %k[r]\n\trorl $5, %k[r]" : [r] "=&r"(r) : [a] "r"(a) : "cc");
+        h = mix(h, r);
+        __asm__ volatile(PRE "movq %[a], %[r]\n\taddq $-77, %[r]" POST : [r] "=&r"(r), [f] "=&r"(f) : [a] "r"(a), [fi] "r"(fi) : "cc", "memory");
+        h = mix(mix(h, r), f & ARITH);
+        __asm__ volatile(PRE "movq %[a], %[r]\n\tandl $0xf0f0, %k[r]" POST : [r] "=&r"(r), [f] "=&r"(f) : [a] "r"(a), [fi] "r"(fi) : "cc", "memory");
+        h = mix(mix(h, r), f & LOGIC);
+        __asm__ volatile("movq %[a], %[r]\n\txorq $0x5a5a, %[r]" : [r] "=&r"(r) : [a] "r"(a) : "cc");
+        h = mix(h, r);
+    }
+    out("fz_3op", h);
 }
 // loads and stores with [base + index*scale + disp]
 static void fz_index(void) {
@@ -498,7 +531,7 @@ static const test_fn kTests[] = {
     x_movsd_rr, x_movss_rr, x_movhlps, x_movlhps, x_movq_rr, x_unpcklps, x_pinsrw, x_togpr,
     fz_o, fz_no, fz_b, fz_ae, fz_e, fz_ne, fz_be, fz_a, fz_s, fz_ns, fz_p, fz_np, fz_l, fz_ge, fz_le, fz_g,
     fc_o, fc_no, fc_b, fc_ae, fc_e, fc_ne, fc_be, fc_a, fc_s, fc_ns, fc_p, fc_np, fc_l, fc_ge, fc_le, fc_g,
-    fz_call, fz_index,
+    fz_call, fz_index, fz_3op,
 };
 
 int guest_main(int argc, char **argv) {

@@ -379,7 +379,9 @@ typedef struct { const char *name; PFn h[9]; } XShift;
     X(t_fmi, [2][4][16][17]) X(t_fmit, [2][4][16]) X(t_fmr, [3][4][16][16]) X(t_fjs_ri, [2][2][16][16]) \
     X(t_fjs_rr, [2][2][16][16]) X(t_fjs_rrx, [2][2][16][16]) X(t_fcj, [2][16][9][9]) X(t_fcjt, [2][16][9]) \
     X(t_fai, [5][2][16][16]) X(t_fid, [2][2][4][16]) X(t_amr, [2][16][16]) X(t_alea, [17][16]) X(t_ami, [2][16]) \
-    X(t_axz, [16]) X(t_pop2, [16][16]) X(t_push2, [16][16]) X(t_popret, [16]) X(t_ltj, [2][6][17][16])
+    X(t_axz, [16]) X(t_pop2, [16][16]) X(t_push2, [16][16]) X(t_popret, [16]) X(t_ltj, [2][6][17][16]) \
+    X(t_sic, [2][2][10][16][16]) X(t_sicr, [2][2][10][16][16]) X(t_sii, [2][2][10][16]) X(t_sri, [2][2][10][16][16]) \
+    X(t_3op, [10][2][16][16])
 #define FXR_DECL_TABLE(NAME, DIMS) extern const PFn fxr_##NAME DIMS;
 FXR_TABLES(FXR_DECL_TABLE)
 #define t_setcc fxr_t_setcc
@@ -452,6 +454,18 @@ FXR_TABLES(FXR_DECL_TABLE)
 #define t_push2 fxr_t_push2
 #define t_popret fxr_t_popret
 #define t_ltj fxr_t_ltj
+#define t_sic fxr_t_sic
+#define t_sicr fxr_t_sicr
+#define t_sii fxr_t_sii
+#define t_sri fxr_t_sri
+#define t_3op fxr_t_3op
+// The 10 conditions counted loops exit on (b ae e ne be a l ge le g), for the loop-step fusions
+#define C10(M, ...) M(2, __VA_ARGS__) M(3, __VA_ARGS__) M(4, __VA_ARGS__) M(5, __VA_ARGS__) M(6, __VA_ARGS__) \
+    M(7, __VA_ARGS__) M(12, __VA_ARGS__) M(13, __VA_ARGS__) M(14, __VA_ARGS__) M(15, __VA_ARGS__)
+static inline int cc10(unsigned cc) {   // index into a C10 table, -1 for the others
+    static const signed char k[16] = { -1, -1, 0, 1, 2, 3, 4, 5, -1, -1, -1, -1, 6, 7, 8, 9 };
+    return k[cc & 15];
+}
 extern const XOp fxr_xops[];
 extern const size_t fxr_n_xops;
 extern const XShift fxr_xshift[];

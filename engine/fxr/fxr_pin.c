@@ -455,6 +455,37 @@ static int try_fuse(Out *o, const Uop *u, uint32_t left) {
         x->disp = u->disp;
         return 2;
     }
+    // loop step: add/sub D, imm|reg + FXI's fused cmp (D, S | S, D | D, imm) / jcc
+    if (a->fam == FAM_ALU && (a->a == ALU_ADD || a->a == ALU_SUB) && a->c2 >= 2 && D >= 0 &&
+        b->fam == FAM_FJCC && b->a == 0 && b->c2 == (a->c2 == 3) && cc10(b->d) >= 0) {
+        int op = a->a == ALU_SUB, s64 = a->c2 == 3, ci = cc10(b->d), cd = greg(v->dst), cs = greg(v->src);
+        if (a->b == F_RI) {
+            if (b->b && cd == D) x = put_uop(o, v, t_sii[op][s64][ci][D]);
+            else if (!b->b && cd == D && cs >= 0) x = put_uop(o, v, t_sic[op][s64][ci][D][cs]);
+            else if (!b->b && cs == D && cd >= 0) x = put_uop(o, v, t_sicr[op][s64][ci][D][cd]);
+            if (x) { x->fimm = (int32_t)u->imm; return 2; }
+        } else if (a->b == F_RR && S >= 0 && b->b && cd == D) {
+            put_uop(o, v, t_sri[op][s64][ci][D][S]);
+            return 2;
+        }
+    }
+    // mov D, S ; op D, imm -> D = S op imm (the op no wider than the move)
+    if (a->fam == FAM_MOV && a->a == F_RR && a->b >= 2 && D >= 0 && S >= 0 && D != S && greg(v->dst) == D) {
+        if (b->fam == FAM_ALU && b->b == F_RI && b->c2 >= 2 && b->c2 <= a->b) {
+            int k = b->a == ALU_ADD ? 0 : b->a == ALU_SUB ? 1 : b->a == ALU_AND ? 2 : b->a == ALU_OR ? 3 : b->a == ALU_XOR ? 4 : -1;
+            if (k >= 0) { put_uop(o, v, t_3op[k][b->c2 - 2][D][S]); return 2; }
+        }
+        if (b->fam == FAM_SHIFT && !b->b && b->c2 >= 2 && b->c2 <= a->b && v->src != 0xffff) {
+            int op = b->a, k = -1;
+            if (op == SH_SHL || op == SH_SAL) k = 5;
+            else if (op == SH_SHR) k = 6;
+            else if (op == SH_SAR) k = 7;
+            else if (op == SH_ROL && !v->cc) k = 8;
+            else if (op == SH_ROR && !v->cc) k = 9;
+            unsigned n = (unsigned)v->imm & (b->c2 == 3 ? 63u : 31u);
+            if (k >= 0 && n) { put_uop(o, v, t_3op[k][b->c2 - 2][D][S])->imm = n; return 2; }
+        }
+    }
     if (is_named(b, N_CALL)) {   // argument setup + direct call
         if (a->fam == FAM_MOV && a->a == F_RR && a->b >= 2 && D >= 0 && S >= 0) x = put_uop(o, v, t_amr[a->b - 2][D][S]);
         else if (a->fam == FAM_LEA && a->a == 3 && D >= 0 && simple_mem(u)) { x = put_uop(o, v, t_alea[u->base][D]); x->disp = u->disp; }
