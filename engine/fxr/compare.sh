@@ -15,12 +15,17 @@ field() { sed -n "s/.*$1=\([0-9]*\).*/\1/p"; }
 median() { printf '%s\n' "$@" | sort -n | sed -n "$(( ($# + 1) / 2 ))p"; }
 pct() { awk -v n="$1" -v e="$2" 'BEGIN { if (e > 0) printf "%.2f", 100 * n / e; else printf "0" }'; }
 
+# Every engine (native too) runs pinned to the same core when taskset exists: shared runners
+# migrate processes, and FXR's threaded dispatch is sensitive to that.
+PIN=()
+if command -v taskset > /dev/null && [ "$(nproc)" -gt 1 ]; then PIN=(taskset -c 1); fi
+echo "pinning: ${PIN[*]:-none}"
 run_one() {   # engine elf native-driver kernel scale -> RESULT line (empty on failure)
     local e="$1" elf="$2" nat="$3" k="$4" s="$5"
     case $e in
-        native) if [ "$nat" = elf ]; then "$G/$elf" "$k" "$s"; else "$nat" "$k" "$s"; fi ;;
-        fxr) "$FXR" "$G/$elf" "$k" "$s" 2>> /tmp/fxr_err.txt ;;
-        fxi) "$FXI" "$G/$elf" "$k" "$s" 2>> /tmp/fxi_err.txt ;;
+        native) if [ "$nat" = elf ]; then "${PIN[@]}" "$G/$elf" "$k" "$s"; else "${PIN[@]}" "$nat" "$k" "$s"; fi ;;
+        fxr) "${PIN[@]}" "$FXR" "$G/$elf" "$k" "$s" 2>> /tmp/fxr_err.txt ;;
+        fxi) "${PIN[@]}" "$FXI" "$G/$elf" "$k" "$s" 2>> /tmp/fxi_err.txt ;;
     esac | grep RESULT
 }
 

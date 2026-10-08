@@ -130,12 +130,17 @@ jobs:
         run: |
           cd engine/fxr
           xcrun -sdk iphoneos clang --version | head -1
-          for f in fxi_core.c fxi_decode.c fxi_flags.c fxi_ops.c fxi_sse.c fxi_atomic.c fxi_x87.c fxi_win.c fxr_pin.c; do
-            xcrun -sdk iphoneos clang -arch arm64 -O2 -std=gnu11 -ffp-contract=off -miphoneos-version-min=17.0 -c "$f" -o "/tmp/${f%.c}.o"
+          srcs="fxi_core.c fxi_decode.c fxi_flags.c fxi_ops.c fxi_sse.c fxi_atomic.c fxi_x87.c fxi_win.c fxr_pin.c fxr_pin_alu.c fxr_pin_br.c fxr_pin_sse.c"
+          pids=""
+          for f in $srcs; do
+            xcrun -sdk iphoneos clang -arch arm64 -O2 -std=gnu11 -ffp-contract=off -miphoneos-version-min=17.0 -c "$f" -o "/tmp/${f%.c}.o" & pids="$pids $!"
           done
+          for p in $pids; do wait $p; done
           echo "preserve_none: $(echo '__attribute__((preserve_none)) void f(void){}' | xcrun -sdk iphoneos clang -arch arm64 -x c -c - -o /dev/null 2>&1 && echo supported || echo NOT supported)"
           bash probe_cc.sh "xcrun -sdk iphoneos clang -arch arm64" || true
-          ls -la /tmp/fxr_pin.o
-          clash=$(for f in /tmp/fxi_*.o /tmp/fxr_pin.o; do nm -g -U "$f"; done | awk '{print $NF}' | grep -E '^_fxi_' || true)
+          ls -la /tmp/fxr_pin*.o
+          # the app links FXR next to FXI: every FXR object must exist, and none may define fxi_* names
+          for f in $srcs; do test -s "/tmp/${f%.c}.o" || { echo "missing /tmp/${f%.c}.o"; exit 1; }; done
+          clash=$(for f in /tmp/fxi_*.o /tmp/fxr_pin*.o; do nm -g -U "$f"; done | awk '{print $NF}' | grep -E '^_fxi_' || true)
           if [ -n "$clash" ]; then echo "FXR defines FXI's global names (add them to engine/fxr/fxr_rename.h):"; echo "$clash"; exit 1; fi
           echo "no global fxi_* symbols"
