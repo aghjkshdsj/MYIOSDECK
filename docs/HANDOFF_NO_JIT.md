@@ -42,7 +42,7 @@ sideload edition (FEX, ~90% of native) stays the full-speed option, from the sam
   Madeira's FEX fork at `...\claude\fex` (ARM64EC frontend: `Source/Windows/ARM64EC/Module.S`,
   `Module.cpp` = the reference for Wine's emulator interface).
 
-## State (2026-10-08, build 75)
+## State (2026-10-08, build 76)
 - **FXI**: no-JIT x86-64 interpreter (`engine/fxi`), 8.1% of native on device. Since build 57 it
   also has a Windows mode (`fxi_win.c`): FS/GS segment slots (r[17]/r[18], `gs:[0x30]` = TEB),
   a thread-safe shared block cache, cached `ec_exit` blocks for jumps into native ARM64EC code.
@@ -178,6 +178,13 @@ sideload edition (FEX, ~90% of native) stays the full-speed option, from the sam
   (experimental)": `runSteamGame` passes `noJIT` to the session setup the no-JIT cubes use;
   Madeira picks the ARM64EC bundle from the full Win32 path. 32-bit games (PE machine 0x14c) are
   refused without JIT (FXI is x64 only; Madeira would take WoW64 on the aarch64 core = FEX).
+- **Build 75 result: first real game without JIT.** Stick Fight: The Game (Steam, Unity, x64):
+  ARM64EC bundle, signed DLLs, FXI ran its code 0.5 s, then STOP at `repne scasb` (f2 ae).
+  **Build 76**: scas/cmps (repe/repne, lazy SUB flags, RCX = 0 keeps flags, restartable on a
+  fault) and lods in FXI and FXR; the atomics guest checks them against native (56 lines exact).
+  Risks ahead for Unity/Mono games: Mono patches call sites in code it generated (FXI has no
+  code invalidation yet), and its GC suspends threads and reads their context while they run in
+  FXI (Wine's NtGetContextThread on an ARM64EC thread in simulation).
 - Other branches in the repo: `claude/fxr` (FXR's origin), `gpt-astra/interp`.
 
 ## Next steps (in order)
