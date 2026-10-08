@@ -1,9 +1,13 @@
 # Madeira (github.com/willfaust/Madeira, GPL-3.0-or-later): its iOS ports of
 # Wine's unix side (shims, *_ios.c replacements) and its Wine fork (submodule).
 # MYIOSDECK builds them reproducibly in CI. Bump the SHAs to update.
-MADEIRA_REPO=https://github.com/willfaust/Madeira.git
-MADEIRA_SHA=65e6fe8f0da45b28b610c71fda9791e89d1060a6
-WINE_SHA=257f271cfffed9f22f7987cac53bc00095d092fe
+# Pinned at Connor Gow's (c-gow) fork, release opengl-test-7: Madeira plus desktop
+# OpenGL (Mesa OSMesa + Zink on MoltenVK, winios WGL driver build/win32u-unix/opengl_ios.c,
+# patches/wine-opengl-winios.patch for opengl32). Its Wine submodule is willfaust/wine.
+# engine/dxmt/PIN must name the same Madeira commit.
+MADEIRA_REPO=https://github.com/c-gow/Madeira.git
+MADEIRA_SHA=a14444490087c9504a19b9a168482ab35df2fc6c
+WINE_SHA=657de1018ec60936efdff3b6a8cb7f1d7acb1c81
 FREETYPE_TAG=VER-2-13-3
 # PE cross toolchain (Madeira docs/BUILDING.md pins this release and hash).
 LLVM_MINGW=llvm-mingw-20260421-ucrt-macos-universal

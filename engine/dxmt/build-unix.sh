@@ -21,12 +21,17 @@ JOBS="$(sysctl -n hw.ncpu)"
 SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
 
 step_fetch() {
-    if [ ! -d "$M/.git" ] || [ "$(git -C "$M" rev-parse HEAD)" != "$MADEIRA_SHA" ]; then
+    if [ ! -d "$M/.git" ]; then
         rm -rf "$M"
         git init -q "$M"
         git -C "$M" remote add origin "$MADEIRA_REPO"
+    fi
+    if [ "$(git -C "$M" rev-parse HEAD 2>/dev/null)" != "$MADEIRA_SHA" ]; then
+        # In place: a cache from an older pin keeps its LLVM build (toolchains/, untracked).
+        git -C "$M" remote set-url origin "$MADEIRA_REPO"
         git -C "$M" fetch -q --depth 1 origin "$MADEIRA_SHA"
-        git -C "$M" checkout -q FETCH_HEAD
+        git -C "$M" checkout -qf FETCH_HEAD
+        rm -rf "$M/build/dxmt-ios/obj"
     fi
     if [ "$(git -C "$M/dxmt" rev-parse HEAD 2>/dev/null)" != "$DXMT_SHA" ]; then
         git -C "$M" submodule update --init --depth 1 dxmt

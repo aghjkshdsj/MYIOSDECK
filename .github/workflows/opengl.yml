@@ -1,0 +1,94 @@
+name: Stage 4 - OpenGL (Mesa Zink + MoltenVK)
+
+# Builds desktop OpenGL for Windows games as two iOS dylibs (engine/gl/build.sh): MoltenVK
+# and Mesa's OSMesa with the Zink driver, from c-gow's Madeira fork (engine/wine/PIN).
+# MoltenVK and Mesa build trees are cached, so only the first run is long. No LLVM, no JIT
+# (the audit step fails on code-generation imports).
+on:
+  push:
+    branches: [main]
+    paths: ["engine/gl/**", "!engine/gl/stage-app.sh", "!engine/gl/test/**", "!engine/gl/build-test.sh", ".github/workflows/opengl.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: opengl-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  opengl:
+    runs-on: macos-26
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Host tools
+        run: |
+          xcodebuild -version
+          python3 --version
+          cmake --version | head -1
+
+      - name: Restore Mesa / MoltenVK sources and build trees
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            engine/gl/madeira
+            engine/gl/work
+          key: opengl-${{ hashFiles('engine/gl/PIN', 'engine/wine/PIN') }}-v1-${{ github.run_id }}
+          # MoltenVK's dependency build is the long part and does not depend on the Madeira pin.
+          restore-keys: |
+            opengl-${{ hashFiles('engine/gl/PIN', 'engine/wine/PIN') }}-v1-
+            opengl-
+
+      - name: Fetch Madeira scripts, Mesa, MoltenVK, Python tools
+        run: bash engine/gl/build.sh fetch
+
+      - name: MoltenVK for iOS
+        id: moltenvk
+        timeout-minutes: 180
+        run: bash engine/gl/build.sh moltenvk
+
+      - name: Mesa OSMesa + Zink for iOS
+        id: mesa
+        run: bash engine/gl/build.sh mesa
+
+      - name: No-JIT audit
+        run: |
+          bash engine/gl/build.sh audit
+          { echo '## OpenGL no-JIT audit'; echo '```'; cat engine/gl/work/nojit-audit.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Collect
+        run: bash engine/gl/build.sh collect
+
+      - name: Save build cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            engine/gl/madeira
+            engine/gl/work
+          key: opengl-${{ hashFiles('engine/gl/PIN', 'engine/wine/PIN') }}-v1-${{ github.run_id }}
+
+      - uses: actions/upload-artifact@v5
+        if: success()
+        with:
+          name: gl-libs
+          path: engine/gl/out
+
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: gl-logs
+          path: |
+            engine/gl/madeira/build/mesa-ios/obj/meson-logs/*.txt
+            engine/gl/work/nojit-audit.txt
+          if-no-files-found: ignore
+
+      - name: Rebuild the IPA with these libraries
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run build-ipa.yml -R "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME"

@@ -34,6 +34,8 @@ struct SteamLaunchPlan {
     var arguments: String
     var workingFolder: String
     var appPath: String      // the install folder, for SteamAppPath
+    /// Extra Windows environment for this launch (GameGraphics: SDL's renderer hint).
+    var environment: [String: String] = [:]
 }
 
 /// Stage 4b: the account's owned library, from Steam's own CM connection
@@ -192,7 +194,23 @@ final class SteamLibrary: ObservableObject {
             if let i = games.firstIndex(where: { $0.id == appID }) { games[i].launches = info.launches }
         }
         let root = SteamInstallPaths.common(drive: Self.drive).appendingPathComponent(game.folderName, isDirectory: true)
-        guard let choice = SteamDirectStart.choose(game.launches ?? [], installFolder: root) else { throw PlayError.noProgram }
+        // The game sheet's Graphics choice: a Steam launch entry naming that renderer first.
+        let graphics = GameGraphics.choice(appID: appID)
+        let launches = game.launches ?? []
+        let renderer = launches.filter { graphics.matches($0) }
+        guard var choice = (renderer.isEmpty ? nil : SteamDirectStart.choose(renderer, installFolder: root))
+                ?? SteamDirectStart.choose(launches, installFolder: root) else { throw PlayError.noProgram }
+        var environment: [String: String] = [:]
+        if graphics != .automatic {
+            let engine = GameGraphics.engine(program: choice.program, root: root)
+            let have = Set(choice.arguments.split(separator: " ").map { $0.lowercased() })
+            let extra = graphics.arguments(for: engine)
+            if !extra.isEmpty, !have.contains(extra[0].lowercased()) {
+                choice.arguments = (choice.arguments + " " + extra.joined(separator: " ")).trimmingCharacters(in: .whitespaces)
+            }
+            if let sdl = graphics.sdlRenderDriver { environment["SDL_RENDER_DRIVER"] = sdl }
+            dlog("[steam-play] graphics=\(graphics.rawValue) engine=\(engine.rawValue) launch-entry=\(renderer.isEmpty ? "default" : "renderer") switch=\(extra.isEmpty ? "none" : extra.joined(separator: " "))")
+        }
         let win = { (rel: String) in rel.replacingOccurrences(of: "/", with: "\\") }
         let appPath = "C:\\" + win(SteamInstallPaths.libraryRelative) + "\\common\\" + game.folderName
         let exe = appPath + "\\" + win(choice.program)
@@ -203,7 +221,8 @@ final class SteamLibrary: ObservableObject {
         case let f?: folder = appPath + "\\" + win(f)
         }
         dlog("[steam-play] app=\(appID) program=\(choice.program) launch=\(choice.launchIndex.map(String.init) ?? "-")")
-        return SteamLaunchPlan(exe: exe, arguments: choice.arguments, workingFolder: folder, appPath: appPath)
+        return SteamLaunchPlan(exe: exe, arguments: choice.arguments, workingFolder: folder, appPath: appPath,
+                               environment: environment)
     }
 
     func uninstall(_ appID: Int) {
