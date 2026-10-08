@@ -222,7 +222,11 @@ sideload edition (FEX, ~90% of native) stays the full-speed option, from the sam
   presets are not in it. Library: "OpenGL triangle (x64[, no JIT])"
   (`engine/gl/test/gl-triangle-x64.c`): `[gl]` lines give context type, renderer, centre-pixel
   check, fps and PASS/FAIL. build-ipa takes stage runs from its own branch first
-  (`tools/latest-run.sh`). Not done: the fork's GC64 lua51.dll for LOVE games
+  (`tools/latest-run.sh`). **Build 94 result**: Zink came up on device without JIT ("zink
+  Vulkan 1.4 (Apple A17 Pro GPU (MOLTENVK)) | 4.1 Core Mesa 25.0.7"), then every opengl32 call
+  faulted reading teb->glTable with teb == NULL: opengl32's thunks store x18 as a value
+  (`.teb = NtCurrentTeb()`). **Build 95**: pe2dylib rewrites those stores for opengl32 only (the
+  fork's ios_x18_patch_stores rule): 3,154 sites (3,102 stores), 0 unpatchable. Not done: the fork's GC64 lua51.dll for LOVE games
   (`build/luajit-x64`, not built: luajit_compat finds none and changes nothing); gl/ and PE/
   are loose dylibs outside Frameworks/ (to fix for the App Store).
 - Other branches in the repo: `claude/fxr` (FXR's origin), `gpt-astra/interp`.
