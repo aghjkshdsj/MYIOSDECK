@@ -70,12 +70,34 @@ mode == 2 && /^ *[0-9a-f]+:\t/ {
         key = prev " ; " shape rel
         pair[key]++
         if (inloop) { lpair[key]++; if (prev2 != "") ltri[prev2 " ; " key]++ }
+        # superinstruction families (FXR candidates), by the shapes involved
+        fam = ""
+        if (pmn == "mov" && prev ~ /^mov r(32|64),r(32|64)$/ && rel == " [same dst]" && mn ~ /^(add|sub|and|or|xor|shl|shr|sar|rol|ror|imul|neg|not)$/) fam = "mov r,r ; ALU same dst (3-operand)"
+        else if (shape == "jcc" && pmn ~ /^(add|sub|and|or|xor|inc|dec|neg|shl|shr|sar)$/ && prev ~ / r(32|64)/) fam = "ALU reg ; jcc"
+        else if (shape == "jcc" && pmn ~ /^(cmp|test)$/ && prev ~ /m/) fam = "cmp/test with memory ; jcc"
+        else if (shape == "jcc" && pmn ~ /^(cmp|test)$/ && prev ~ / r(8|16)/) fam = "cmp/test 8/16-bit reg ; jcc"
+        else if (shape == "jcc" && pmn ~ /^(cmp|test)$/) fam = "cmp/test 32/64-bit reg ; jcc (fused already)"
+        else if (shape == "jcc" && pmn ~ /^v?u?comis[sd]$/) fam = "(u)comis ; jcc"
+        else if (pmn == "push" && mn == "push") fam = "push ; push"
+        else if (pmn == "pop" && mn == "pop") fam = "pop ; pop"
+        else if (pmn == "pop" && mn == "ret") fam = "pop ; ret"
+        else if (mn == "call" && (prev ~ /^mov r(32|64),r(32|64)$/ || prev ~ /^lea r64,m$/ || prev ~ /^mov r32,i$/ || prev ~ /^xor r32,r32$/)) fam = "argument setup ; call"
+        else if (pmn == "mov" && prev ~ /^mov r(32|64),m$/ && rel == " [uses dst]" && mn ~ /^(test|cmp)$/) fam = "load r ; test/cmp r"
+        else if (pmn == "mov" && prev ~ /^mov r(32|64),m$/ && rel == " [same dst]" && mn ~ /^(add|sub|and|or|xor|imul)$/) fam = "load r ; ALU r (same dst)"
+        else if (prev ~ /^(add|sub) r(32|64),i$/ && mn == "cmp" && rel == " [uses dst]") fam = "add/sub r,i ; cmp r (loop step)"
+        else if (prev ~ /^movzx r32,m$/ && rel != "") fam = "movzx load ; use"
+        if (fam != "") { famc[fam]++; if (inloop) lfamc[fam]++ }
     }
+    pmn = mn
     if (mn ~ /^(j|call|ret|jmp|ud2|hlt)/) { prev = ""; prev2 = ""; next }
     prev2 = (prev == "" ? "" : prev); prev = shape; pd = (mn ~ /^(push|cmp|test)/) ? "" : reg64(d)
 }
 END {
     printf "instructions: %d, in loop bodies: %d\n\n", total, ltotal
+    print "== superinstruction families: all code / loop bodies (per mille of instructions)"
+    for (k in famc) printf "%7.2f %7.2f  %s\n", 1000 * famc[k] / total, 1000 * lfamc[k] / ltotal, k | "sort -rn"
+    close("sort -rn")
+    print ""
     print "== top single instruction shapes, all code (per mille)"
     for (k in single) printf "%7.2f  %s\n", 1000 * single[k] / total, k | "sort -rn | head -60"
     close("sort -rn | head -60")
