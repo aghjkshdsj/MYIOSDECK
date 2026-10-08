@@ -31,7 +31,10 @@ jobs:
         with:
           path: engine/dxmt/madeira
           key: dxmt-${{ hashFiles('engine/dxmt/PIN') }}-v1-${{ github.run_id }}
-          restore-keys: dxmt-${{ hashFiles('engine/dxmt/PIN') }}-v1-
+          # An older pin's cache still holds the LLVM 15 build (fetch re-checks out Madeira in place).
+          restore-keys: |
+            dxmt-${{ hashFiles('engine/dxmt/PIN') }}-v1-
+            dxmt-
 
       - name: Fetch Madeira + DXMT + LLVM 15 sources
         run: bash engine/dxmt/build-unix.sh fetch

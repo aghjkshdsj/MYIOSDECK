@@ -41,11 +41,15 @@ final class WineController: ObservableObject, @unchecked Sendable {
         Program(id: "d3d12-cube-x64-nojit", title: "Direct3D 12 cube (x64, no JIT)",
                 detail: "D3D12 through Madeira's converter to Metal from signed DLLs, the program's code in FXI",
                 graphics: true, noJIT: true, exeName: "d3d12-cube-x64.exe"),
+        Program(id: "gl-triangle-x64-nojit", title: "OpenGL triangle (x64, no JIT)",
+                detail: "Desktop OpenGL 3.3 through Mesa Zink and MoltenVK to Metal, the program's code in FXI",
+                graphics: true, noJIT: true, exeName: "gl-triangle-x64.exe"),
         Program(id: "hello-x64.exe", title: "Windows Hello (x64)", detail: "Console hello world through Wine + FEX ARM64EC"),
         Program(id: "fib-x64.exe", title: "Fibonacci (x64)", detail: "Recursive CPU test: x86-64 call/ret through FEX"),
         Program(id: "clocktest-x64.exe", title: "Clock test (x64)", detail: "Windows timers and QueryPerformanceCounter"),
         Program(id: "cube-x64.exe", title: "Direct3D 11 cube (x64)", detail: "Spinning cube: D3D11 through DXMT to Metal", graphics: true),
         Program(id: "d3d12-cube-x64.exe", title: "Direct3D 12 cube (x64)", detail: "Spinning cube: D3D12 through Madeira's converter to Metal", graphics: true),
+        Program(id: "gl-triangle-x64.exe", title: "OpenGL triangle (x64)", detail: "Spinning triangle: OpenGL 3.3 through Mesa Zink and MoltenVK to Metal", graphics: true),
     ]
 
     @Published private(set) var state: State = .idle

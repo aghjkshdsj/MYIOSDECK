@@ -52,6 +52,9 @@ targets:
       # @WINE_SOURCES@
       # Stage 3 (DXMT): engine/dxmt/stage-app.sh inserts Madeira's d3d12/ folder here.
       # @DXMT_SOURCES@
+      # Stage 4 (OpenGL): engine/gl/stage-app.sh inserts Madeira's gl/ folder here
+      # (libOSMesa + libMoltenVK: desktop OpenGL through Zink on Metal).
+      # @GL_SOURCES@
       - path: App/Resources
         buildPhase: resources
       # No-JIT spike: Windows DLLs wrapped as signed dylibs (engine/pedylib/link-dylibs.sh).

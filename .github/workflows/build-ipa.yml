@@ -3,7 +3,7 @@ name: Build IPA
 on:
   push:
     branches: [main]
-    paths-ignore: ["engine/wine/**", "engine/dxmt/**", ".github/workflows/wine-unix.yml", ".github/workflows/dxmt.yml", ".github/workflows/fxi.yml", "docs/**", "*.md"]
+    paths-ignore: ["engine/wine/**", "engine/dxmt/**", "engine/gl/build.sh", "engine/gl/PIN", ".github/workflows/wine-unix.yml", ".github/workflows/dxmt.yml", ".github/workflows/opengl.yml", ".github/workflows/fxi.yml", "docs/**", "*.md"]
   pull_request:
   workflow_dispatch:
 
@@ -32,6 +32,9 @@ jobs:
         id: spike
         continue-on-error: true
         run: bash engine/pedylib/build-spike.sh "$RUNNER_TEMP/guests/pedylib" "$RUNNER_TEMP/llvm-mingw"
+      - name: OpenGL test program (x64 GL triangle)
+        continue-on-error: true
+        run: bash engine/gl/build-test.sh "$RUNNER_TEMP/guests/pedylib/winepe" "$RUNNER_TEMP/llvm-mingw"
       - name: Spike result
         if: steps.spike.outcome != 'success'
         run: echo "::warning::The no-JIT spike DLLs did not build (see 'No-JIT spike DLLs'); this IPA has no DLL test."
@@ -110,7 +113,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          RUN=$(gh run list -R "$GITHUB_REPOSITORY" --workflow wine-unix.yml --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+          RUN=$(bash tools/latest-run.sh wine-unix.yml)
           if [ -z "$RUN" ]; then echo "No successful Wine unix build yet"; exit 1; fi
           gh run download "$RUN" -R "$GITHUB_REPOSITORY" -n wine-unix-libs -D engine/wine/out
           bash engine/wine/stage-app.sh
@@ -123,7 +126,7 @@ jobs:
         run: |
           # Step 5: the D3D/Metal DLLs rebuilt with 16 KB sections (dxmt-pe.yml) replace Madeira's
           # 4 KB-aligned prebuilt ones, which cannot become signed dylibs.
-          D3D_RUN=$(gh run list -R "$GITHUB_REPOSITORY" --workflow dxmt-pe.yml --status success --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null || true)
+          D3D_RUN=$(bash tools/latest-run.sh dxmt-pe.yml || true)
           if [ -n "$D3D_RUN" ] && gh run download "$D3D_RUN" -R "$GITHUB_REPOSITORY" -n d3d-pe-dlls -D "$RUNNER_TEMP/d3d-pe"; then
             cp "$RUNNER_TEMP"/d3d-pe/*.dll engine/wine/madeira/app/Madeira/arm64ec-windows/
             echo "- D3D DLLs: 16 KB-aligned rebuild from run $D3D_RUN ($(ls "$RUNNER_TEMP"/d3d-pe | tr '\n' ' '))" | tee -a "$GITHUB_STEP_SUMMARY"
@@ -152,6 +155,7 @@ jobs:
           # Wine runs bare-name programs from system32, which Madeira links to the farm.
           [ -f App/Generated/pedylib/winepe/hello-arm64ec.exe ] && cp App/Generated/pedylib/winepe/hello-arm64ec.exe "$FARM/"
           [ -f App/Generated/pedylib/winepe/suite-x64.exe ] && cp App/Generated/pedylib/winepe/suite-x64.exe "$FARM/"
+          [ -f App/Generated/pedylib/winepe/gl-triangle-x64.exe ] && cp App/Generated/pedylib/winepe/gl-triangle-x64.exe "$FARM/"
           echo "- No-JIT Wine: $ok PE files as signed dylibs, $skip not converted" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Build without Wine
@@ -168,10 +172,38 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          RUN=$(gh run list -R "$GITHUB_REPOSITORY" --workflow dxmt.yml --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+          RUN=$(bash tools/latest-run.sh dxmt.yml)
           if [ -z "$RUN" ]; then echo "No successful DXMT build yet"; exit 1; fi
           gh run download "$RUN" -R "$GITHUB_REPOSITORY" -n dxmt-libs -D engine/dxmt/out
           bash engine/dxmt/stage-app.sh
+
+      - name: Stage OpenGL (stage 4) from the latest OpenGL build
+        id: gl
+        if: steps.wine.outcome == 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RUN=$(bash tools/latest-run.sh opengl.yml)
+          if [ -z "$RUN" ]; then echo "No successful OpenGL build yet"; exit 1; fi
+          gh run download "$RUN" -R "$GITHUB_REPOSITORY" -n gl-libs -D engine/gl/out
+          bash engine/gl/stage-app.sh
+          sed -n '1,40p' engine/gl/out/nojit-audit.txt 2>/dev/null || true
+
+      - name: Build without the OpenGL dylibs
+        if: steps.wine.outcome == 'success' && steps.gl.outcome != 'success'
+        run: |
+          echo "::notice::No Zink dylibs in this IPA (stage 4 builds in the 'Stage 4 - OpenGL' workflow); OpenGL uses Apple's OpenGL ES."
+          # Keep Wine's and DXMT's project.yml entries; only the gl/ folder goes.
+          python3 - project.yml <<'PY'
+          import sys
+          p = sys.argv[1]
+          s = open(p).read()
+          s = s.replace("      - path: engine/wine/madeira/app/Madeira/gl\n        type: folder\n        buildPhase: resources",
+                        "      # @GL_SOURCES@")
+          open(p, "w").write(s)
+          PY
+          rm -rf engine/wine/madeira/app/Madeira/gl
 
       - name: Build without DXMT
         if: steps.wine.outcome == 'success' && steps.dxmt.outcome != 'success'
@@ -214,6 +246,18 @@ jobs:
           # DXMT's D3D12 path dlopens the loose shader-converter dylib, so it needs its own signature.
           MSC=Payload/MYIOSDECK.app/d3d12/libmetalirconverter.dylib
           [ ! -f "$MSC" ] || codesign --force --sign - --timestamp=none "$MSC"
+          # Stage 4: the winios GL driver dlopens Mesa (OSMesa + Zink) and MoltenVK from gl/.
+          GLDYLIBS=0
+          for f in Payload/MYIOSDECK.app/gl/*.dylib; do
+            [ -f "$f" ] || continue
+            codesign --force --sign - --timestamp=none "$f"
+            GLDYLIBS=$((GLDYLIBS + 1))
+          done
+          if [ "${{ steps.gl.outcome }}" = success ]; then
+            for f in libOSMesa.dylib libMoltenVK.dylib; do
+              codesign -v "Payload/MYIOSDECK.app/gl/$f" || { echo "::error::gl/$f missing or unsigned in the app"; exit 1; }
+            done
+          fi
           # No-JIT spike: Windows DLLs as signed dylibs (engine/pedylib).
           PEDYLIBS=0
           while IFS= read -r f; do
@@ -227,10 +271,12 @@ jobs:
           [ "${{ steps.blink.outcome }}" = success ] && FLAVOR="${FLAVOR:+$FLAVOR-}interp"
           [ "${{ steps.wine.outcome }}" = success ] && FLAVOR="${FLAVOR:+$FLAVOR-}wine"
           [ "${{ steps.dxmt.outcome }}" = success ] && FLAVOR="${FLAVOR:+$FLAVOR-}dxmt"
+          [ "${{ steps.gl.outcome }}" = success ] && FLAVOR="${FLAVOR:+$FLAVOR-}gl"
           [ -n "$FLAVOR" ] || FLAVOR=uionly
           NAME="MYIOSDECK-0.1.0-build${{ github.run_number }}-${FLAVOR}.ipa"
           zip -qry "$NAME" Payload
           ls -la "$NAME"
+          unzip -l "$NAME" | grep -E 'MYIOSDECK.app/gl/.*\.dylib|gl-triangle-x64.exe' || true
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
           echo "flavor=$FLAVOR" >> "$GITHUB_OUTPUT"
           {
@@ -240,6 +286,7 @@ jobs:
             echo "- Blink (no-JIT interpreter): ${{ steps.blink.outcome }}"
             echo "- Wine (stage 2): ${{ steps.wine.outcome }}"
             echo "- DXMT (stage 3): ${{ steps.dxmt.outcome }}"
+            echo "- OpenGL Zink dylibs (stage 4): ${{ steps.gl.outcome }} ($GLDYLIBS signed in gl/)"
             echo "- No-JIT spike DLLs (signed dylibs): $PEDYLIBS"
             echo "- Size: $(du -h "$NAME" | cut -f1)"
           } >> "$GITHUB_STEP_SUMMARY"

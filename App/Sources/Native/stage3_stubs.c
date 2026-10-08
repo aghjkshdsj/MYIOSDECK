@@ -33,4 +33,9 @@ const char *madeira_wmt_released_class(uintptr_t addr, uint64_t *ago) {
     return 0;
 }
 
+/* DXMT's present counter (winemetal_unix.c); Winios/WiniosGL.m adds its GL presents to it. */
+uint64_t madeira_get_present_count(void) {
+    return 0;
+}
+
 #endif

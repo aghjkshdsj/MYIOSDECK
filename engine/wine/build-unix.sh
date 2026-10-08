@@ -93,6 +93,10 @@ step_ntdll() {
     python3 "$HERE/patches/nojit_child.py" "$M"
     # No-JIT: a wild guest pointer in FXI becomes an x64 access violation (engine/wine/patches/nojit_fault_hook.py).
     python3 "$HERE/patches/nojit_fault_hook.py" "$M"
+    # OpenGL (c-gow's fork): Madeira's ntdll build compiles opengl32's unix side
+    # (dlls/opengl32/unix_wgl.c, unix_thunks.c) from Wine with patches/wine-opengl-winios.patch.
+    git -C "$W" checkout -- dlls/opengl32 LICENSE-MADEIRA.md
+    git -C "$W" apply "$M/patches/wine-opengl-winios.patch"
     # dwrite's unix side wants generated headers from the PE tree; the native
     # tree generates the same headers (include/all), so use that instead.
     sed -i '' 's#wine/build-arm64ec/include#wine/build-macos/include#g' "$M/build/ntdll-unix/build.sh"
@@ -141,7 +145,8 @@ build_wineserver() {
         xcrun -sdk iphoneos clang "${FLAGS[@]}" -c "$src" -o "$O/$name.o" 2> "$O/$name.err" ||
             { echo "FAILED $src"; head -30 "$O/$name.err"; fail=1; }
     done
-    for extra in wine_log_ios hidpad_ios; do
+    # luajit_compat: mapping_ios.c's GC64 LuaJIT substitution (c-gow's fork).
+    for extra in wine_log_ios hidpad_ios luajit_compat; do
         xcrun -sdk iphoneos clang "${FLAGS[@]}" -c "$B/$extra.c" -o "$O/$extra.o" 2> "$O/$extra.err" ||
             { echo "FAILED $extra"; head -30 "$O/$extra.err"; fail=1; }
     done
