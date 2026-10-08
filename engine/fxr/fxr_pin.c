@@ -71,6 +71,13 @@
 #define SPILL_F() do { c->lf_op = (uint32_t)F0; c->lf_cin = (uint32_t)(F0 >> 32); c->lf_a = F1; c->lf_b = F2; c->lf_res = F3; } while (0)
 #define RELOAD_F() do { F0 = (uint64_t)c->lf_op | (uint64_t)c->lf_cin << 32; F1 = c->lf_a; F2 = c->lf_b; F3 = c->lf_res; } while (0)
 #define SETF(kind, si, a, b, r, cin) do { F0 = (uint64_t)LF(kind, si) | (uint64_t)(uint32_t)(cin) << 32; F1 = (a); F2 = (b); F3 = (r); } while (0)
+// XMM0-7 (x0..x7) to and from c->xmm
+FXI_INLINE FxrV xld(const void *p) { FxrV v; memcpy(&v, p, 16); return v; }
+FXI_INLINE void xst(void *p, FxrV v) { memcpy(p, &v, 16); }
+#define SPILL_X() do { xst(&c->xmm[0], x0); xst(&c->xmm[1], x1); xst(&c->xmm[2], x2); xst(&c->xmm[3], x3); \
+    xst(&c->xmm[4], x4); xst(&c->xmm[5], x5); xst(&c->xmm[6], x6); xst(&c->xmm[7], x7); } while (0)
+#define RELOAD_X() do { x0 = xld(&c->xmm[0]); x1 = xld(&c->xmm[1]); x2 = xld(&c->xmm[2]); x3 = xld(&c->xmm[3]); \
+    x4 = xld(&c->xmm[4]); x5 = xld(&c->xmm[5]); x6 = xld(&c->xmm[6]); x7 = xld(&c->xmm[7]); } while (0)
 
 PH p_slow(FXR_PARAMS);
 PH p_jcc_slow(FXR_PARAMS);
@@ -210,7 +217,8 @@ PH p_miss_ind(FXR_PARAMS) {
     PGO(b->u);
 }
 
-PH p_stop(FXR_PARAMS) { (void)c; (void)u; }
+// Leaving the chain (exit, error): the CPU state goes back to memory.
+PH p_stop(FXR_PARAMS) { SPILL_R(); SPILL_F(); SPILL_X(); }
 PH p_nop(FXR_PARAMS) { PNEXT(); }
 PH p_jmp(FXR_PARAMS) { PCHAIN(u->ulink, p_miss_t); }
 PH p_goto(FXR_PARAMS) { PCHAIN(u->ulink, p_miss_g); }
@@ -236,7 +244,7 @@ PH p_jcc_slow(FXR_PARAMS) {
     }
 C16(DEF_JCC, _)
 PH p_syscall(FXR_PARAMS) {
-    SPILL_R(); SPILL_F();
+    SPILL_R(); SPILL_F(); SPILL_X();
     c->rip = u->aux;
     long r = fxi_syscall(c);
     if (c->stop) return;
@@ -248,10 +256,10 @@ PH p_syscall(FXR_PARAMS) {
 }
 // Anything without a pinned form: FXI's handler, with the registers in memory around it.
 PH p_slow(FXR_PARAMS) {
-    SPILL_R(); SPILL_F();
+    SPILL_R(); SPILL_F(); SPILL_X();
     u->fn(c, u);
     if (FXI_UNLIKELY(c->stop)) return;
-    RELOAD_R(); RELOAD_F();
+    RELOAD_R(); RELOAD_F(); RELOAD_X();
     PNEXT();
 }
 
@@ -605,112 +613,442 @@ static const PFn t_fjt_ri[2][16][16] = { { C16(CC_FJ_X, 32, fjt_ri) }, { C16(CC_
 static const PFn t_fjt_rr[2][16][16] = { { C16(CC_FJ_X, 32, fjt_rr) }, { C16(CC_FJ_X, 64, fjt_rr) } };
 static const PFn t_fjt_rrx[2][16][16] = { { R16(ROW_RR, fjt_rrx_32) }, { R16(ROW_RR, fjt_rrx_64) } };   // [64?][D][S]
 
-// ---- SSE: XMM stays in memory; pinned so a vector op never spills the GPRs. The
-// definitions are FXI's own (fxr_sse_ops.inc), memory operands come through T. ----
-#define LANES4(...) for (int i = 0; i < 4; i++) { __VA_ARGS__; }
-#define LANES2(...) for (int i = 0; i < 2; i++) { __VA_ARGS__; }
-typedef struct SseOp { const char *name; PFn rr, rt; struct SseOp *next; int hot; } SseOp;
-static SseOp *g_sse_ops;
-// Load W bytes from an address into a zeroed 16-byte temporary.
-#define XLOAD(t, addr, W) do { if ((W) < 16) memset(&(t), 0, sizeof(t)); memcpy(&(t), (const void *)(uintptr_t)(addr), (W)); } while (0)
-// Each op's body is one inline function shared by its register, T and [base+index] forms.
-#define DEF_X(NAME, W, ...)                                                                \
-    FXI_INLINE void sx_##NAME(FxiCpu *c, Uop *u, X128 *D, const X128 *S) {                 \
-        (void)c; (void)u; (void)D; (void)S; __VA_ARGS__; }                                 \
-    PH px_##NAME##_RR(FXR_PARAMS) { X128 t = c->xmm[u->src]; sx_##NAME(c, u, &c->xmm[u->dst], &t); PNEXT(); } \
-    PH px_##NAME##_RT(FXR_PARAMS) { X128 t; XLOAD(t, T, (W)); sx_##NAME(c, u, &c->xmm[u->dst], &t); PNEXT(); } \
-    static SseOp sse_##NAME = { #NAME, px_##NAME##_RR, px_##NAME##_RT, 0, -1 };            \
-    __attribute__((constructor)) static void reg_##NAME(void) { sse_##NAME.next = g_sse_ops; g_sse_ops = &sse_##NAME; }
-#include "fxr_sse_ops.inc"
-#undef DEF_X
+// ===========================================================================
+// SSE. XMM0-7 are pinned in host vector registers (x0..x7, passed along like the GPRs); XMM8-15
+// stay in c->xmm. Handlers are specialised on the class of each XMM operand: 0-7, or M (in
+// memory, its index from the uop). The bodies are vector expressions with FXI's results (x86's);
+// ops without a pinned form run FXI's handler through p_slow, which spills x0..x7 too.
+// ===========================================================================
+typedef float VF __attribute__((vector_size(16)));
+typedef double VD __attribute__((vector_size(16)));
+typedef uint32_t VU4 __attribute__((vector_size(16)));
+typedef int32_t VS4 __attribute__((vector_size(16)));
+typedef int64_t VS2 __attribute__((vector_size(16)));
+typedef uint16_t VU8 __attribute__((vector_size(16)));
+typedef int16_t VS8 __attribute__((vector_size(16)));
+typedef uint8_t VU16 __attribute__((vector_size(16)));
+typedef int8_t VS16 __attribute__((vector_size(16)));
 
-// The hottest vector ops with a [base + index*scale + disp] memory operand get one handler per
-// (base, index) pair, so the address costs no extra dispatch (XMM operands stay runtime indices).
-#define HOT_SSE(X) X(movx, 16) X(addps, 16) X(subps, 16) X(mulps, 16) X(divps, 16) X(addpd, 16) X(subpd, 16) \
-    X(mulpd, 16) X(divpd, 16) X(addss, 4) X(subss, 4) X(mulss, 4) X(divss, 4) X(addsd, 8) X(subsd, 8) X(mulsd, 8) \
-    X(divsd, 8) X(pand, 16) X(pandn, 16) X(por, 16) X(pxor, 16) X(paddd, 16) X(paddq, 16) X(psubd, 16) X(psubq, 16) \
-    X(pcmpeqb, 16) X(pcmpeqd, 16) X(pmuludq, 16)
-#define BI_EA(B, I) (g##B + (g##I << u->scale) + (uint64_t)u->disp)
-#define DEF_XBI(I, B, NAME, W) PH pxb_##NAME##_##B##_##I(FXR_PARAMS) {                     \
-        X128 t; XLOAD(t, BI_EA(B, I), (W)); sx_##NAME(c, u, &c->xmm[u->dst], &t); PNEXT(); }
-#define DEF_XBI_ROW(B, NAME, W) R17B(DEF_XBI, B, NAME, W)
-#define DEF_HOT(NAME, W) R17(DEF_XBI_ROW, NAME, W)
-HOT_SSE(DEF_HOT)
-#define E_XBI(I, B, NAME) pxb_##NAME##_##B##_##I,
-#define ROW_XBI(B, NAME) { R17B(E_XBI, B, NAME) },
-#define TAB_HOT(NAME, W) { R17(ROW_XBI, NAME) },
-static const PFn t_hot[][17][17] = { HOT_SSE(TAB_HOT) };
-#define NAME_HOT(NAME, W) #NAME,
-static const char *const k_hot_names[] = { HOT_SSE(NAME_HOT) };
+// The 9 XMM operand classes (0-7 pinned, M in memory); F is the macro applied to each.
+#define X9(F, ...) F(0, __VA_ARGS__) F(1, __VA_ARGS__) F(2, __VA_ARGS__) F(3, __VA_ARGS__) F(4, __VA_ARGS__) \
+    F(5, __VA_ARGS__) F(6, __VA_ARGS__) F(7, __VA_ARGS__) F(M, __VA_ARGS__)
+#define X9B(F, ...) F(0, __VA_ARGS__) F(1, __VA_ARGS__) F(2, __VA_ARGS__) F(3, __VA_ARGS__) F(4, __VA_ARGS__) \
+    F(5, __VA_ARGS__) F(6, __VA_ARGS__) F(7, __VA_ARGS__) F(M, __VA_ARGS__)
+// Operand access by class: XD_ the destination's value, XS_ the source's, XW_ writes the destination.
+#define XD_0 x0
+#define XD_1 x1
+#define XD_2 x2
+#define XD_3 x3
+#define XD_4 x4
+#define XD_5 x5
+#define XD_6 x6
+#define XD_7 x7
+#define XD_M xld(&c->xmm[u->dst])
+#define XS_0 x0
+#define XS_1 x1
+#define XS_2 x2
+#define XS_3 x3
+#define XS_4 x4
+#define XS_5 x5
+#define XS_6 x6
+#define XS_7 x7
+#define XS_M xld(&c->xmm[u->src])
+#define XW_0(v) (x0 = (v))
+#define XW_1(v) (x1 = (v))
+#define XW_2(v) (x2 = (v))
+#define XW_3(v) (x3 = (v))
+#define XW_4(v) (x4 = (v))
+#define XW_5(v) (x5 = (v))
+#define XW_6(v) (x6 = (v))
+#define XW_7(v) (x7 = (v))
+#define XW_M(v) xst(&c->xmm[u->dst], (v))
 
-// Vector/scalar loads and stores, and integer stores of an immediate, with [base + index]:
-#define DEF_MEMBI(I, B)                                                                    \
-    PH pxs_movx_##B##_##I(FXR_PARAMS) { memcpy((void *)(uintptr_t)BI_EA(B, I), &c->xmm[u->src], 16); PNEXT(); } \
-    PH pxs_movss_##B##_##I(FXR_PARAMS) { st32(BI_EA(B, I), c->xmm[u->src].d[0]); PNEXT(); } \
-    PH pxs_movsd_##B##_##I(FXR_PARAMS) { st64(BI_EA(B, I), c->xmm[u->src].q[0]); PNEXT(); } \
-    PH pxl_movss_##B##_##I(FXR_PARAMS) { X128 *D = &c->xmm[u->dst]; uint32_t v = (uint32_t)ld32(BI_EA(B, I)); \
-        D->q[0] = D->q[1] = 0; D->d[0] = v; PNEXT(); }                                      \
-    PH pxl_movsd_##B##_##I(FXR_PARAMS) { X128 *D = &c->xmm[u->dst]; uint64_t v = ld64(BI_EA(B, I)); \
-        D->q[0] = v; D->q[1] = 0; PNEXT(); }                                                \
-    PH psi_8_##B##_##I(FXR_PARAMS) { st8(BI_EA(B, I), u->imm); PNEXT(); }                   \
-    PH psi_16_##B##_##I(FXR_PARAMS) { st16(BI_EA(B, I), u->imm); PNEXT(); }                 \
-    PH psi_32_##B##_##I(FXR_PARAMS) { st32(BI_EA(B, I), u->imm); PNEXT(); }                 \
-    PH psi_64_##B##_##I(FXR_PARAMS) { st64(BI_EA(B, I), u->imm); PNEXT(); }
-#define DEF_MEMBI_ROW(B, _) R17B(DEF_MEMBI, B)
-R17(DEF_MEMBI_ROW, _)
-#define E_MBI(I, B, NAME) NAME##_##B##_##I,
-#define ROW_MBI(B, NAME) { R17B(E_MBI, B, NAME) },
-static const PFn t_xs_movx[17][17] = { R17(ROW_MBI, pxs_movx) }, t_xs_movss[17][17] = { R17(ROW_MBI, pxs_movss) },
-    t_xs_movsd[17][17] = { R17(ROW_MBI, pxs_movsd) }, t_xl_movss[17][17] = { R17(ROW_MBI, pxl_movss) },
-    t_xl_movsd[17][17] = { R17(ROW_MBI, pxl_movsd) };
-static const PFn t_sti_bi[4][17][17] = { { R17(ROW_MBI, psi_8) }, { R17(ROW_MBI, psi_16) }, { R17(ROW_MBI, psi_32) },
-                                          { R17(ROW_MBI, psi_64) } };
-// (u)comiss/(u)comisd: ZF PF CF, the others clear, as raw lazy flags.
-#define COMIS(NAME, W, FIELD)                                                              \
-    PH px_##NAME##_RR(FXR_PARAMS) { double a = c->xmm[u->dst].FIELD[0], b = c->xmm[u->src].FIELD[0]; \
-        uint64_t f = (a != a || b != b) ? 0x45 : a < b ? 0x01 : a == b ? 0x40 : 0;         \
-        SETF(LF_RAW, 3, 0, 0, 0, f); PNEXT(); }                                            \
-    PH px_##NAME##_RT(FXR_PARAMS) { X128 t; memset(&t, 0, sizeof t); memcpy(&t, (const void *)(uintptr_t)T, (W)); \
-        double a = c->xmm[u->dst].FIELD[0], b = t.FIELD[0];                                \
-        uint64_t f = (a != a || b != b) ? 0x45 : a < b ? 0x01 : a == b ? 0x40 : 0;         \
-        SETF(LF_RAW, 3, 0, 0, 0, f); PNEXT(); }                                            \
-    static SseOp sse_##NAME = { #NAME, px_##NAME##_RR, px_##NAME##_RT, 0, -1 };            \
-    __attribute__((constructor)) static void reg_##NAME(void) { sse_##NAME.next = g_sse_ops; g_sse_ops = &sse_##NAME; }
-COMIS(comiss, 4, f)
-COMIS(comisd, 8, g)
-// Scalar moves and stores (FXI's named handlers)
-PH px_movx_TS(FXR_PARAMS) { memcpy((void *)(uintptr_t)T, &c->xmm[u->src], 16); PNEXT(); }
-PH px_movss_RR(FXR_PARAMS) { c->xmm[u->dst].d[0] = c->xmm[u->src].d[0]; PNEXT(); }
-PH px_movss_RT(FXR_PARAMS) { X128 *D = &c->xmm[u->dst]; D->q[0] = D->q[1] = 0; D->d[0] = (uint32_t)ld32(T); PNEXT(); }
-PH px_movss_TS(FXR_PARAMS) { st32(T, c->xmm[u->src].d[0]); PNEXT(); }
-PH px_movsd_RR(FXR_PARAMS) { c->xmm[u->dst].q[0] = c->xmm[u->src].q[0]; PNEXT(); }
-PH px_movsd_RT(FXR_PARAMS) { X128 *D = &c->xmm[u->dst]; D->q[0] = ld64(T); D->q[1] = 0; PNEXT(); }
-PH px_movsd_TS(FXR_PARAMS) { st64(T, c->xmm[u->src].q[0]); PNEXT(); }
-PH px_movq_RR(FXR_PARAMS) { X128 *D = &c->xmm[u->dst]; D->q[0] = c->xmm[u->src].q[0]; D->q[1] = 0; PNEXT(); }
+#define LF0(v) (((VF)(v))[0])
+#define LD0(v) (((VD)(v))[0])
+FXI_INLINE FxrV xlo_f(FxrV d, float v) { VF r = (VF)d; r[0] = v; return (FxrV)r; }
+FXI_INLINE FxrV xlo_d(FxrV d, double v) { VD r = (VD)d; r[0] = v; return (FxrV)r; }
+FXI_INLINE FxrV xlo_u32(FxrV d, uint32_t v) { VU4 r = (VU4)d; r[0] = v; return (FxrV)r; }
+#define XSEL(m, a, b) ((((FxrV)(m)) & (a)) | (~((FxrV)(m)) & (b)))   // per lane: m ? a : b
+// A memory operand of W bytes, zero-extended to 16
+FXI_INLINE FxrV xldn(uint64_t a, int w) {
+    if (w == 16) return xld((const void *)(uintptr_t)a);
+    if (w == 8) return (FxrV){ ld64(a), 0 };
+    return (FxrV){ ld32(a), 0 };
+}
+// Byte shuffles: NEON tbl with the indices the lowering stored in u->xidx (>= 16 / 32: zero)
+#if defined(__aarch64__)
+#include <arm_neon.h>
+FXI_INLINE FxrV xtbl1(FxrV t, FxrV i) { return (FxrV)vqtbl1q_u8((uint8x16_t)t, (uint8x16_t)i); }
+FXI_INLINE FxrV xtbl2(FxrV a, FxrV b, FxrV i) {
+    uint8x16x2_t t = { { (uint8x16_t)a, (uint8x16_t)b } };
+    return (FxrV)vqtbl2q_u8(t, (uint8x16_t)i);
+}
+#else
+FXI_INLINE FxrV xtbl1(FxrV t, FxrV i) {
+    VU16 a = (VU16)t, x = (VU16)i, r;
+    for (int k = 0; k < 16; k++) r[k] = x[k] < 16 ? a[x[k]] : 0;
+    return (FxrV)r;
+}
+FXI_INLINE FxrV xtbl2(FxrV a, FxrV b, FxrV i) {
+    VU16 p = (VU16)a, q = (VU16)b, x = (VU16)i, r;
+    for (int k = 0; k < 16; k++) r[k] = x[k] < 16 ? p[x[k]] : x[k] < 32 ? q[x[k] - 16] : 0;
+    return (FxrV)r;
+}
+#endif
+#define XIDX xld(u->xidx)
+
+FXI_INLINE FxrV xsqrtps(FxrV s) {
+    VF v = (VF)s;
+    VF r = { __builtin_sqrtf(v[0]), __builtin_sqrtf(v[1]), __builtin_sqrtf(v[2]), __builtin_sqrtf(v[3]) };
+    return (FxrV)r;
+}
+FXI_INLINE FxrV xsqrtpd(FxrV s) { VD v = (VD)s; VD r = { __builtin_sqrt(v[0]), __builtin_sqrt(v[1]) }; return (FxrV)r; }
+// cmpps/cmppd predicate (imm & 7): eq lt le unord, then their negations
+FXI_INLINE FxrV xcmpps(FxrV d, FxrV s, unsigned p) {
+    VF a = (VF)d, b = (VF)s;
+    VS4 m;
+    switch (p & 3) {
+    case 0: m = (VS4)(a == b); break;
+    case 1: m = (VS4)(a < b); break;
+    case 2: m = (VS4)(a <= b); break;
+    default: m = (VS4)(a != a) | (VS4)(b != b); break;
+    }
+    if (p & 4) m = ~m;
+    return (FxrV)m;
+}
+FXI_INLINE FxrV xcmppd(FxrV d, FxrV s, unsigned p) {
+    VD a = (VD)d, b = (VD)s;
+    VS2 m;
+    switch (p & 3) {
+    case 0: m = (VS2)(a == b); break;
+    case 1: m = (VS2)(a < b); break;
+    case 2: m = (VS2)(a <= b); break;
+    default: m = (VS2)(a != a) | (VS2)(b != b); break;
+    }
+    if (p & 4) m = ~m;
+    return (FxrV)m;
+}
+// Float -> int32/int64: out of range or NaN gives the "integer indefinite" (FXI's cvt_i32/i64)
+FXI_INLINE int32_t xcvt32(double v, int trunc) {
+    if (!(v >= -2147483648.0 && v < 2147483648.0)) return INT32_MIN;
+    return (int32_t)(trunc ? v : nearbyint(v));
+}
+FXI_INLINE int64_t xcvt64(double v, int trunc) {
+    if (!(v >= -9223372036854775808.0 && v < 9223372036854775808.0)) return INT64_MIN;
+    return (int64_t)(trunc ? v : nearbyint(v));
+}
+FXI_INLINE FxrV xcvtps(FxrV s, int t) {
+    VF v = (VF)s;
+    VS4 r = { xcvt32(v[0], t), xcvt32(v[1], t), xcvt32(v[2], t), xcvt32(v[3], t) };
+    return (FxrV)r;
+}
+FXI_INLINE FxrV xcvtpd(FxrV s, int t) { VD v = (VD)s; VS4 r = { xcvt32(v[0], t), xcvt32(v[1], t), 0, 0 }; return (FxrV)r; }
+FXI_INLINE uint64_t xmovmskb(FxrV s) {
+    VU16 m = (VU16)((VS16)s < (VS16){ 0 }) & (VU16){ 1, 2, 4, 8, 16, 32, 64, 128, 1, 2, 4, 8, 16, 32, 64, 128 };
+#if defined(__aarch64__)
+    return (uint64_t)vaddv_u8(vget_low_u8((uint8x16_t)m)) | (uint64_t)vaddv_u8(vget_high_u8((uint8x16_t)m)) << 8;
+#else
+    uint64_t r = 0;
+    for (int i = 0; i < 16; i++) r |= (uint64_t)(m[i] != 0) << i;
+    return r;
+#endif
+}
+FXI_INLINE uint64_t xmovmskps(FxrV s) { VU4 v = (VU4)s >> 31; return v[0] | v[1] << 1 | v[2] << 2 | v[3] << 3; }
+FXI_INLINE uint64_t xmovmskpd(FxrV s) { return (s[0] >> 63) | (s[1] >> 63) << 1; }
+
+// ---- two-operand ops: D = op(D, S) ----
+#define XO_addps(D, S) ((FxrV)((VF)(D) + (VF)(S)))
+#define XO_subps(D, S) ((FxrV)((VF)(D) - (VF)(S)))
+#define XO_mulps(D, S) ((FxrV)((VF)(D) * (VF)(S)))
+#define XO_divps(D, S) ((FxrV)((VF)(D) / (VF)(S)))
+#define XO_minps(D, S) XSEL((VF)(D) < (VF)(S), D, S)   // NaN or equal: the source, as x86
+#define XO_maxps(D, S) XSEL((VF)(D) > (VF)(S), D, S)
+#define XO_sqrtps(D, S) xsqrtps(S)
+#define XO_addpd(D, S) ((FxrV)((VD)(D) + (VD)(S)))
+#define XO_subpd(D, S) ((FxrV)((VD)(D) - (VD)(S)))
+#define XO_mulpd(D, S) ((FxrV)((VD)(D) * (VD)(S)))
+#define XO_divpd(D, S) ((FxrV)((VD)(D) / (VD)(S)))
+#define XO_minpd(D, S) XSEL((VD)(D) < (VD)(S), D, S)
+#define XO_maxpd(D, S) XSEL((VD)(D) > (VD)(S), D, S)
+#define XO_sqrtpd(D, S) xsqrtpd(S)
+#define XO_addss(D, S) xlo_f(D, LF0(D) + LF0(S))
+#define XO_subss(D, S) xlo_f(D, LF0(D) - LF0(S))
+#define XO_mulss(D, S) xlo_f(D, LF0(D) * LF0(S))
+#define XO_divss(D, S) xlo_f(D, LF0(D) / LF0(S))
+#define XO_minss(D, S) xlo_f(D, LF0(D) < LF0(S) ? LF0(D) : LF0(S))
+#define XO_maxss(D, S) xlo_f(D, LF0(D) > LF0(S) ? LF0(D) : LF0(S))
+#define XO_sqrtss(D, S) xlo_f(D, __builtin_sqrtf(LF0(S)))
+#define XO_addsd(D, S) xlo_d(D, LD0(D) + LD0(S))
+#define XO_subsd(D, S) xlo_d(D, LD0(D) - LD0(S))
+#define XO_mulsd(D, S) xlo_d(D, LD0(D) * LD0(S))
+#define XO_divsd(D, S) xlo_d(D, LD0(D) / LD0(S))
+#define XO_minsd(D, S) xlo_d(D, LD0(D) < LD0(S) ? LD0(D) : LD0(S))
+#define XO_maxsd(D, S) xlo_d(D, LD0(D) > LD0(S) ? LD0(D) : LD0(S))
+#define XO_sqrtsd(D, S) xlo_d(D, __builtin_sqrt(LD0(S)))
+#define XO_rcpps(D, S) ((FxrV)((VF){ 1.0f, 1.0f, 1.0f, 1.0f } / (VF)(S)))   // FXI: exact, not an estimate
+#define XO_rsqrtps(D, S) ((FxrV)((VF){ 1.0f, 1.0f, 1.0f, 1.0f } / (VF)xsqrtps(S)))
+#define XO_rcpss(D, S) xlo_f(D, 1.0f / LF0(S))
+#define XO_rsqrtss(D, S) xlo_f(D, 1.0f / __builtin_sqrtf(LF0(S)))
+#define XO_pand(D, S) ((D) & (S))
+#define XO_pandn(D, S) (~(D) & (S))
+#define XO_por(D, S) ((D) | (S))
+#define XO_pxor(D, S) ((D) ^ (S))
+#define XO_paddb(D, S) ((FxrV)((VU16)(D) + (VU16)(S)))
+#define XO_paddw(D, S) ((FxrV)((VU8)(D) + (VU8)(S)))
+#define XO_paddd(D, S) ((FxrV)((VU4)(D) + (VU4)(S)))
+#define XO_paddq(D, S) ((D) + (S))
+#define XO_psubb(D, S) ((FxrV)((VU16)(D) - (VU16)(S)))
+#define XO_psubw(D, S) ((FxrV)((VU8)(D) - (VU8)(S)))
+#define XO_psubd(D, S) ((FxrV)((VU4)(D) - (VU4)(S)))
+#define XO_psubq(D, S) ((D) - (S))
+#define XO_pcmpeqb(D, S) ((FxrV)((VU16)(D) == (VU16)(S)))
+#define XO_pcmpeqw(D, S) ((FxrV)((VU8)(D) == (VU8)(S)))
+#define XO_pcmpeqd(D, S) ((FxrV)((VU4)(D) == (VU4)(S)))
+#define XO_pcmpgtb(D, S) ((FxrV)((VS16)(D) > (VS16)(S)))
+#define XO_pcmpgtw(D, S) ((FxrV)((VS8)(D) > (VS8)(S)))
+#define XO_pcmpgtd(D, S) ((FxrV)((VS4)(D) > (VS4)(S)))
+#define XO_pmuludq(D, S) (((D) & 0xffffffffull) * ((S) & 0xffffffffull))
+#define XO_pmullw(D, S) ((FxrV)((VU8)(D) * (VU8)(S)))
+#define XO_pmaxub(D, S) XSEL((VU16)(D) > (VU16)(S), D, S)
+#define XO_pminub(D, S) XSEL((VU16)(D) < (VU16)(S), D, S)
+#define XO_pmaxsw(D, S) XSEL((VS8)(D) > (VS8)(S), D, S)
+#define XO_pminsw(D, S) XSEL((VS8)(D) < (VS8)(S), D, S)
+#define XO_punpcklbw(D, S) ((FxrV)__builtin_shufflevector((VU16)(D), (VU16)(S), 0, 16, 1, 17, 2, 18, 3, 19, 4, 20, 5, 21, 6, 22, 7, 23))
+#define XO_punpckhbw(D, S) ((FxrV)__builtin_shufflevector((VU16)(D), (VU16)(S), 8, 24, 9, 25, 10, 26, 11, 27, 12, 28, 13, 29, 14, 30, 15, 31))
+#define XO_punpcklwd(D, S) ((FxrV)__builtin_shufflevector((VU8)(D), (VU8)(S), 0, 8, 1, 9, 2, 10, 3, 11))
+#define XO_punpckhwd(D, S) ((FxrV)__builtin_shufflevector((VU8)(D), (VU8)(S), 4, 12, 5, 13, 6, 14, 7, 15))
+#define XO_punpckldq(D, S) ((FxrV)__builtin_shufflevector((VU4)(D), (VU4)(S), 0, 4, 1, 5))
+#define XO_punpckhdq(D, S) ((FxrV)__builtin_shufflevector((VU4)(D), (VU4)(S), 2, 6, 3, 7))
+#define XO_punpcklqdq(D, S) __builtin_shufflevector((D), (S), 0, 2)
+#define XO_punpckhqdq(D, S) __builtin_shufflevector((D), (S), 1, 3)
+#define XO_pshufd(D, S) xtbl1(S, XIDX)
+#define XO_pshuflw(D, S) xtbl1(S, XIDX)
+#define XO_pshufhw(D, S) xtbl1(S, XIDX)
+#define XO_shufps(D, S) xtbl2(D, S, XIDX)
+#define XO_shufpd(D, S) xtbl2(D, S, XIDX)
+#define XO_cmpps(D, S) xcmpps(D, S, (unsigned)u->imm)
+#define XO_cmppd(D, S) xcmppd(D, S, (unsigned)u->imm)
+#define XO_cmpss(D, S) xlo_u32(D, ((VU4)xcmpps(D, S, (unsigned)u->imm))[0])
+#define XO_cmpsd(D, S) ((FxrV){ xcmppd(D, S, (unsigned)u->imm)[0], (D)[1] })
+#define XO_cvtss2sd(D, S) xlo_d(D, (double)LF0(S))
+#define XO_cvtsd2ss(D, S) xlo_f(D, (float)LD0(S))
+#define XO_cvtdq2ps(D, S) ((FxrV)__builtin_convertvector((VS4)(S), VF))
+#define XO_cvttps2dq(D, S) xcvtps(S, 1)
+#define XO_cvtps2dq(D, S) xcvtps(S, 0)
+#define XO_cvtdq2pd(D, S) ((FxrV)(VD){ (double)((VS4)(S))[0], (double)((VS4)(S))[1] })
+#define XO_cvttpd2dq(D, S) xcvtpd(S, 1)
+#define XO_cvtpd2dq(D, S) xcvtpd(S, 0)
+#define XO_cvtpd2ps(D, S) ((FxrV)(VF){ (float)((VD)(S))[0], (float)((VD)(S))[1], 0.0f, 0.0f })
+#define XO_cvtps2pd(D, S) ((FxrV)(VD){ (double)((VF)(S))[0], (double)((VF)(S))[1] })
+#define XO_movx(D, S) (S)
+// Register-only moves (their memory forms load or store and are handled apart)
+#define XO_movss(D, S) ((FxrV)__builtin_shufflevector((VU4)(D), (VU4)(S), 4, 1, 2, 3))
+#define XO_movsd(D, S) __builtin_shufflevector((D), (S), 2, 1)
+#define XO_movq(D, S) ((FxrV){ (S)[0], 0 })
+#define XO_movhlps(D, S) __builtin_shufflevector((D), (S), 3, 1)
+#define XO_movlhps(D, S) __builtin_shufflevector((D), (S), 0, 2)
+
+// FXI's name and memory width, for every op with a register form and a memory form (T)
+#define XLIST(X) \
+    X(addps, 16) X(subps, 16) X(mulps, 16) X(divps, 16) X(minps, 16) X(maxps, 16) X(sqrtps, 16) \
+    X(addpd, 16) X(subpd, 16) X(mulpd, 16) X(divpd, 16) X(minpd, 16) X(maxpd, 16) X(sqrtpd, 16) \
+    X(addss, 4) X(subss, 4) X(mulss, 4) X(divss, 4) X(minss, 4) X(maxss, 4) X(sqrtss, 4) \
+    X(addsd, 8) X(subsd, 8) X(mulsd, 8) X(divsd, 8) X(minsd, 8) X(maxsd, 8) X(sqrtsd, 8) \
+    X(rcpps, 16) X(rsqrtps, 16) X(rcpss, 4) X(rsqrtss, 4) X(pand, 16) X(pandn, 16) X(por, 16) X(pxor, 16) \
+    X(paddb, 16) X(paddw, 16) X(paddd, 16) X(paddq, 16) X(psubb, 16) X(psubw, 16) X(psubd, 16) X(psubq, 16) \
+    X(pcmpeqb, 16) X(pcmpeqw, 16) X(pcmpeqd, 16) X(pcmpgtb, 16) X(pcmpgtw, 16) X(pcmpgtd, 16) \
+    X(pmuludq, 16) X(pmullw, 16) X(pmaxub, 16) X(pminub, 16) X(pmaxsw, 16) X(pminsw, 16) \
+    X(punpcklbw, 16) X(punpckhbw, 16) X(punpcklwd, 16) X(punpckhwd, 16) X(punpckldq, 16) X(punpckhdq, 16) \
+    X(punpcklqdq, 16) X(punpckhqdq, 16) X(pshufd, 16) X(pshuflw, 16) X(pshufhw, 16) X(shufps, 16) X(shufpd, 16) \
+    X(cmpps, 16) X(cmppd, 16) X(cmpss, 4) X(cmpsd, 8) \
+    X(cvtss2sd, 4) X(cvtsd2ss, 8) X(cvtdq2ps, 16) X(cvttps2dq, 16) X(cvtps2dq, 16) X(cvtdq2pd, 8) \
+    X(cvttpd2dq, 16) X(cvtpd2dq, 16) X(cvtpd2ps, 16) X(cvtps2pd, 8) X(movx, 16)
+#define XRLIST(X) X(movss) X(movsd) X(movq) X(movhlps) X(movlhps)
+
+#define DEF_XRR(S, D, OP) PH xr_##OP##_##D##_##S(FXR_PARAMS) { FxrV d_ = XD_##D, s_ = XS_##S; (void)d_; XW_##D(XO_##OP(d_, s_)); PNEXT(); }
+#define DEF_XRR_ROW(D, OP) X9B(DEF_XRR, D, OP)
+#define DEF_XRT(D, OP, W) PH xt_##OP##_##D(FXR_PARAMS) { FxrV d_ = XD_##D, s_ = xldn(T, W); (void)d_; XW_##D(XO_##OP(d_, s_)); PNEXT(); }
+#define DEF_XOP(OP, W) X9(DEF_XRR_ROW, OP) X9(DEF_XRT, OP, W)
+XLIST(DEF_XOP)
+#define DEF_XRONLY(OP) X9(DEF_XRR_ROW, OP)
+XRLIST(DEF_XRONLY)
+// (u)comiss / (u)comisd: ZF PF CF, the others clear, as raw lazy flags
+#define XCOMIS(F, a, b) do { double a_ = (a), b_ = (b);                                    \
+        F0 = (uint64_t)LF(LF_RAW, 3) | (uint64_t)((a_ != a_ || b_ != b_) ? 0x45 : a_ < b_ ? 0x01 : a_ == b_ ? 0x40 : 0) << 32; \
+    } while (0)
+#define DEF_XCOM(S, D)                                                                     \
+    PH xr_comiss_##D##_##S(FXR_PARAMS) { XCOMIS(F0, LF0(XD_##D), LF0(XS_##S)); PNEXT(); }  \
+    PH xr_comisd_##D##_##S(FXR_PARAMS) { XCOMIS(F0, LD0(XD_##D), LD0(XS_##S)); PNEXT(); }
+#define DEF_XCOM_ROW(D, _) X9B(DEF_XCOM, D)                                                \
+    PH xt_comiss_##D(FXR_PARAMS) { XCOMIS(F0, LF0(XD_##D), LF0(xldn(T, 4))); PNEXT(); }    \
+    PH xt_comisd_##D(FXR_PARAMS) { XCOMIS(F0, LD0(XD_##D), LD0(xldn(T, 8))); PNEXT(); }
+X9(DEF_XCOM_ROW, _)
+
+typedef struct { const char *name; PFn rr[9][9]; PFn rt[9]; } XOp;
+#define E_XRR(S, D, OP) xr_##OP##_##D##_##S,
+#define ROW_XRR(D, OP) { X9B(E_XRR, D, OP) },
+#define E_XRT(D, OP) xt_##OP##_##D,
+#define XOP_ENTRY(OP, W) { #OP, { X9(ROW_XRR, OP) }, { X9(E_XRT, OP) } },
+#define XROP_ENTRY(OP) { #OP, { X9(ROW_XRR, OP) }, { 0 } },
+static const XOp k_xops[] = { XLIST(XOP_ENTRY) XRLIST(XROP_ENTRY) XOP_ENTRY(comiss, 4) XOP_ENTRY(comisd, 8) };
+#define N_XOPS (sizeof k_xops / sizeof k_xops[0])
+
+// ---- shifts by an immediate (register only); the byte shifts use a tbl index ----
+#define XI_psllw(D, n) ((n) > 15 ? (FxrV){ 0, 0 } : (FxrV)((VU8)(D) << (int)(n)))
+#define XI_pslld(D, n) ((n) > 31 ? (FxrV){ 0, 0 } : (FxrV)((VU4)(D) << (int)(n)))
+#define XI_psllq(D, n) ((n) > 63 ? (FxrV){ 0, 0 } : (FxrV)((D) << (int)(n)))
+#define XI_psrlw(D, n) ((n) > 15 ? (FxrV){ 0, 0 } : (FxrV)((VU8)(D) >> (int)(n)))
+#define XI_psrld(D, n) ((n) > 31 ? (FxrV){ 0, 0 } : (FxrV)((VU4)(D) >> (int)(n)))
+#define XI_psrlq(D, n) ((n) > 63 ? (FxrV){ 0, 0 } : (FxrV)((D) >> (int)(n)))
+#define XI_psraw(D, n) ((FxrV)((VS8)(D) >> (int)((n) > 15 ? 15 : (n))))
+#define XI_psrad(D, n) ((FxrV)((VS4)(D) >> (int)((n) > 31 ? 31 : (n))))
+#define XI_pslldq(D, n) xtbl1(D, XIDX)
+#define XI_psrldq(D, n) xtbl1(D, XIDX)
+#define XILIST(X) X(psllw) X(pslld) X(psllq) X(psrlw) X(psrld) X(psrlq) X(psraw) X(psrad) X(pslldq) X(psrldq)
+#define DEF_XI(D, OP) PH xi_##OP##_##D(FXR_PARAMS) { unsigned n_ = (unsigned)u->imm; (void)n_; XW_##D(XI_##OP(XD_##D, n_)); PNEXT(); }
+#define DEF_XI_ALL(OP) X9(DEF_XI, OP)
+XILIST(DEF_XI_ALL)
+#define E_XI(D, OP) xi_##OP##_##D,
+#define XI_ENTRY(OP) { #OP, { X9(E_XI, OP) } },
+static const struct { const char *name; PFn h[9]; } k_xshift[] = { XILIST(XI_ENTRY) };
+
+// ---- loads and stores. 16 bytes with [base + index*scale + disp] in one uop; movss/movsd/movq
+// with [base + disp] (else the address comes through T) ----
+#define XEA(B, I) (g##B + (g##I << u->scale) + (uint64_t)u->disp)
+#define DEF_XLS(I, B, X)                                                                   \
+    PH xl_movx_##B##_##I##_##X(FXR_PARAMS) { XW_##X(xld((const void *)(uintptr_t)XEA(B, I))); PNEXT(); } \
+    PH xs_movx_##B##_##I##_##X(FXR_PARAMS) { xst((void *)(uintptr_t)XEA(B, I), XS_##X); PNEXT(); }
+#define DEF_XLS_B(B, X) R17B(DEF_XLS, B, X)
+#define DEF_XLS_X(X, _) R17(DEF_XLS_B, X)
+X9(DEF_XLS_X, _)
+#define DEF_XLS1(B, X)                                                                     \
+    PH xl_movss_##B##_##X(FXR_PARAMS) { XW_##X(((FxrV){ ld32(g##B + (uint64_t)u->disp), 0 })); PNEXT(); } \
+    PH xl_movsd_##B##_##X(FXR_PARAMS) { XW_##X(((FxrV){ ld64(g##B + (uint64_t)u->disp), 0 })); PNEXT(); } \
+    PH xs_movss_##B##_##X(FXR_PARAMS) { st32(g##B + (uint64_t)u->disp, ((VU4)XS_##X)[0]); PNEXT(); } \
+    PH xs_movsd_##B##_##X(FXR_PARAMS) { st64(g##B + (uint64_t)u->disp, (XS_##X)[0]); PNEXT(); }
+#define DEF_XLS1_X(X, _) R17(DEF_XLS1, X)
+X9(DEF_XLS1_X, _)
+#define DEF_XLST(X, _)                                                                     \
+    PH xlt_movss_##X(FXR_PARAMS) { XW_##X(((FxrV){ ld32(T), 0 })); PNEXT(); }              \
+    PH xlt_movsd_##X(FXR_PARAMS) { XW_##X(((FxrV){ ld64(T), 0 })); PNEXT(); }              \
+    PH xlt_movlps_##X(FXR_PARAMS) { FxrV d_ = XD_##X; XW_##X(((FxrV){ ld64(T), d_[1] })); PNEXT(); } \
+    PH xlt_movhps_##X(FXR_PARAMS) { FxrV d_ = XD_##X; XW_##X(((FxrV){ d_[0], ld64(T) })); PNEXT(); } \
+    PH xst_movss_##X(FXR_PARAMS) { st32(T, ((VU4)XS_##X)[0]); PNEXT(); }                  \
+    PH xst_movsd_##X(FXR_PARAMS) { st64(T, (XS_##X)[0]); PNEXT(); }                        \
+    PH xst_movhps_##X(FXR_PARAMS) { st64(T, (XS_##X)[1]); PNEXT(); }                       \
+    PH xst_movx_##X(FXR_PARAMS) { xst((void *)(uintptr_t)T, XS_##X); PNEXT(); }
+X9(DEF_XLST, _)
+#define E_XLS(I, B, X, NAME) NAME##_##B##_##I##_##X,
+#define ROW_XLS(B, X, NAME) { R17B(E_XLS, B, X, NAME) },
+#define X_XLS(X, NAME) { R17(ROW_XLS, X, NAME) },
+static const PFn t_xl_movx[9][17][17] = { X9(X_XLS, xl_movx) }, t_xs_movx[9][17][17] = { X9(X_XLS, xs_movx) };   // [xmm][base][index]
+#define E_XLS1(B, X, NAME) NAME##_##B##_##X,
+#define X_XLS1(X, NAME) { R17(E_XLS1, X, NAME) },
+static const PFn t_xl_movss[9][17] = { X9(X_XLS1, xl_movss) }, t_xl_movsd[9][17] = { X9(X_XLS1, xl_movsd) },
+    t_xs_movss[9][17] = { X9(X_XLS1, xs_movss) }, t_xs_movsd[9][17] = { X9(X_XLS1, xs_movsd) };
+#define E_X1(X, NAME) NAME##_##X,
+static const PFn t_xlt_movss[9] = { X9(E_X1, xlt_movss) }, t_xlt_movsd[9] = { X9(E_X1, xlt_movsd) },
+    t_xlt_movlps[9] = { X9(E_X1, xlt_movlps) }, t_xlt_movhps[9] = { X9(E_X1, xlt_movhps) },
+    t_xst_movss[9] = { X9(E_X1, xst_movss) }, t_xst_movsd[9] = { X9(E_X1, xst_movsd) },
+    t_xst_movhps[9] = { X9(E_X1, xst_movhps) }, t_xst_movx[9] = { X9(E_X1, xst_movx) };
+
+// ---- between general registers and XMM ----
+#define DEF_XG(G, X)                                                                       \
+    PH xg_cvtsi2ss32_##X##_##G(FXR_PARAMS) { FxrV d_ = XD_##X; XW_##X(xlo_f(d_, (float)(int32_t)g##G)); PNEXT(); } \
+    PH xg_cvtsi2ss64_##X##_##G(FXR_PARAMS) { FxrV d_ = XD_##X; XW_##X(xlo_f(d_, (float)(int64_t)g##G)); PNEXT(); } \
+    PH xg_cvtsi2sd32_##X##_##G(FXR_PARAMS) { FxrV d_ = XD_##X; XW_##X(xlo_d(d_, (double)(int32_t)g##G)); PNEXT(); } \
+    PH xg_cvtsi2sd64_##X##_##G(FXR_PARAMS) { FxrV d_ = XD_##X; XW_##X(xlo_d(d_, (double)(int64_t)g##G)); PNEXT(); } \
+    PH xg_movd32_##X##_##G(FXR_PARAMS) { XW_##X(((FxrV){ g##G & M32, 0 })); PNEXT(); }    \
+    PH xg_movd64_##X##_##G(FXR_PARAMS) { XW_##X(((FxrV){ g##G, 0 })); PNEXT(); }          \
+    PH gx_cvttss2si32_##G##_##X(FXR_PARAMS) { g##G = (uint32_t)xcvt32(LF0(XS_##X), 1); PNEXT(); } \
+    PH gx_cvtss2si32_##G##_##X(FXR_PARAMS) { g##G = (uint32_t)xcvt32(LF0(XS_##X), 0); PNEXT(); } \
+    PH gx_cvttsd2si32_##G##_##X(FXR_PARAMS) { g##G = (uint32_t)xcvt32(LD0(XS_##X), 1); PNEXT(); } \
+    PH gx_cvtsd2si32_##G##_##X(FXR_PARAMS) { g##G = (uint32_t)xcvt32(LD0(XS_##X), 0); PNEXT(); } \
+    PH gx_cvttss2si64_##G##_##X(FXR_PARAMS) { g##G = (uint64_t)xcvt64(LF0(XS_##X), 1); PNEXT(); } \
+    PH gx_cvtss2si64_##G##_##X(FXR_PARAMS) { g##G = (uint64_t)xcvt64(LF0(XS_##X), 0); PNEXT(); } \
+    PH gx_cvttsd2si64_##G##_##X(FXR_PARAMS) { g##G = (uint64_t)xcvt64(LD0(XS_##X), 1); PNEXT(); } \
+    PH gx_cvtsd2si64_##G##_##X(FXR_PARAMS) { g##G = (uint64_t)xcvt64(LD0(XS_##X), 0); PNEXT(); } \
+    PH gx_movd32_##G##_##X(FXR_PARAMS) { g##G = ((VU4)XS_##X)[0]; PNEXT(); }              \
+    PH gx_movd64_##G##_##X(FXR_PARAMS) { g##G = (XS_##X)[0]; PNEXT(); }                    \
+    PH gx_pmovmskb_##G##_##X(FXR_PARAMS) { g##G = xmovmskb(XS_##X); PNEXT(); }            \
+    PH gx_movmskps_##G##_##X(FXR_PARAMS) { g##G = xmovmskps(XS_##X); PNEXT(); }           \
+    PH gx_movmskpd_##G##_##X(FXR_PARAMS) { g##G = xmovmskpd(XS_##X); PNEXT(); }
+#define DEF_XG_X(X, _) R16(DEF_XG, X)
+X9(DEF_XG_X, _)
+// with the integer operand in memory (T)
+#define DEF_XGT(X, _)                                                                      \
+    PH xgt_cvtsi2ss32_##X(FXR_PARAMS) { FxrV d_ = XD_##X; XW_##X(xlo_f(d_, (float)(int32_t)ld32(T))); PNEXT(); } \
+    PH xgt_cvtsi2ss64_##X(FXR_PARAMS) { FxrV d_ = XD_##X; XW_##X(xlo_f(d_, (float)(int64_t)ld64(T))); PNEXT(); } \
+    PH xgt_cvtsi2sd32_##X(FXR_PARAMS) { FxrV d_ = XD_##X; XW_##X(xlo_d(d_, (double)(int32_t)ld32(T))); PNEXT(); } \
+    PH xgt_cvtsi2sd64_##X(FXR_PARAMS) { FxrV d_ = XD_##X; XW_##X(xlo_d(d_, (double)(int64_t)ld64(T))); PNEXT(); }
+X9(DEF_XGT, _)
+enum { XG_SI2SS32, XG_SI2SS64, XG_SI2SD32, XG_SI2SD64, XG_MOVD32, XG_MOVD64, XG_COUNT };
+enum { GX_TSS32, GX_SS32, GX_TSD32, GX_SD32, GX_TSS64, GX_SS64, GX_TSD64, GX_SD64, GX_MOVD32, GX_MOVD64,
+       GX_PMOVMSKB, GX_MOVMSKPS, GX_MOVMSKPD, GX_COUNT };
+#define E_XG(G, X, NAME) xg_##NAME##_##X##_##G,
+#define ROW_XG(X, NAME) { R16(E_XG, X, NAME) },
+#define T_XG(NAME) { X9(ROW_XG, NAME) },
+static const PFn t_xg[XG_COUNT][9][16] = { T_XG(cvtsi2ss32) T_XG(cvtsi2ss64) T_XG(cvtsi2sd32) T_XG(cvtsi2sd64) T_XG(movd32) T_XG(movd64) };
+#define E_GX(G, X, NAME) gx_##NAME##_##G##_##X,
+#define ROW_GX(X, NAME) { R16(E_GX, X, NAME) },
+#define T_GX(NAME) { X9(ROW_GX, NAME) },
+static const PFn t_gx[GX_COUNT][9][16] = {   // [kind][xmm][gpr]
+    T_GX(cvttss2si32) T_GX(cvtss2si32) T_GX(cvttsd2si32) T_GX(cvtsd2si32) T_GX(cvttss2si64) T_GX(cvtss2si64)
+    T_GX(cvttsd2si64) T_GX(cvtsd2si64) T_GX(movd32) T_GX(movd64) T_GX(pmovmskb) T_GX(movmskps) T_GX(movmskpd) };
+static const PFn t_xgt[4][9] = { { X9(E_X1, xgt_cvtsi2ss32) }, { X9(E_X1, xgt_cvtsi2ss64) },
+                                 { X9(E_X1, xgt_cvtsi2sd32) }, { X9(E_X1, xgt_cvtsi2sd64) } };
+static int xcls(unsigned r) { return r < 8 ? (int)r : 8; }
+
+// Byte indices for the tbl-based shuffles, from the instruction's immediate
+static void xshuffle_index(const char *op, unsigned imm, uint8_t *x) {
+    if (!strcmp(op, "pshufd"))
+        for (int i = 0; i < 4; i++) for (int k = 0; k < 4; k++) x[4 * i + k] = (uint8_t)(4 * ((imm >> (2 * i)) & 3) + k);
+    else if (!strcmp(op, "pshuflw")) {
+        for (int i = 0; i < 4; i++) for (int k = 0; k < 2; k++) x[2 * i + k] = (uint8_t)(2 * ((imm >> (2 * i)) & 3) + k);
+        for (int i = 8; i < 16; i++) x[i] = (uint8_t)i;
+    } else if (!strcmp(op, "pshufhw")) {
+        for (int i = 0; i < 8; i++) x[i] = (uint8_t)i;
+        for (int i = 0; i < 4; i++) for (int k = 0; k < 2; k++) x[8 + 2 * i + k] = (uint8_t)(8 + 2 * ((imm >> (2 * i)) & 3) + k);
+    } else if (!strcmp(op, "shufps"))
+        for (int i = 0; i < 4; i++) for (int k = 0; k < 4; k++) x[4 * i + k] = (uint8_t)((i >= 2 ? 16 : 0) + 4 * ((imm >> (2 * i)) & 3) + k);
+    else if (!strcmp(op, "shufpd"))
+        for (int k = 0; k < 8; k++) { x[k] = (uint8_t)(8 * (imm & 1) + k); x[8 + k] = (uint8_t)(16 + 8 * ((imm >> 1) & 1) + k); }
+    else if (!strcmp(op, "psrldq"))
+        for (int i = 0; i < 16; i++) x[i] = (uint8_t)(i + imm < 16 ? i + imm : 0xff);
+    else if (!strcmp(op, "pslldq"))
+        for (int i = 0; i < 16; i++) x[i] = (uint8_t)((unsigned)i >= imm ? i - imm : 0xff);
+}
 
 // ===========================================================================
 // Lowering: FXI's decoded uops -> pinned handlers
 // ===========================================================================
 enum { FAM_NONE, FAM_ALU, FAM_MOV, FAM_LEA, FAM_SHIFT, FAM_UNARY, FAM_EXT, FAM_CMOV, FAM_SETCC, FAM_IMUL2,
-       FAM_IMUL3, FAM_FJCC, FAM_NAMED, FAM_SSE };
+       FAM_IMUL3, FAM_FJCC, FAM_NAMED, FAM_X, FAM_XI, FAM_XS };
 enum { N_JMP, N_JCC, N_CALL, N_CALL_R, N_CALL_M, N_JMP_R, N_JMP_M, N_RET, N_GOTO, N_SYSCALL, N_STOP, N_PUSH_R,
-       N_POP_R, N_NOP, N_MOVX_MR, N_MOVSS_RR, N_MOVSS_RM, N_MOVSS_MR, N_MOVSD_RR, N_MOVSD_RM, N_MOVSD_MR, N_MOVQ_RR };
-typedef struct { OpFn key; uint8_t fam, a, b, c2, d; const SseOp *sse; } Desc;
+       N_POP_R, N_NOP };
+// FAM_XS: SSE loads/stores and the ops between general registers and XMM
+enum { XS_MOVX_MR, XS_MOVSS_RM, XS_MOVSD_RM, XS_MOVSS_MR, XS_MOVSD_MR, XS_MOVLPS_RM, XS_MOVHPS_RM, XS_MOVHPS_MR,
+       XS_XG = 16, XS_XGM = 32, XS_GX = 48 };
+typedef struct { OpFn key; uint8_t fam, a, b, c2, d; } Desc;
 #define DESC_SLOTS 16384
 static Desc g_desc[DESC_SLOTS];
 static pthread_once_t g_once = PTHREAD_ONCE_INIT;
 
 static uint64_t hptr(OpFn f) { return ((uint64_t)(uintptr_t)f * 0x9E3779B97F4A7C15ull) >> 50; }
-static void put(OpFn f, uint8_t fam, uint8_t a, uint8_t b, uint8_t c2, uint8_t d, const SseOp *s) {
+static void put(OpFn f, uint8_t fam, uint8_t a, uint8_t b, uint8_t c2, uint8_t d) {
     if (!f) return;
     uint64_t h = hptr(f) & (DESC_SLOTS - 1);
     while (g_desc[h].key && g_desc[h].key != f) h = (h + 1) & (DESC_SLOTS - 1);
-    g_desc[h] = (Desc){ f, fam, a, b, c2, d, s };
+    g_desc[h] = (Desc){ f, fam, a, b, c2, d };
 }
 static const Desc *find(OpFn f) {
     uint64_t h = hptr(f) & (DESC_SLOTS - 1);
     while (g_desc[h].key) { if (g_desc[h].key == f) return &g_desc[h]; h = (h + 1) & (DESC_SLOTS - 1); }
     return 0;
+}
+static int is_shuffle(const char *n) {
+    return !strcmp(n, "pshufd") || !strcmp(n, "pshuflw") || !strcmp(n, "pshufhw") || !strcmp(n, "shufps") ||
+           !strcmp(n, "shufpd") || !strcmp(n, "psrldq") || !strcmp(n, "pslldq");
 }
 static void init_desc(void) {
     for (int cc = 0; cc < 16; cc++)
@@ -719,39 +1057,56 @@ static void init_desc(void) {
     for (int op = 0; op < ALU_COUNT; op++)
         for (int fm = 0; fm < F_COUNT; fm++)
             for (int si = 0; si < 4; si++)
-                for (int fl = 0; fl < 2; fl++) put(fxi_alu_tab[op][fm][si][fl], FAM_ALU, op, fm, si, 0, 0);
-    for (int fm = 0; fm < F_COUNT; fm++) for (int si = 0; si < 4; si++) put(fxi_mov_tab[fm][si], FAM_MOV, fm, si, 0, 0, 0);
-    for (int si = 1; si < 4; si++) put(fxi_lea_tab[si], FAM_LEA, si, 0, 0, 0, 0);
+                for (int fl = 0; fl < 2; fl++) put(fxi_alu_tab[op][fm][si][fl], FAM_ALU, op, fm, si, 0);
+    for (int fm = 0; fm < F_COUNT; fm++) for (int si = 0; si < 4; si++) put(fxi_mov_tab[fm][si], FAM_MOV, fm, si, 0, 0);
+    for (int si = 1; si < 4; si++) put(fxi_lea_tab[si], FAM_LEA, si, 0, 0, 0);
     for (int op = 0; op < 8; op++) for (int rm = 0; rm < 2; rm++) for (int si = 0; si < 4; si++)
-        put(fxi_shift_tab[op][rm][si], FAM_SHIFT, op, rm, si, 0, 0);
+        put(fxi_shift_tab[op][rm][si], FAM_SHIFT, op, rm, si, 0);
     for (int op = 0; op < 4; op++) for (int rm = 0; rm < 2; rm++) for (int si = 0; si < 4; si++)
-        put(fxi_unary_tab[op][rm][si], FAM_UNARY, op, rm, si, 0, 0);
+        put(fxi_unary_tab[op][rm][si], FAM_UNARY, op, rm, si, 0);
     for (int sg = 0; sg < 2; sg++) for (int rm = 0; rm < 2; rm++) for (int ss = 0; ss < 3; ss++) for (int ds = 1; ds < 4; ds++)
-        put(fxi_ext_tab[sg][rm][ss][ds], FAM_EXT, sg, rm, ss, ds, 0);
+        put(fxi_ext_tab[sg][rm][ss][ds], FAM_EXT, sg, rm, ss, ds);
     for (int rm = 0; rm < 2; rm++) for (int si = 1; si < 4; si++) {
-        put(fxi_cmov_tab[rm][si], FAM_CMOV, rm, si, 0, 0, 0);
-        put(fxi_imul2_tab[rm][si], FAM_IMUL2, rm, si, 0, 0, 0);
-        put(fxi_imul3_tab[rm][si], FAM_IMUL3, rm, si, 0, 0, 0);
+        put(fxi_cmov_tab[rm][si], FAM_CMOV, rm, si, 0, 0);
+        put(fxi_imul2_tab[rm][si], FAM_IMUL2, rm, si, 0, 0);
+        put(fxi_imul3_tab[rm][si], FAM_IMUL3, rm, si, 0, 0);
     }
-    put(fxi_setcc_tab[0], FAM_SETCC, 0, 0, 0, 0, 0);
+    put(fxi_setcc_tab[0], FAM_SETCC, 0, 0, 0, 0);
     for (int t = 0; t < 2; t++) for (int ri = 0; ri < 2; ri++) for (int s = 0; s < 2; s++) for (int cc = 0; cc < 16; cc++)
-        put(fxi_fjcc_tab[t][ri][s][cc], FAM_FJCC, t, ri, s, cc, 0);
+        put(fxi_fjcc_tab[t][ri][s][cc], FAM_FJCC, t, ri, s, cc);
     static const struct { const char *n; int id; } named[] = {
         { "jmp", N_JMP }, { "jcc", N_JCC }, { "call", N_CALL }, { "call_R", N_CALL_R }, { "call_M", N_CALL_M },
         { "jmp_R", N_JMP_R }, { "jmp_M", N_JMP_M }, { "ret", N_RET }, { "goto", N_GOTO }, { "syscall", N_SYSCALL },
-        { "stop", N_STOP }, { "push_R", N_PUSH_R }, { "pop_R", N_POP_R }, { "nop", N_NOP }, { "movx_MR", N_MOVX_MR },
-        { "movss_RR", N_MOVSS_RR }, { "movss_RM", N_MOVSS_RM }, { "movss_MR", N_MOVSS_MR }, { "movsd_RR", N_MOVSD_RR },
-        { "movsd_RM", N_MOVSD_RM }, { "movsd_MR", N_MOVSD_MR }, { "movq_RR", N_MOVQ_RR },
+        { "stop", N_STOP }, { "push_R", N_PUSH_R }, { "pop_R", N_POP_R }, { "nop", N_NOP },
     };
-    for (size_t i = 0; i < sizeof named / sizeof named[0]; i++) put(fxi_named(named[i].n), FAM_NAMED, (uint8_t)named[i].id, 0, 0, 0, 0);
+    for (size_t i = 0; i < sizeof named / sizeof named[0]; i++) put(fxi_named(named[i].n), FAM_NAMED, (uint8_t)named[i].id, 0, 0, 0);
+    // SSE: two-operand ops (register form; memory form when the op has one), c2 = shuffle, d = comis
     char nm[48];
-    for (SseOp *s = g_sse_ops; s; s = s->next)
-        for (size_t h = 0; h < sizeof k_hot_names / sizeof k_hot_names[0]; h++)
-            if (!strcmp(s->name, k_hot_names[h])) s->hot = (int)h;
-    for (const SseOp *s = g_sse_ops; s; s = s->next) {
-        snprintf(nm, sizeof nm, "%s_RR", s->name); put(fxi_named(nm), FAM_SSE, 0, 0, 0, 0, s);
-        snprintf(nm, sizeof nm, "%s_RM", s->name); put(fxi_named(nm), FAM_SSE, 1, 0, 0, 0, s);
+    for (size_t i = 0; i < N_XOPS; i++) {
+        const char *n = k_xops[i].name;
+        int shuf = is_shuffle(n), com = !strcmp(n, "comiss") || !strcmp(n, "comisd");
+        snprintf(nm, sizeof nm, "%s_RR", n); put(fxi_named(nm), FAM_X, (uint8_t)i, 0, (uint8_t)shuf, (uint8_t)com);
+        if (k_xops[i].rt[0]) { snprintf(nm, sizeof nm, "%s_RM", n); put(fxi_named(nm), FAM_X, (uint8_t)i, 1, (uint8_t)shuf, (uint8_t)com); }
     }
+    for (size_t i = 0; i < sizeof k_xshift / sizeof k_xshift[0]; i++) {
+        snprintf(nm, sizeof nm, "%s_RI", k_xshift[i].name);
+        put(fxi_named(nm), FAM_XI, (uint8_t)i, 0, (uint8_t)is_shuffle(k_xshift[i].name), 0);
+    }
+    static const struct { const char *n; int id; } xnamed[] = {
+        { "movx_MR", XS_MOVX_MR }, { "movss_RM", XS_MOVSS_RM }, { "movsd_RM", XS_MOVSD_RM }, { "movss_MR", XS_MOVSS_MR },
+        { "movsd_MR", XS_MOVSD_MR }, { "movlps_RM", XS_MOVLPS_RM }, { "movhps_RM", XS_MOVHPS_RM }, { "movhps_MR", XS_MOVHPS_MR },
+        { "cvtsi2ss_R32", XS_XG + XG_SI2SS32 }, { "cvtsi2ss_R64", XS_XG + XG_SI2SS64 },
+        { "cvtsi2sd_R32", XS_XG + XG_SI2SD32 }, { "cvtsi2sd_R64", XS_XG + XG_SI2SD64 },
+        { "movd_XR32", XS_XG + XG_MOVD32 }, { "movd_XR64", XS_XG + XG_MOVD64 },
+        { "cvtsi2ss_M32", XS_XGM + 0 }, { "cvtsi2ss_M64", XS_XGM + 1 }, { "cvtsi2sd_M32", XS_XGM + 2 }, { "cvtsi2sd_M64", XS_XGM + 3 },
+        { "cvttss2si_R32", XS_GX + GX_TSS32 }, { "cvtss2si_R32", XS_GX + GX_SS32 },
+        { "cvttsd2si_R32", XS_GX + GX_TSD32 }, { "cvtsd2si_R32", XS_GX + GX_SD32 },
+        { "cvttss2si_R64", XS_GX + GX_TSS64 }, { "cvtss2si_R64", XS_GX + GX_SS64 },
+        { "cvttsd2si_R64", XS_GX + GX_TSD64 }, { "cvtsd2si_R64", XS_GX + GX_SD64 },
+        { "movd_RX32", XS_GX + GX_MOVD32 }, { "movd_RX64", XS_GX + GX_MOVD64 },
+        { "pmovmskb_RR", XS_GX + GX_PMOVMSKB }, { "movmskps_RR", XS_GX + GX_MOVMSKPS }, { "movmskpd_RR", XS_GX + GX_MOVMSKPD },
+    };
+    for (size_t i = 0; i < sizeof xnamed / sizeof xnamed[0]; i++) put(fxi_named(xnamed[i].n), FAM_XS, (uint8_t)xnamed[i].id, 0, 0, 0);
 }
 
 static int greg(unsigned off) { return (off & 7) == 0 && off < 128 ? (int)(off >> 3) : -1; }   // pinnable GPR
@@ -885,26 +1240,52 @@ static void lower_one(Out *o, const Uop *u) {
         case N_NOP: put_uop(o, u, p_nop); return;
         case N_PUSH_R: if (S >= 0) { put_uop(o, u, t_push[S]); return; } break;
         case N_POP_R: if (D >= 0) { put_uop(o, u, t_pop[D]); return; } break;
-        case N_MOVSS_RR: put_uop(o, u, px_movss_RR); return;
-        case N_MOVSD_RR: put_uop(o, u, px_movsd_RR); return;
-        case N_MOVQ_RR: put_uop(o, u, px_movq_RR); return;
-        case N_MOVSS_RM: if (ea_ok(u)) { put_uop(o, u, t_xl_movss[u->base][u->index]); return; } break;
-        case N_MOVSD_RM: if (ea_ok(u)) { put_uop(o, u, t_xl_movsd[u->base][u->index]); return; } break;
-        case N_MOVSS_MR: if (ea_ok(u)) { put_uop(o, u, t_xs_movss[u->base][u->index]); return; } break;
-        case N_MOVSD_MR: if (ea_ok(u)) { put_uop(o, u, t_xs_movsd[u->base][u->index]); return; } break;
-        case N_MOVX_MR: if (ea_ok(u)) { put_uop(o, u, t_xs_movx[u->base][u->index]); return; } break;
         }
         // Control flow has no FXI fallback here (FXI's handlers would continue FXI's own chain).
         if (d->a <= N_STOP) { fprintf(stderr, "fxr: no pinned form for control-flow uop %d\n", d->a); abort(); }
         break;
-    case FAM_SSE:
-        if (!d->a) { put_uop(o, u, d->sse->rr); return; }
-        if (ea_ok(u)) {
-            if (d->sse->hot >= 0) { put_uop(o, u, t_hot[d->sse->hot][u->base][u->index]); return; }
-            with_ea(o, u, d->sse->rt);
+    case FAM_X: {   // two-operand SSE: dst XMM, src XMM or memory
+        const XOp *x = &k_xops[d->a];
+        int dc = xcls(u->dst);
+        Uop *y;
+        if (!d->b) {
+            if (d->d && !fl) return;   // (u)comis of registers whose flags nothing reads
+            y = put_uop(o, u, x->rr[dc][xcls(u->src)]);
+        } else {
+            if (!ea_ok(u)) break;      // fs/gs operand: FXI's handler
+            if (!strcmp(x->name, "movx")) { put_uop(o, u, t_xl_movx[dc][u->base][u->index]); return; }
+            y = with_ea(o, u, x->rt[dc]);
+        }
+        if (d->c2) { uint8_t ix[16]; xshuffle_index(x->name, (unsigned)u->imm, ix); memcpy(y->xidx, ix, 16); }
+        return;
+    }
+    case FAM_XI: {   // shift by an immediate
+        Uop *y = put_uop(o, u, k_xshift[d->a].h[xcls(u->dst)]);
+        if (d->c2) { uint8_t ix[16]; xshuffle_index(k_xshift[d->a].name, (unsigned)u->imm, ix); memcpy(y->xidx, ix, 16); }
+        return;
+    }
+    case FAM_XS: {   // loads, stores, general register <-> XMM
+        int id = d->a, dc = xcls(u->dst), sc = xcls(u->src);
+        if (id >= XS_GX) {   // GPR <- XMM: dst is a GPR byte offset, src an XMM
+            if (D < 0) break;
+            put_uop(o, u, t_gx[id - XS_GX][sc][D]);
             return;
         }
+        if (id >= XS_XGM) { if (!ea_ok(u)) break; with_ea(o, u, t_xgt[id - XS_XGM][dc]); return; }
+        if (id >= XS_XG) { if (S < 0) break; put_uop(o, u, t_xg[id - XS_XG][dc][S]); return; }
+        if (!ea_ok(u)) break;
+        switch (id) {
+        case XS_MOVX_MR: put_uop(o, u, t_xs_movx[sc][u->base][u->index]); return;
+        case XS_MOVSS_RM: if (simple_mem(u)) put_uop(o, u, t_xl_movss[dc][u->base]); else with_ea(o, u, t_xlt_movss[dc]); return;
+        case XS_MOVSD_RM: if (simple_mem(u)) put_uop(o, u, t_xl_movsd[dc][u->base]); else with_ea(o, u, t_xlt_movsd[dc]); return;
+        case XS_MOVSS_MR: if (simple_mem(u)) put_uop(o, u, t_xs_movss[sc][u->base]); else with_ea(o, u, t_xst_movss[sc]); return;
+        case XS_MOVSD_MR: if (simple_mem(u)) put_uop(o, u, t_xs_movsd[sc][u->base]); else with_ea(o, u, t_xst_movsd[sc]); return;
+        case XS_MOVLPS_RM: with_ea(o, u, t_xlt_movlps[dc]); return;
+        case XS_MOVHPS_RM: with_ea(o, u, t_xlt_movhps[dc]); return;
+        case XS_MOVHPS_MR: with_ea(o, u, t_xst_movhps[sc]); return;
+        }
         break;
+    }
     }
     put_uop(o, u, p_slow);
 }
@@ -933,6 +1314,8 @@ void fxr_enter(FxiCpu *c, Block *b) {
     uint64_t g0 = c->r[0], g1 = c->r[1], g2 = c->r[2], g3 = c->r[3], g4 = c->r[4], g5 = c->r[5], g6 = c->r[6],
              g7 = c->r[7], g8 = c->r[8], g9 = c->r[9], g10 = c->r[10], g11 = c->r[11], g12 = c->r[12], g13 = c->r[13],
              g14 = c->r[14], g15 = c->r[15], T = 0, F0, F1, F2, F3;
+    FxrV x0, x1, x2, x3, x4, x5, x6, x7;
     RELOAD_F();
+    RELOAD_X();
     b->u[0].p(c, b->u, FXR_ARGS);
 }

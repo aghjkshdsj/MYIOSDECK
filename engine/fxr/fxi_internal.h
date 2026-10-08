@@ -41,10 +41,14 @@ typedef void (*OpFn)(FxiCpu *c, Uop *u);
 #else
 #define FXR_CC
 #endif
+// XMM0-7 travel the same way as vector arguments (v0-v7 on ARM64); XMM8-15 stay in c->xmm.
+typedef uint64_t FxrV __attribute__((vector_size(16)));
 #define FXR_PARAMS FxiCpu *c, Uop *u, uint64_t g0, uint64_t g1, uint64_t g2, uint64_t g6, uint64_t g7, \
     uint64_t g4, uint64_t g3, uint64_t g5, uint64_t g8, uint64_t g9, uint64_t g10, uint64_t g11, uint64_t g12, \
-    uint64_t g13, uint64_t g14, uint64_t g15, uint64_t T, uint64_t F0, uint64_t F1, uint64_t F2, uint64_t F3
-#define FXR_ARGS g0, g1, g2, g6, g7, g4, g3, g5, g8, g9, g10, g11, g12, g13, g14, g15, T, F0, F1, F2, F3
+    uint64_t g13, uint64_t g14, uint64_t g15, uint64_t T, uint64_t F0, uint64_t F1, uint64_t F2, uint64_t F3, \
+    FxrV x0, FxrV x1, FxrV x2, FxrV x3, FxrV x4, FxrV x5, FxrV x6, FxrV x7
+#define FXR_ARGS g0, g1, g2, g6, g7, g4, g3, g5, g8, g9, g10, g11, g12, g13, g14, g15, T, F0, F1, F2, F3, \
+    x0, x1, x2, x3, x4, x5, x6, x7
 typedef FXR_CC void (*PFn)(FXR_PARAMS);
 
 // Register slots. GPRs 0-15 in x86 order (RAX RCX RDX RBX RSP RBP RSI RDI R8-R15);
@@ -108,8 +112,13 @@ struct Uop {
     OpFn fn;
     union { Block *link; Uop *ulink; };     // chained successor (taken / call target / inline-cache block);
                                             // FXR's pinned handlers keep the successor's first uop
-    uint64_t imm;            // immediate, absolute branch target, or inline-cache rip
-    int64_t disp;            // EA displacement (RIP-relative already absolute)
+    union {
+        struct {
+            uint64_t imm;    // immediate, absolute branch target, or inline-cache rip
+            int64_t disp;    // EA displacement (RIP-relative already absolute)
+        };
+        uint8_t xidx[16];    // FXR: a pinned SSE shuffle's byte indices (the lowering computes them)
+    };
     uint64_t aux;            // fallthrough / return address / next rip
     union { Block *link2; Uop *ulink2; };   // fallthrough successor of a conditional branch
     uint16_t dst, src;       // register byte offsets (GPR) or XMM indices

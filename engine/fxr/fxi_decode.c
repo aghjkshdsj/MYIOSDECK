@@ -270,7 +270,8 @@ static int decode_sse(Dec *d, uint8_t op) {
         if (d->is_mem) set_mem(d, u);
         return 0;
     }
-    case 0x2e: case 0x2f: if (pf <= 1) { emit_x(d, pf == 1 ? "comisd" : "comiss", 0); meta(d)->reads = 1; return 0; } break;
+    case 0x2e: case 0x2f: if (pf <= 1) {   // writes ZF PF CF, clears OF SF AF: all six, reads none
+        emit_x(d, pf == 1 ? "comisd" : "comiss", 0); meta(d)->kill = 1; return 0; } break;
     case 0x50: if (pf <= 1 && !d->is_mem) { Uop *u = emit(d, named(pf ? "movmskpd_RR" : "movmskps_RR")); u->dst = (uint16_t)(d->reg * 8); u->src = (uint16_t)d->rm; return 0; } break;
     case 0x6e: if (pf == 1) {
         if (d->is_mem) { Uop *u = emit(d, named(d->rexw ? "movsd_RM" : "movss_RM")); u->dst = (uint16_t)d->reg; set_mem(d, u); }
