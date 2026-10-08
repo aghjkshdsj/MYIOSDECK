@@ -9,6 +9,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <mach/mach.h>
+
 #include "fxi.h"
 #include "jit_core.h"
 
@@ -128,6 +130,49 @@ static void pack_ec_context(uint8_t *a, const uint8_t *x) {
 
 static void __attribute__((noreturn)) fatal(const char *what);
 
+// Hex of guest code [a, a+n), clamped to a's 16 KB page. Copied with vm_read_overwrite: an
+// unreadable address (a bad jump target) is reported, not faulted on.
+static void log_code(const char *label, uint64_t a, unsigned n) {
+    uint64_t page_end = (a | 0x3fffull) + 1;
+    if (a + n > page_end) n = (unsigned)(page_end - a);
+    if (n > 192) n = 192;
+    uint8_t buf[192];
+    vm_size_t got = 0;
+    if (vm_read_overwrite(mach_task_self(), (vm_address_t)a, n, (vm_address_t)buf, &got) != KERN_SUCCESS) {
+        mid_log("[fxi-win]   %s %#llx: (unreadable)", label, (unsigned long long)a);
+        return;
+    }
+    char hex[3 * 192 + 1];
+    for (unsigned i = 0; i < n; i++) snprintf(hex + 3 * i, 4, "%02x ", buf[i]);
+    hex[3 * n] = 0;
+    mid_log("[fxi-win]   %s %#llx: %s", label, (unsigned long long)a, hex);
+}
+
+// The first exceptions of a process: registers, the code before the faulting instruction and
+// the last first-time control-flow edges, enough to find the instruction that went wrong.
+static void log_exception_state(FxiCpu *c, const uint8_t *ctx64, uint64_t rip) {
+    static const char *names[16] = { "rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi",
+                                     "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15" };
+    for (int i = 0; i < 16; i += 4)
+        mid_log("[fxi-win]   %-3s %016llx  %-3s %016llx  %-3s %016llx  %-3s %016llx",
+                names[i], (unsigned long long)rd64(ctx64 + 0x78 + 8 * i),
+                names[i + 1], (unsigned long long)rd64(ctx64 + 0x80 + 8 * i),
+                names[i + 2], (unsigned long long)rd64(ctx64 + 0x88 + 8 * i),
+                names[i + 3], (unsigned long long)rd64(ctx64 + 0x90 + 8 * i));
+    uint32_t ef; memcpy(&ef, ctx64 + 0x44, 4);
+    mid_log("[fxi-win]   eflags %08x", ef);
+    uint64_t from = rip - 160 < (rip & ~0x3fffull) ? (rip & ~0x3fffull) : rip - 160;
+    log_code("code before", from, (unsigned)(rip - from));
+    log_code("code at", rip, 32);
+    uint64_t t[16];
+    int n = fxi_win_trail(c, t, 16);
+    for (int i = 0; i < n; i++) {
+        char label[24];
+        snprintf(label, sizeof label, "edge %d/%d", i + 1, n);
+        log_code(label, t[i], 48);
+    }
+}
+
 static void __attribute__((noreturn)) raise_x64(FxiCpu *c, uint64_t rip, uint32_t code, uint32_t flags,
                                                 uint32_t nparams, const uint64_t *info, const char *why) {
     static int logged;
@@ -143,6 +188,8 @@ static void __attribute__((noreturn)) raise_x64(FxiCpu *c, uint64_t rip, uint32_
     if (area) area[0] = 0;                       // InSimulation
     uint8_t ctx64[0x4d0];
     fxi_win_save_context(c, ctx64, rip);
+    static int dumped;
+    if (dumped < 3) { dumped++; log_exception_state(c, ctx64, rip); }
     ki_layout *k = (ki_layout *)(uintptr_t)(rd64(ctx64 + 0x98) & ~63ull) - 1;   // below RSP
     memset(k, 0, sizeof *k);
     pack_ec_context(k->context, ctx64);

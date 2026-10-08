@@ -97,6 +97,7 @@ struct Fxi *fxi_vm_new(void) {
 
 Block *fxi_lookup(FxiCpu *c, uint64_t rip) {
     struct Fxi *vm = c->vm;
+    c->trail[c->trail_n++ & 15] = rip;   // linked blocks skip lookups: the first-time edges
     Block *b = table_find(__atomic_load_n(&vm->table, __ATOMIC_ACQUIRE), rip);
     if (b) return b;
     if (c->stop) return fxi_stop;

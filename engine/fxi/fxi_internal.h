@@ -64,6 +64,8 @@ struct FxiCpu {
     Uop *cur;                // last uop that touched guest memory: a host fault's exact rip (fxi_ea)
     uint32_t exc_code, exc_flags, exc_nparams;   // FXI_STOP_EXCEPTION: the Windows exception
     uint64_t exc_info[2];
+    uint64_t trail[16];      // diagnostics: the last block lookups (rip); trail_n is the count
+    uint32_t trail_n;
     int stop;                // nonzero: leave the dispatch chain
     long long exit_code;
     char *err;               // fxi_result.error

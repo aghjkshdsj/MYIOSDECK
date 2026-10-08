@@ -56,6 +56,8 @@ int fxi_win_exception(FxiCpu *c, fxi_win_exc *e);
 /// A host fault (SIGSEGV/SIGBUS) during fxi_win_run: the x64 instruction that faulted.
 /// *is_fetch = 1 when it happened fetching code (an execute fault at that address).
 uint64_t fxi_win_fault_rip(FxiCpu *c, int *is_fetch);
+/// Diagnostics: the rips of the last block lookups (first-time control-flow edges), oldest first.
+int fxi_win_trail(FxiCpu *c, uint64_t *rips, int max);
 
 #ifdef __cplusplus
 }

@@ -96,6 +96,14 @@ uint64_t fxi_win_fault_rip(FxiCpu *c, int *is_fetch) {
     return c->cur ? c->cur->rip : c->rip;
 }
 
+// Diagnostics: the last block lookups, oldest first.
+int fxi_win_trail(FxiCpu *c, uint64_t *rips, int max) {
+    int n = c->trail_n < 16 ? (int)c->trail_n : 16;
+    if (n > max) n = max;
+    for (int i = 0; i < n; i++) rips[i] = c->trail[(c->trail_n - (uint32_t)n + (uint32_t)i) & 15];
+    return n;
+}
+
 // The CPU state as an AMD64 CONTEXT (CONTEXT_FULL | CONTEXT_FLOATING_POINT), rip given.
 void fxi_win_save_context(FxiCpu *c, void *ctx, uint64_t rip) {
     uint8_t *p = ctx;
