@@ -84,11 +84,35 @@ final class WineController: ObservableObject, @unchecked Sendable {
     /// Stage 4d: a Steam game started as its own program (no Steam client). The
     /// bridge publishes its identity (SteamAppId / SteamGameId / SteamAppPath)
     /// and starts it in Steam's working folder; it reads and clears these.
+    /// Without JIT the game takes the no-JIT session (signed Wine DLLs, x64 code in FXI), as
+    /// the built-in no-JIT programs do; Madeira picks ARM64EC for it from the full path.
     func runSteamGame(appID: Int, title: String, plan: SteamLaunchPlan) {
+        let noJIT = !mid_jit_pool_ready()
+        if noJIT {
+            let machine = peMachine(windowsPath: plan.exe)
+            dlog("[wine] no-JIT Steam launch: \(plan.exe) machine=0x\(String(machine, radix: 16))")
+            if machine == 0x14c {
+                state = .failed("This is a 32-bit game. Without JIT only 64-bit (x64) games can run: enable JIT to play it.")
+                return
+            }
+        }
         setenv("MADEIRA_STEAM_APPID", String(appID), 1)
         setenv("MADEIRA_STEAM_APPPATH", plan.appPath, 1)
         setenv("MADEIRA_WORKDIR", plan.workingFolder, 1)
-        run(Program(id: plan.exe, title: title, detail: "", graphics: true), args: plan.arguments)
+        run(Program(id: plan.exe, title: title, detail: "", graphics: true, noJIT: noJIT), args: plan.arguments)
+    }
+
+    /// IMAGE_FILE_HEADER.Machine of a C:\ path in the prefix (0x8664 x64, 0x14c i386; 0 unreadable).
+    func peMachine(windowsPath: String) -> UInt16 {
+        guard windowsPath.count > 3, windowsPath.dropFirst().hasPrefix(":\\") else { return 0 }
+        let rel = windowsPath.dropFirst(3).replacingOccurrences(of: "\\", with: "/")
+        let url = prefixURL.appendingPathComponent("drive_c").appendingPathComponent(rel)
+        guard let h = try? FileHandle(forReadingFrom: url) else { return 0 }
+        defer { try? h.close() }
+        guard let d = try? h.read(upToCount: 4096), d.count >= 0x40, d[0] == 0x4d, d[1] == 0x5a else { return 0 }
+        let pe = Int(d[0x3c]) | Int(d[0x3d]) << 8 | Int(d[0x3e]) << 16 | Int(d[0x3f]) << 24
+        guard pe > 0, pe + 6 <= d.count, d[pe] == 0x50, d[pe + 1] == 0x45 else { return 0 }
+        return UInt16(d[pe + 4]) | UInt16(d[pe + 5]) << 8
     }
 
     func run(_ program: Program, args: String = "") {

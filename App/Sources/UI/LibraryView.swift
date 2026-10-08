@@ -68,7 +68,7 @@ struct LibraryView: View {
             }
             Button("Cancel", role: .cancel) { noJITGame = nil }
         } message: {
-            Text("Windows games cannot run without JIT, so there is no Continue anyway for them: Wine itself is ARM64 code loaded from files, and iOS only lets that code run in memory prepared through StikDebug. (The interpreter runs the built-in Linux x86-64 tests only.) Enable JIT and the game starts right after.")
+            Text("This test program uses the JIT path (Wine code copied into JIT memory, x64 code through FEX). The entries marked \"no JIT\" and Steam games can run without JIT. Enable JIT and the program starts right after.")
         }
         .fullScreenCover(isPresented: $showSurface) { gameSurface }
         .onChange(of: wine.state) { _, state in
@@ -146,7 +146,7 @@ struct LibraryView: View {
                         .frame(width: 110)
                 }
                 Divider().overlay(Deck.panelHi)
-                SteamGamesGrid(library: steamLibrary, playBlocker: steamPlayBlocker, onPlay: playSteam)
+                SteamGamesGrid(library: steamLibrary, playBlocker: steamPlayBlocker, onPlay: { playSteam($0) })
                 if let playError {
                     StatusRow(label: "Could not start the game", detail: playError, level: .bad)
                 }
@@ -159,6 +159,24 @@ struct LibraryView: View {
         }
         .sheet(isPresented: $showSteamSignIn) { SteamSignInView() }
         .onAppear { steamLibrary.start() }
+        .alert("JIT is off", isPresented: steamNoJITPresented, presenting: steamNoJITGame) { game in
+            Button("Play without JIT (experimental)") { playSteam(game, noJIT: true) }
+            Button("Enable JIT") {
+                jit.enableWithStikDebug(poolMB: settings.jitPoolMB) {
+                    engine.start(settings: settings)
+                    DispatchQueue.main.async { playSteam(game) }   // the game starts once JIT is ready
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("Without JIT, Wine loads from signed app files and the game's x64 code runs in MYIOSDECK's interpreter (FXI), about 10× slower than native. Small 64-bit Direct3D 11/12 games may run; 32-bit games need JIT. If it stops, send myiosdeck-log.txt from the Logs tab.")
+        }
+    }
+
+    /// A Steam game waiting for the JIT / no-JIT choice.
+    @State private var steamNoJITGame: OwnedSteamGame?
+    private var steamNoJITPresented: Binding<Bool> {
+        Binding(get: { steamNoJITGame != nil }, set: { if !$0 { steamNoJITGame = nil } })
     }
 
     @State private var playError: String?
@@ -181,18 +199,20 @@ struct LibraryView: View {
         }
     }
 
-    /// Stage 4d: direct start of an installed Steam game on the game surface.
-    private func playSteam(_ game: OwnedSteamGame) {
+    /// Stage 4d: direct start of an installed Steam game on the game surface. Without JIT it
+    /// asks first: play without JIT (FXI) or enable JIT.
+    private func playSteam(_ game: OwnedSteamGame, noJIT: Bool = false) {
         playError = nil
-        guard jit.isReady else {
+        guard jit.isReady || noJIT else {
             // Let the game sheet close before the alert is presented.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { noJITGame = { playSteam(game) } }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { steamNoJITGame = game }
             return
         }
         Task { @MainActor in
             do {
                 let plan = try await steamLibrary.launchPlan(game.id)
                 wine.runSteamGame(appID: game.id, title: game.name, plan: plan)
+                if case .failed(let why) = wine.state { playError = why; return }
                 guard case .booting = wine.state else { return }
                 // Let the game sheet finish closing before the surface is presented.
                 try? await Task.sleep(for: .milliseconds(600))
@@ -239,7 +259,7 @@ struct LibraryView: View {
                 }
                 switch wine.state {
                 case .idle:
-                    Text(jit.isReady ? "Output appears in the Logs tab ([stdio] lines)." : "Windows programs need JIT; Play offers to enable it.")
+                    Text(jit.isReady ? "Output appears in the Logs tab ([stdio] lines)." : "JIT is off: the \"no JIT\" entries run as they are; the others offer to enable JIT.")
                         .font(.caption).foregroundStyle(Deck.dim)
                 case .booting(let t): HStack { ProgressView(); Text("Starting Wine for \(t)…").foregroundStyle(Deck.dim) }
                 case .running(let t): StatusRow(label: "Running \(t)", detail: "Watch the Logs tab for its output.", level: .good)
