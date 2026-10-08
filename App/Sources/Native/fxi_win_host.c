@@ -221,6 +221,86 @@ static long host_reset_to_consistent(const uint8_t *rec, const uint8_t *arm_ctx)
     raise_x64(c, rip, code, flags, nparams, info, why);
 }
 
+// ---- Wild guest pointers (build 78) ----
+// A wild guest pointer faults inside an FXI handler. Madeira's Mach handler then looks for the
+// thread's TEB by stack containment; FXI's emulator stack is not the TEB's stack, so it fell
+// back to a best-effort delivery that worked once (build 76) and left the thread stuck the
+// next time (build 77). Madeira's Mach server now asks FXI first (mid_fxi_mach_fault, called
+// before its last-resort delivery, engine/wine/patches/nojit_fault_hook.py): when the thread
+// is in simulation and the address is not mapped at all (wild or null pointers, non-canonical
+// values), the thread is redirected to fault_entry, which raises the x64 access violation the
+// way host_reset_to_consistent does. Everything else stays Madeira's.
+#define FAULT_THREADS 1024
+static struct { mach_port_t thread; uint8_t *area; } g_fault_threads[FAULT_THREADS];
+
+static uint8_t *fault_thread_area(mach_port_t thread) {
+    for (int i = 0; i < FAULT_THREADS; i++)
+        if (__atomic_load_n(&g_fault_threads[i].thread, __ATOMIC_ACQUIRE) == thread) return g_fault_threads[i].area;
+    return NULL;
+}
+
+static void fault_thread_register(uint8_t *area) {
+    mach_port_t self = mach_thread_self();
+    int slot = -1;
+    for (int i = 0; i < FAULT_THREADS && slot < 0; i++)
+        if (g_fault_threads[i].thread == self) slot = i;   // a reused port name: a new thread
+    for (int i = 0; i < FAULT_THREADS && slot < 0; i++) {
+        mach_port_t expect = MACH_PORT_NULL;
+        if (__atomic_compare_exchange_n(&g_fault_threads[i].thread, &expect, self, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+            slot = i;
+    }
+    if (slot < 0) return;
+    g_fault_threads[slot].area = area;
+    __atomic_store_n(&g_fault_threads[slot].thread, self, __ATOMIC_RELEASE);
+}
+
+static void __attribute__((noreturn, used)) fault_entry(uint64_t addr, uint64_t is_write) {
+    uint8_t *area = cpu_area_now();
+    FxiCpu *c = area ? *(FxiCpu **)(area + 0x30) : NULL;
+    if (!c) fatal("wild pointer: no FXI CPU on the faulting thread");
+    int fetch;
+    uint64_t rip = fxi_win_fault_rip(c, &fetch);
+    uint64_t info[2] = { fetch ? 8 : is_write, fetch ? rip : addr };
+    char why[96];
+    snprintf(why, sizeof why, "unmapped address%s, via the Mach hook", fetch ? ", fetching code" : "");
+    raise_x64(c, rip, 0xC0000005, 0, 2, info, why);
+}
+
+static int address_mapped(uint64_t a) {
+    vm_address_t r = (vm_address_t)a;
+    vm_size_t size = 0;
+    vm_region_basic_info_data_64_t info;
+    mach_msg_type_number_t cnt = VM_REGION_BASIC_INFO_COUNT_64;
+    mach_port_t obj = MACH_PORT_NULL;
+    if (vm_region_64(mach_task_self(), &r, &size, VM_REGION_BASIC_INFO_64, (vm_region_info_t)&info, &cnt, &obj) != KERN_SUCCESS)
+        return 0;
+    return r <= a;   // the region found starts at or below a: a lies in it
+}
+
+// Called by Madeira's Mach exception server for an EXC_BAD_ACCESS nothing else claimed, with
+// the faulting thread suspended. 1 = *state now enters fault_entry (Madeira writes it back).
+int mid_fxi_mach_fault(mach_port_t thread, arm_thread_state64_t *state, uint64_t fault_addr) {
+    uint8_t *area = fault_thread_area(thread);
+    if (!area || !area[0]) return 0;                       // not in simulation
+    if (address_mapped(fault_addr)) return 0;              // guard page, write-watch, ...
+    arm_exception_state64_t es;
+    mach_msg_type_number_t en = ARM_EXCEPTION_STATE64_COUNT;
+    uint64_t is_write = 0;
+    if (thread_get_state(thread, ARM_EXCEPTION_STATE64, (thread_state_t)&es, &en) == KERN_SUCCESS)
+        is_write = (es.__esr >> 6) & 1;                     // ESR WnR (data abort)
+    state->__x[0] = fault_addr;
+    state->__x[1] = is_write;
+    arm_thread_state64_set_lr_fptr(*state, (void *)0);
+    arm_thread_state64_set_sp(*state, arm_thread_state64_get_sp(*state) & ~15ull);
+    arm_thread_state64_set_pc_fptr(*state, (void *)fault_entry);
+    static int logged;
+    if (logged < 8) {
+        logged++;
+        mid_log("[fxi-win] wild pointer %#llx in simulation: raised as an x64 access violation", (unsigned long long)fault_addr);
+    }
+    return 1;
+}
+
 static long host_thread_init(void) {
     uint8_t *teb = teb_now();
     uint8_t *area = teb ? *(uint8_t **)(teb + 0x1788) : NULL;   // ChpeV2CpuAreaInfo
@@ -228,6 +308,7 @@ static long host_thread_init(void) {
         mid_log("[fxi-win] ThreadInit: no CPU area (teb %p)", (void *)teb);
         return (long)0xC0000001;   // STATUS_UNSUCCESSFUL
     }
+    fault_thread_register(area);
     FxiCpu **slot = (FxiCpu **)(area + 0x30);                   // EmulatorData[0]
     if (!*slot) {
         *slot = fxi_win_cpu_new();
