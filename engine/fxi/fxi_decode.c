@@ -210,12 +210,17 @@ static int decode_sse(Dec *d, uint8_t op) {
         if (!n) return unimplemented(d, "sse op/prefix");
         emit_x(d, n, 0); return 0;
     }
-    if (pf == 1 && ((op >= 0x60 && op <= 0x6d) || (op >= 0x74 && op <= 0x76) || op >= 0xd4)) {
+    if (pf == 1 && ((op >= 0x60 && op <= 0x6d) || (op >= 0x74 && op <= 0x76) || op >= 0xd1)) {
         static const char *const p66[256] = {
             [0x60] = "punpcklbw", [0x61] = "punpcklwd", [0x62] = "punpckldq", [0x63] = "packsswb",
             [0x64] = "pcmpgtb", [0x65] = "pcmpgtw", [0x66] = "pcmpgtd", [0x67] = "packuswb",
             [0x68] = "punpckhbw", [0x69] = "punpckhwd", [0x6a] = "punpckhdq", [0x6b] = "packssdw",
             [0x6c] = "punpcklqdq", [0x6d] = "punpckhqdq", [0x74] = "pcmpeqb", [0x75] = "pcmpeqw", [0x76] = "pcmpeqd",
+            [0xd1] = "psrlwx", [0xd2] = "psrldx", [0xd3] = "psrlqx", [0xe1] = "psrawx", [0xe2] = "psradx",
+            [0xf1] = "psllwx", [0xf2] = "pslldx", [0xf3] = "psllqx",
+            [0xd8] = "psubusb", [0xd9] = "psubusw", [0xdc] = "paddusb", [0xdd] = "paddusw",
+            [0xe8] = "psubsb", [0xe9] = "psubsw", [0xec] = "paddsb", [0xed] = "paddsw",
+            [0xe0] = "pavgb", [0xe3] = "pavgw", [0xe4] = "pmulhuw", [0xe5] = "pmulhw", [0xf5] = "pmaddwd",
             [0xd4] = "paddq", [0xd5] = "pmullw", [0xda] = "pminub", [0xdb] = "pand", [0xde] = "pmaxub", [0xdf] = "pandn",
             [0xea] = "pminsw", [0xeb] = "por", [0xee] = "pmaxsw", [0xef] = "pxor", [0xf4] = "pmuludq", [0xf6] = "psadbw",
             [0xf8] = "psubb", [0xf9] = "psubw", [0xfa] = "psubd", [0xfb] = "psubq", [0xfc] = "paddb", [0xfd] = "paddw", [0xfe] = "paddd",
@@ -300,7 +305,20 @@ static int decode_sse(Dec *d, uint8_t op) {
         else { Uop *u = emit(d, named("movq_RR")); u->dst = (uint16_t)d->rm; u->src = (uint16_t)d->reg; }
         return 0; } break;
     case 0xd7: if (pf == 1 && !d->is_mem) { Uop *u = emit(d, named("pmovmskb_RR")); u->dst = (uint16_t)(d->reg * 8); u->src = (uint16_t)d->rm; return 0; } break;
-    case 0xe6: if (pf == 3) { emit_x(d, "cvtdq2pd", 0); return 0; } if (pf == 1) { emit_x(d, "cvttpd2dq", 0); return 0; } break;
+    case 0xe6: if (pf == 3) { emit_x(d, "cvtdq2pd", 0); return 0; } if (pf == 1) { emit_x(d, "cvttpd2dq", 0); return 0; }
+               if (pf == 2) { emit_x(d, "cvtpd2dq", 0); return 0; } break;
+    case 0x2b: if (pf <= 1 && d->is_mem) { emit_xstore(d, "movx_MR", "movx_MR"); return 0; } break;   // movntps/pd
+    case 0xe7: if (pf == 1 && d->is_mem) { emit_xstore(d, "movx_MR", "movx_MR"); return 0; } break;   // movntdq
+    case 0xc4: if (pf == 1) {                          // pinsrw xmm, r32/m16, imm8
+        uint64_t imm = rd_u8(d);                       // before set_mem: rip-relative counts from the end
+        Uop *u = emit(d, named(d->is_mem ? "pinsrw_M" : "pinsrw_R"));
+        u->dst = (uint16_t)d->reg; u->src = (uint16_t)(d->rm * 8); u->imm = imm;
+        if (d->is_mem) set_mem(d, u);
+        return 0; } break;
+    case 0xc5: if (pf == 1 && !d->is_mem) {            // pextrw r32, xmm, imm8
+        Uop *u = emit(d, named("pextrw_R"));
+        u->dst = (uint16_t)(d->reg * 8); u->src = (uint16_t)d->rm; u->imm = rd_u8(d);
+        return 0; } break;
     }
     return unimplemented(d, "sse");
 }
@@ -744,8 +762,15 @@ static int decode_one_inner(Dec *d) {
     default:
         break;
     }
+    if (op == 0xc3) {                                 // movnti m32/m64, r (a plain store here)
+        int bits = d->rexw ? 64 : 32;
+        modrm(d);
+        if (!d->is_mem) return unimplemented(d, "movnti reg");
+        emit_mov(d, F_MR, bits, 0, gpr(d, d->reg, bits), 0);
+        return 0;
+    }
     if ((op >= 0x10 && op <= 0x17) || (op >= 0x28 && op <= 0x2f) || (op >= 0x50 && op <= 0x7f) ||
-        op == 0xc2 || op == 0xc6 || op >= 0xd0)
+        op == 0xc2 || (op >= 0xc4 && op <= 0xc6) || op >= 0xd0)
         return decode_sse(d, op);
     return unimplemented(d, "two-byte opcode");
 }

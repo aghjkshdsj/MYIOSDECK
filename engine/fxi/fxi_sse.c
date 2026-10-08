@@ -85,6 +85,37 @@ DEF_X(pmaxsw, 16, for (int i = 0; i < 8; i++) D->sw[i] = D->sw[i] > S->sw[i] ? D
 DEF_X(pminsw, 16, for (int i = 0; i < 8; i++) D->sw[i] = D->sw[i] < S->sw[i] ? D->sw[i] : S->sw[i])
 DEF_X(psadbw, 16, LANES2({ uint64_t s = 0; for (int j = 0; j < 8; j++) { int dlt = (int)D->b[8 * i + j] - (int)S->b[8 * i + j]; s += (uint64_t)(dlt < 0 ? -dlt : dlt); } D->q[i] = s; }))
 
+// ---- saturating add/sub, averages, high multiplies, multiply-add (build 83: Stick Fight) ----
+static inline int satS8(int v) { return v > 127 ? 127 : v < -128 ? -128 : v; }
+static inline int satU8(int v) { return v > 255 ? 255 : v < 0 ? 0 : v; }
+static inline int satS16(int v) { return v > 32767 ? 32767 : v < -32768 ? -32768 : v; }
+static inline int satU16(int v) { return v > 65535 ? 65535 : v < 0 ? 0 : v; }
+DEF_X(paddsb, 16, for (int i = 0; i < 16; i++) D->sb[i] = (int8_t)satS8(D->sb[i] + S->sb[i]))
+DEF_X(paddsw, 16, for (int i = 0; i < 8; i++) D->sw[i] = (int16_t)satS16(D->sw[i] + S->sw[i]))
+DEF_X(paddusb, 16, for (int i = 0; i < 16; i++) D->b[i] = (uint8_t)satU8(D->b[i] + S->b[i]))
+DEF_X(paddusw, 16, for (int i = 0; i < 8; i++) D->w[i] = (uint16_t)satU16(D->w[i] + S->w[i]))
+DEF_X(psubsb, 16, for (int i = 0; i < 16; i++) D->sb[i] = (int8_t)satS8(D->sb[i] - S->sb[i]))
+DEF_X(psubsw, 16, for (int i = 0; i < 8; i++) D->sw[i] = (int16_t)satS16(D->sw[i] - S->sw[i]))
+DEF_X(psubusb, 16, for (int i = 0; i < 16; i++) D->b[i] = (uint8_t)satU8(D->b[i] - S->b[i]))
+DEF_X(psubusw, 16, for (int i = 0; i < 8; i++) D->w[i] = (uint16_t)satU16(D->w[i] - S->w[i]))
+DEF_X(pavgb, 16, for (int i = 0; i < 16; i++) D->b[i] = (uint8_t)((D->b[i] + S->b[i] + 1) >> 1))
+DEF_X(pavgw, 16, for (int i = 0; i < 8; i++) D->w[i] = (uint16_t)((D->w[i] + S->w[i] + 1) >> 1))
+DEF_X(pmulhw, 16, for (int i = 0; i < 8; i++) D->sw[i] = (int16_t)(((int32_t)D->sw[i] * S->sw[i]) >> 16))
+DEF_X(pmulhuw, 16, for (int i = 0; i < 8; i++) D->w[i] = (uint16_t)(((uint32_t)D->w[i] * S->w[i]) >> 16))
+// Two products per lane, summed with 32-bit wraparound (-32768*-32768*2 = 0x80000000, as on x86).
+DEF_X(pmaddwd, 16, { X128 r; LANES4(r.d[i] = (uint32_t)((int32_t)D->sw[2 * i] * S->sw[2 * i]) +
+                                              (uint32_t)((int32_t)D->sw[2 * i + 1] * S->sw[2 * i + 1])); *D = r; })
+
+// ---- shifts by the count in the low 64 bits of an XMM register or memory ----
+DEF_X(psllwx, 16, { uint64_t n = S->q[0]; for (int i = 0; i < 8; i++) D->w[i] = n > 15 ? 0 : (uint16_t)(D->w[i] << n); })
+DEF_X(pslldx, 16, { uint64_t n = S->q[0]; LANES4(D->d[i] = n > 31 ? 0 : D->d[i] << n); })
+DEF_X(psllqx, 16, { uint64_t n = S->q[0]; LANES2(D->q[i] = n > 63 ? 0 : D->q[i] << n); })
+DEF_X(psrlwx, 16, { uint64_t n = S->q[0]; for (int i = 0; i < 8; i++) D->w[i] = n > 15 ? 0 : (uint16_t)(D->w[i] >> n); })
+DEF_X(psrldx, 16, { uint64_t n = S->q[0]; LANES4(D->d[i] = n > 31 ? 0 : D->d[i] >> n); })
+DEF_X(psrlqx, 16, { uint64_t n = S->q[0]; LANES2(D->q[i] = n > 63 ? 0 : D->q[i] >> n); })
+DEF_X(psrawx, 16, { uint64_t n = S->q[0]; for (int i = 0; i < 8; i++) D->sw[i] = (int16_t)(D->sw[i] >> (n > 15 ? 15 : n)); })
+DEF_X(psradx, 16, { uint64_t n = S->q[0]; LANES4(D->sd[i] = D->sd[i] >> (n > 31 ? 31 : n)); })
+
 // ---- unpack / pack ----
 #define UNPACK(NAME, T, N, HI)                                                             \
     DEF_X(NAME, 16, { X128 r; for (int i = 0; i < (N) / 2; i++) { r.T[2 * i] = D->T[i + ((HI) ? (N) / 2 : 0)]; r.T[2 * i + 1] = S->T[i + ((HI) ? (N) / 2 : 0)]; } *D = r; })
@@ -143,6 +174,7 @@ DEF_X(cvttps2dq, 16, LANES4(D->sd[i] = cvt_i32(S->f[i], 1)))
 DEF_X(cvtps2dq, 16, LANES4(D->sd[i] = cvt_i32(S->f[i], 0)))
 DEF_X(cvtdq2pd, 8, { double a = S->sd[0], b = S->sd[1]; D->g[0] = a; D->g[1] = b; })
 DEF_X(cvttpd2dq, 16, { int32_t a = cvt_i32(S->g[0], 1), b = cvt_i32(S->g[1], 1); D->sd[0] = a; D->sd[1] = b; D->q[1] = 0; })
+DEF_X(cvtpd2dq, 16, { int32_t a = cvt_i32(S->g[0], 0), b = cvt_i32(S->g[1], 0); D->sd[0] = a; D->sd[1] = b; D->q[1] = 0; })
 DEF_X(cvtpd2ps, 16, { float a = (float)S->g[0], b = (float)S->g[1]; D->f[0] = a; D->f[1] = b; D->q[1] = 0; })
 DEF_X(cvtps2pd, 8, { double a = S->f[0], b = S->f[1]; D->g[0] = a; D->g[1] = b; })
 
@@ -224,6 +256,11 @@ static void pextrd_M(FxiCpu *c, Uop *u) { st32(fxi_ea(c, u), XR(u->src)->d[u->im
 static void pextrq_R(FxiCpu *c, Uop *u) { c->r[u->dst >> 3] = XR(u->src)->q[u->imm & 1]; FXI_NEXT(c, u); }
 static void pextrq_M(FxiCpu *c, Uop *u) { st64(fxi_ea(c, u), XR(u->src)->q[u->imm & 1]); FXI_NEXT(c, u); }
 
+// ---- SSE2 word insert/extract (u->imm = lane) ----
+static void pinsrw_R(FxiCpu *c, Uop *u) { XR(u->dst)->w[u->imm & 7] = (uint16_t)c->r[u->src >> 3]; FXI_NEXT(c, u); }
+static void pinsrw_M(FxiCpu *c, Uop *u) { XR(u->dst)->w[u->imm & 7] = (uint16_t)ld16(fxi_ea(c, u)); FXI_NEXT(c, u); }
+static void pextrw_R(FxiCpu *c, Uop *u) { c->r[u->dst >> 3] = XR(u->src)->w[u->imm & 7]; FXI_NEXT(c, u); }
+
 // ---- name table for the decoder ----
 #define E2(n) { #n "_RR", n##_RR }, { #n "_RM", n##_RM }
 #define E4CVT(n) { #n "_R32", n##_R32 }, { #n "_R64", n##_R64 }, { #n "_M32", n##_M32 }, { #n "_M64", n##_M64 }
@@ -241,7 +278,11 @@ static const struct { const char *name; OpFn fn; } kSse[] = {
     E2(pshufd), E2(pshuflw), E2(pshufhw), E2(shufps), E2(shufpd),
     E2(cmpps), E2(cmppd), E2(cmpss), E2(cmpsd), E2(comiss), E2(comisd),
     E2(cvtss2sd), E2(cvtsd2ss), E2(cvtdq2ps), E2(cvttps2dq), E2(cvtps2dq), E2(cvtdq2pd),
-    E2(cvttpd2dq), E2(cvtpd2ps), E2(cvtps2pd),
+    E2(cvttpd2dq), E2(cvtpd2dq), E2(cvtpd2ps), E2(cvtps2pd),
+    E2(paddsb), E2(paddsw), E2(paddusb), E2(paddusw), E2(psubsb), E2(psubsw), E2(psubusb), E2(psubusw),
+    E2(pavgb), E2(pavgw), E2(pmulhw), E2(pmulhuw), E2(pmaddwd),
+    E2(psllwx), E2(pslldx), E2(psllqx), E2(psrlwx), E2(psrldx), E2(psrlqx), E2(psrawx), E2(psradx),
+    { "pinsrw_R", pinsrw_R }, { "pinsrw_M", pinsrw_M }, { "pextrw_R", pextrw_R },
     E2(movx), { "movx_MR", movx_MR },
     { "movss_RR", movss_RR }, { "movss_RM", movss_RM }, { "movss_MR", movss_MR },
     { "movsd_RR", movsd_RR }, { "movsd_RM", movsd_RM }, { "movsd_MR", movsd_MR },

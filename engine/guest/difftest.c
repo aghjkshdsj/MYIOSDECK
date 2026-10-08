@@ -255,6 +255,94 @@ static void misc(void) {
     out("misc", h);
 }
 
+// ---- SSE/SSE2 (what FXI implements; CPUID reports SSE2 only) ----
+typedef long long v2 __attribute__((vector_size(16)));
+// Integer lanes: random bits. Float lanes: exact small values (k/8) so results are exact or
+// IEEE-rounded identically on every host; no 0/0 (x86 and ARM default NaNs differ in sign).
+static v2 vrand(void) { v2 v = { (long long)val(), (long long)val() }; return v; }
+static v2 vfloat(int nonzero) {
+    union { float f[4]; v2 v; } u;
+    for (int i = 0; i < 4; i++) { int k = (int)(rnd() % 2001) - 1000; if (nonzero && !k) k = 3; u.f[i] = (float)k / 8.0f; }
+    return u.v;
+}
+static v2 vdouble(int nonzero) {
+    union { double g[2]; v2 v; } u;
+    for (int i = 0; i < 2; i++) { long long k = (long long)(rnd() % 4000001) - 2000000; if (nonzero && !k) k = 5; u.g[i] = (double)k / 16.0; }
+    return u.v;
+}
+static u64 vmix(u64 h, v2 v) { return mix(mix(h, (u64)v[0]), (u64)v[1]); }
+#define XX(NAME, GEN_A, GEN_B, INSN)                                                          \
+    static void NAME(void) {                                                                  \
+        u64 h = 14695981039346656037ull;                                                      \
+        for (int i = 0; i < N; i++) {                                                         \
+            v2 a = GEN_A, b = GEN_B, m = GEN_B;                                               \
+            __asm__ volatile(INSN : [a] "+x"(a) : [b] "x"(b), [m] "m"(m));                    \
+            h = vmix(h, a);                                                                   \
+        }                                                                                     \
+        out(#NAME, h);                                                                        \
+    }
+#define XI(NAME, INSN) XX(NAME, vrand(), vrand(), INSN)
+XI(x_paddsb, "paddsb %[b], %[a]") XI(x_paddsw, "paddsw %[m], %[a]") XI(x_paddusb, "paddusb %[b], %[a]")
+XI(x_paddusw, "paddusw %[b], %[a]") XI(x_psubsb, "psubsb %[b], %[a]") XI(x_psubsw, "psubsw %[b], %[a]")
+XI(x_psubusb, "psubusb %[m], %[a]") XI(x_psubusw, "psubusw %[b], %[a]") XI(x_pavgb, "pavgb %[b], %[a]")
+XI(x_pavgw, "pavgw %[b], %[a]") XI(x_pmulhw, "pmulhw %[b], %[a]") XI(x_pmulhuw, "pmulhuw %[m], %[a]")
+XI(x_pmaddwd, "pmaddwd %[b], %[a]") XI(x_pmullw, "pmullw %[b], %[a]") XI(x_pmuludq, "pmuludq %[b], %[a]")
+XI(x_paddb, "paddb %[b], %[a]") XI(x_paddq, "paddq %[m], %[a]") XI(x_psubd, "psubd %[b], %[a]")
+XI(x_pcmpgtb, "pcmpgtb %[b], %[a]") XI(x_pcmpeqw, "pcmpeqw %[b], %[a]") XI(x_pcmpgtd, "pcmpgtd %[b], %[a]")
+XI(x_pminub, "pminub %[b], %[a]") XI(x_pmaxsw, "pmaxsw %[b], %[a]") XI(x_psadbw, "psadbw %[b], %[a]")
+XI(x_pand, "pand %[b], %[a]") XI(x_pandn, "pandn %[b], %[a]") XI(x_por, "por %[m], %[a]") XI(x_pxor, "pxor %[b], %[a]")
+XI(x_punpcklbw, "punpcklbw %[b], %[a]") XI(x_punpckhwd, "punpckhwd %[b], %[a]") XI(x_punpckldq, "punpckldq %[b], %[a]")
+XI(x_punpckhqdq, "punpckhqdq %[b], %[a]") XI(x_packsswb, "packsswb %[b], %[a]") XI(x_packuswb, "packuswb %[b], %[a]")
+XI(x_packssdw, "packssdw %[b], %[a]")
+XI(x_pshufd, "pshufd $0x1b, %[b], %[a]") XI(x_pshuflw, "pshuflw $0x93, %[b], %[a]") XI(x_pshufhw, "pshufhw $0x4e, %[m], %[a]")
+XI(x_shufps, "shufps $0xb1, %[b], %[a]") XI(x_shufpd, "shufpd $1, %[b], %[a]")
+XI(x_psllw_i, "psllw $5, %[a]") XI(x_psrad_i, "psrad $9, %[a]") XI(x_psrlq_i, "psrlq $33, %[a]")
+XI(x_pslldq_i, "pslldq $3, %[a]") XI(x_psrldq_i, "psrldq $11, %[a]")
+// shifts by an XMM count: small counts most of the time, sometimes out of range
+#define XSH(NAME, INSN) XX(NAME, vrand(), ((v2){ (long long)((rnd() & 3) ? rnd() % 70 : rnd()), 0 }), INSN)
+XSH(x_psllw_x, "psllw %[b], %[a]") XSH(x_pslld_x, "pslld %[b], %[a]") XSH(x_psllq_x, "psllq %[m], %[a]")
+XSH(x_psrlw_x, "psrlw %[b], %[a]") XSH(x_psrld_x, "psrld %[b], %[a]") XSH(x_psrlq_x, "psrlq %[b], %[a]")
+XSH(x_psraw_x, "psraw %[b], %[a]") XSH(x_psrad_x, "psrad %[m], %[a]")
+#define XF(NAME, NZ, INSN) XX(NAME, vfloat(0), vfloat(NZ), INSN)
+#define XD(NAME, NZ, INSN) XX(NAME, vdouble(0), vdouble(NZ), INSN)
+XF(x_addps, 0, "addps %[b], %[a]") XF(x_subps, 0, "subps %[m], %[a]") XF(x_mulps, 0, "mulps %[b], %[a]")
+XF(x_divps, 1, "divps %[b], %[a]") XF(x_minps, 0, "minps %[b], %[a]") XF(x_maxps, 0, "maxps %[b], %[a]")
+XF(x_cmpps_lt, 0, "cmpltps %[b], %[a]") XF(x_cmpps_neq, 0, "cmpneqps %[b], %[a]")
+XF(x_cvtps2dq, 0, "cvtps2dq %[b], %[a]") XF(x_cvttps2dq, 0, "cvttps2dq %[b], %[a]") XF(x_cvtps2pd, 0, "cvtps2pd %[b], %[a]")
+XF(x_addss, 0, "addss %[b], %[a]") XF(x_divss, 1, "divss %[m], %[a]") XF(x_cvtss2sd, 0, "cvtss2sd %[b], %[a]")
+XD(x_addpd, 0, "addpd %[b], %[a]") XD(x_mulpd, 0, "mulpd %[m], %[a]") XD(x_divpd, 1, "divpd %[b], %[a]")
+XD(x_minpd, 0, "minpd %[b], %[a]") XD(x_maxsd, 0, "maxsd %[b], %[a]") XD(x_subsd, 0, "subsd %[b], %[a]")
+XD(x_cvtpd2dq, 0, "cvtpd2dq %[b], %[a]") XD(x_cvttpd2dq, 0, "cvttpd2dq %[b], %[a]") XD(x_cvtpd2ps, 0, "cvtpd2ps %[b], %[a]")
+XD(x_cvtsd2ss, 0, "cvtsd2ss %[b], %[a]") XD(x_cmpsd_le, 0, "cmplesd %[b], %[a]")
+XI(x_cvtdq2ps, "cvtdq2ps %[b], %[a]") XI(x_cvtdq2pd, "cvtdq2pd %[b], %[a]")
+XI(x_movsd_rr, "movsd %[b], %[a]") XI(x_movss_rr, "movss %[b], %[a]") XI(x_movhlps, "movhlps %[b], %[a]")
+XI(x_movlhps, "movlhps %[b], %[a]") XI(x_movq_rr, "movq %[b], %[a]") XI(x_unpcklps, "unpcklps %[b], %[a]")
+static void x_pinsrw(void) {
+    u64 h = 14695981039346656037ull;
+    for (int i = 0; i < N; i++) {
+        v2 a = vrand(); u64 g = val(); unsigned short m16 = (unsigned short)val();
+        __asm__ volatile("pinsrw $5, %k[g], %[a]\n\tpinsrw $2, %[m], %[a]" : [a] "+x"(a) : [g] "r"(g), [m] "m"(m16));
+        h = vmix(h, a);
+    }
+    out("x_pinsrw", h);
+}
+
+// XMM -> general register: movd/movq, pmovmskb, movmskps/pd, pextrw, cvt(t)sd2si, comisd flags.
+static void x_togpr(void) {
+    u64 h = 14695981039346656037ull;
+    for (int i = 0; i < N; i++) {
+        v2 a = vrand(), d = vdouble(0), e = vdouble(0);
+        u64 r1, r2, r3, r4, r5, r6, r7, r8, f;
+        __asm__ volatile("movq %[a], %[r1]\n\tmovd %[a], %k[r2]\n\tpmovmskb %[a], %k[r3]\n\tmovmskps %[a], %k[r4]\n\t"
+                         "movmskpd %[a], %k[r5]\n\tpextrw $6, %[a], %k[r6]"
+                         : [r1] "=r"(r1), [r2] "=r"(r2), [r3] "=r"(r3), [r4] "=r"(r4), [r5] "=r"(r5), [r6] "=r"(r6) : [a] "x"(a));
+        __asm__ volatile("cvtsd2si %[d], %[r7]\n\tcvttsd2si %[d], %k[r8]" : [r7] "=r"(r7), [r8] "=r"(r8) : [d] "x"(d));
+        __asm__ volatile("comisd %[e], %[d]\n\tpushfq\n\tpopq %[f]" : [f] "=r"(f) : [d] "x"(d), [e] "x"(e) : "cc", "memory");
+        h = mix(mix(mix(mix(mix(mix(mix(mix(mix(h, r1), r2), r3), r4), r5), r6), r7), r8 & 0xffffffff), f & ARITH);
+    }
+    out("x_togpr", h);
+}
+
 typedef void (*test_fn)(void);
 #define ALU_LIST(OP) OP##_q, OP##_l, OP##_w, OP##_b, OP##_mr_q, OP##_rm_l, OP##_mr_b,
 static const test_fn kTests[] = {
@@ -272,6 +360,16 @@ static const test_fn kTests[] = {
     bsf_q, bsr_q,
     cc_o, cc_no, cc_b, cc_ae, cc_e, cc_ne, cc_be, cc_a, cc_s, cc_ns, cc_p, cc_np, cc_l, cc_ge, cc_le, cc_g,
     muldiv, misc,
+    x_paddsb, x_paddsw, x_paddusb, x_paddusw, x_psubsb, x_psubsw, x_psubusb, x_psubusw, x_pavgb, x_pavgw,
+    x_pmulhw, x_pmulhuw, x_pmaddwd, x_pmullw, x_pmuludq, x_paddb, x_paddq, x_psubd, x_pcmpgtb, x_pcmpeqw,
+    x_pcmpgtd, x_pminub, x_pmaxsw, x_psadbw, x_pand, x_pandn, x_por, x_pxor, x_punpcklbw, x_punpckhwd,
+    x_punpckldq, x_punpckhqdq, x_packsswb, x_packuswb, x_packssdw, x_pshufd, x_pshuflw, x_pshufhw, x_shufps,
+    x_shufpd, x_psllw_i, x_psrad_i, x_psrlq_i, x_pslldq_i, x_psrldq_i,
+    x_psllw_x, x_pslld_x, x_psllq_x, x_psrlw_x, x_psrld_x, x_psrlq_x, x_psraw_x, x_psrad_x,
+    x_addps, x_subps, x_mulps, x_divps, x_minps, x_maxps, x_cmpps_lt, x_cmpps_neq, x_cvtps2dq, x_cvttps2dq,
+    x_cvtps2pd, x_addss, x_divss, x_cvtss2sd, x_addpd, x_mulpd, x_divpd, x_minpd, x_maxsd, x_subsd,
+    x_cvtpd2dq, x_cvttpd2dq, x_cvtpd2ps, x_cvtsd2ss, x_cmpsd_le, x_cvtdq2ps, x_cvtdq2pd,
+    x_movsd_rr, x_movss_rr, x_movhlps, x_movlhps, x_movq_rr, x_unpcklps, x_pinsrw, x_togpr,
 };
 
 int guest_main(int argc, char **argv) {
