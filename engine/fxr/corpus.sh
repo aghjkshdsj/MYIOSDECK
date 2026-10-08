@@ -92,8 +92,19 @@ mode == 2 && /^ *[0-9a-f]+:\t/ {
         else if (pmn == "mov" && prev ~ /^mov r(32|64),m$/ && rel == " [uses dst]" && mn ~ /^(test|cmp)$/) fam = "load r ; test/cmp r"
         else if (pmn == "mov" && prev ~ /^mov r(32|64),m$/ && rel == " [same dst]" && mn ~ /^(add|sub|and|or|xor|imul)$/) fam = "load r ; ALU r (same dst)"
         else if (prev ~ /^(add|sub) r(32|64),i$/ && mn == "cmp" && rel == " [uses dst]") fam = "add/sub r,i ; cmp r (loop step)"
+        else if (prev ~ /^(inc|dec) r(32|64)$/ && mn == "cmp" && rel == " [uses dst]") fam = "inc/dec r ; cmp r (loop step)"
+        else if (prev ~ /^(add|sub) r(32|64),r(32|64)$/ && mn == "cmp" && rel == " [uses dst]") fam = "add/sub r,r ; cmp r (loop step)"
         else if (prev ~ /^movzx r32,m$/ && rel != "") fam = "movzx load ; use"
         if (fam != "") { famc[fam]++; if (inloop) lfamc[fam]++ }
+        # single-instruction forms worth a specialised handler
+        if (mn ~ /^(add|sub|mul|div|min|max|and|andn|or|xor)(ps|pd|ss|sd)$|^p(add|sub|and|or|xor|cmp)/ && shape ~ /,m$/) { famc["  SSE op with a memory operand"]++; if (inloop) lfamc["  SSE op with a memory operand"]++ }
+        if (ops ~ /\[[a-z0-9]+\+[a-z0-9]+\*[1248]/ || ops ~ /\[[a-z0-9]+\+[a-z0-9]+(\+|-|\])/) { famc["  operand with base + index"]++; if (inloop) lfamc["  operand with base + index"]++ }
+        # finer splits of the larger families
+        sub_ = ""
+        if (fam ~ /3-operand/) sub_ = (shape ~ /,i$/ || shape ~ /^(neg|not)/) ? "  3-operand: ALU/shift with an immediate" : "  3-operand: ALU with a register"
+        else if (fam ~ /loop step/) sub_ = (shape ~ /,i$/) ? "  loop step: cmp with an immediate" : "  loop step: cmp with a register"
+        else if (fam ~ /^ALU reg ; jcc/) sub_ = (prev ~ /,i$/) ? "  ALU reg ; jcc: immediate operand" : (prev ~ /^(inc|dec)/ ? "  ALU reg ; jcc: inc/dec" : "  ALU reg ; jcc: register operand")
+        if (sub_ != "") { famc[sub_]++; if (inloop) lfamc[sub_]++ }
     }
     pmn = mn
     if (mn ~ /^(j|call|ret|jmp|ud2|hlt)/) { prev = ""; prev2 = ""; next }
