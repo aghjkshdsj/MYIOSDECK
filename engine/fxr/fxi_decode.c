@@ -196,6 +196,7 @@ static int decode_sse(Dec *d, uint8_t op) {
     static const char *const arith[16][4] = {
         // 0x51..0x5F by (op - 0x50), prefixes none 66 F2 F3
         [1] = { "sqrtps", "sqrtpd", "sqrtsd", "sqrtss" },
+        [2] = { "rsqrtps", 0, 0, "rsqrtss" }, [3] = { "rcpps", 0, 0, "rcpss" },
         [4] = { "pand", "pand", 0, 0 }, [5] = { "pandn", "pandn", 0, 0 },
         [6] = { "por", "por", 0, 0 }, [7] = { "pxor", "pxor", 0, 0 },
         [8] = { "addps", "addpd", "addsd", "addss" }, [9] = { "mulps", "mulpd", "mulsd", "mulss" },

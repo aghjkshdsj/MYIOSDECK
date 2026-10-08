@@ -55,6 +55,12 @@ DEF_X(divsd, 8, D->g[0] /= S->g[0])
 DEF_X(minsd, 8, D->g[0] = D->g[0] < S->g[0] ? D->g[0] : S->g[0])
 DEF_X(maxsd, 8, D->g[0] = D->g[0] > S->g[0] ? D->g[0] : S->g[0])
 DEF_X(sqrtsd, 8, D->g[0] = sqrt(S->g[0]))
+// rcp/rsqrt: x86 promises ~12 bits and Intel and AMD differ in the low bits; FXI gives the
+// exact value (within the spec), so these are not in the exact-match difftest.
+DEF_X(rcpps, 16, LANES4(D->f[i] = 1.0f / S->f[i]))
+DEF_X(rsqrtps, 16, LANES4(D->f[i] = 1.0f / sqrtf(S->f[i])))
+DEF_X(rcpss, 4, D->f[0] = 1.0f / S->f[0])
+DEF_X(rsqrtss, 4, D->f[0] = 1.0f / sqrtf(S->f[0]))
 
 // ---- bitwise (ps/pd/integer forms are the same bits) ----
 DEF_X(pand, 16, LANES2(D->q[i] &= S->q[i]))
@@ -269,6 +275,7 @@ static const struct { const char *name; OpFn fn; } kSse[] = {
     E2(addpd), E2(subpd), E2(mulpd), E2(divpd), E2(minpd), E2(maxpd), E2(sqrtpd),
     E2(addss), E2(subss), E2(mulss), E2(divss), E2(minss), E2(maxss), E2(sqrtss),
     E2(addsd), E2(subsd), E2(mulsd), E2(divsd), E2(minsd), E2(maxsd), E2(sqrtsd),
+    E2(rcpps), E2(rsqrtps), E2(rcpss), E2(rsqrtss),
     E2(pand), E2(pandn), E2(por), E2(pxor),
     E2(paddb), E2(paddw), E2(paddd), E2(paddq), E2(psubb), E2(psubw), E2(psubd), E2(psubq),
     E2(pcmpeqb), E2(pcmpeqw), E2(pcmpeqd), E2(pcmpgtb), E2(pcmpgtw), E2(pcmpgtd),
