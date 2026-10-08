@@ -358,7 +358,7 @@ enum { PS_SHL, PS_SHR, PS_SAR, PS_ROL, PS_ROR };
 enum { XG_SI2SS32, XG_SI2SS64, XG_SI2SD32, XG_SI2SD64, XG_MOVD32, XG_MOVD64, XG_COUNT };
 enum { GX_TSS32, GX_SS32, GX_TSD32, GX_SD32, GX_TSS64, GX_SS64, GX_TSD64, GX_SD64, GX_MOVD32, GX_MOVD64,
        GX_PMOVMSKB, GX_MOVMSKPS, GX_MOVMSKPD, GX_COUNT };
-enum { FL_LD32, FL_LD64, FL_LDZ8, FL_ST8, FL_ST32, FL_ST64, FL_COUNT };   // [base + index*scale + disp] forms
+enum { FL_LD32, FL_LD64, FL_LDZ8 };   // t_ldi kinds; t_stx: 8, 32, 64-bit stores
 typedef struct { const char *name; PFn rr[9][9]; PFn rt[9]; } XOp;
 typedef struct { const char *name; PFn h[9]; } XShift;
 #define FXR_TABLES(X) \
@@ -375,7 +375,7 @@ typedef struct { const char *name; PFn h[9]; } XShift;
     X(t_xs_movss, [9][17]) X(t_xs_movsd, [9][17]) X(t_xlt_movss, [9]) X(t_xlt_movsd, [9]) X(t_xlt_movlps, [9]) \
     X(t_xlt_movhps, [9]) X(t_xst_movss, [9]) X(t_xst_movsd, [9]) X(t_xst_movhps, [9]) X(t_xst_movx, [9]) \
     X(t_xg, [XG_COUNT][9][16]) X(t_xgt, [4][9]) X(t_gx, [GX_COUNT][9][16]) \
-    X(t_ldi, [FL_COUNT][17][16][16]) X(t_ldz8s, [17][16]) \
+    X(t_ldi, [3][17][16][16]) X(t_stx, [3][17][16][16]) X(t_ldz8s, [17][16]) \
     X(t_fmi, [2][4][16][17]) X(t_fmit, [2][4][16]) X(t_fmr, [3][4][16][16]) X(t_fjs_ri, [2][2][16][16]) \
     X(t_fjs_rr, [2][2][16][16]) X(t_fjs_rrx, [2][2][16][16]) X(t_fcj, [2][16][9][9]) X(t_fcjt, [2][16][9]) \
     X(t_fai, [5][2][16][16]) X(t_fid, [2][2][4][16]) X(t_amr, [2][16][16]) X(t_alea, [17][16]) X(t_ami, [2][16]) \
@@ -433,6 +433,7 @@ FXR_TABLES(FXR_DECL_TABLE)
 #define t_xgt fxr_t_xgt
 #define t_ldi fxr_t_ldi
 #define t_ldz8s fxr_t_ldz8s
+#define t_stx fxr_t_stx
 #define t_fmi fxr_t_fmi
 #define t_fmit fxr_t_fmit
 #define t_fmr fxr_t_fmr

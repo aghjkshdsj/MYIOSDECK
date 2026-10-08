@@ -232,7 +232,7 @@ static void lower_one(Out *o, const Uop *u) {
         }
         if (fm == F_MR && S >= 0) {
             if (simple_mem(u)) { put_uop(o, u, t_st[si][u->base][S]); return; }
-            if (ea_ok(u) && si != 1) { put_uop(o, u, t_ldi[si == 0 ? FL_ST8 : si == 2 ? FL_ST32 : FL_ST64][u->base][u->index][S]); return; }
+            if (ea_ok(u) && si != 1) { put_uop(o, u, t_stx[si == 0 ? 0 : si == 2 ? 1 : 2][u->base][u->index][S]); return; }
             if (ea_ok(u)) { with_ea(o, u, t_stt[si][S]); return; }
         }
         if (fm == F_MI) {
