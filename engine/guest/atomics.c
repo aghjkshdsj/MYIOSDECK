@@ -214,8 +214,25 @@ static void t_strings(void) {
     report("lodsw", rax, rsi - (u64)str_a, 0);
 }
 
+// The CPUID-support check (Unity/Mono startup, build 81): flip EFLAGS.ID with popf and read it
+// back. FXI dropped bit 21, the check failed, and the code's untested failure path popped a
+// stack slot into EFLAGS (DF set, rep stosw ran backwards over a heap array).
+static void t_eflags_id(void) {
+    u64 before, flipped, after;
+    __asm__ volatile("pushfq\n\tpopq %[b]\n\t"
+                     "movq %[b], %%rax\n\txorq $0x200000, %%rax\n\tpushq %%rax\n\tpopfq\n\t"
+                     "pushfq\n\tpopq %[f]\n\t"
+                     "pushq %[b]\n\tpopfq\n\t"
+                     "pushfq\n\tpopq %[a]"
+                     : [b] "=&r"(before), [f] "=&r"(flipped), [a] "=&r"(after) : : "rax", "cc", "memory");
+    report("eflags ID flips", ((before ^ flipped) >> 21) & 1, (before ^ after) & 0x240400ull, 0);
+    __asm__ volatile("pushfq\n\tpopq %[b]" : [b] "=r"(before) : : "memory");
+    report("eflags DF clear", (before >> 10) & 1, 0, 0);
+}
+
 int guest_main(int argc, char **argv) {
     (void)argc; (void)argv;
+    t_eflags_id();
     t_strings();
     t_cmpxchg();
     t_xadd_xchg();

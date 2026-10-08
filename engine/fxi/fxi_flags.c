@@ -80,13 +80,14 @@ uint64_t fxi_flag_af(FxiCpu *c) {
 
 uint64_t fxi_rflags(FxiCpu *c) {
     return fxi_flag_cf(c) | 1u << 1 | fxi_flag_pf(c) << 2 | fxi_flag_af(c) << 4 | fxi_flag_zf(c) << 6 |
-           fxi_flag_sf(c) << 7 | (uint64_t)1 << 9 /* IF */ | (uint64_t)(c->df & 1) << 10 | fxi_flag_of(c) << 11;
+           fxi_flag_sf(c) << 7 | (uint64_t)1 << 9 /* IF */ | (uint64_t)(c->df & 1) << 10 | fxi_flag_of(c) << 11 | c->sysflags;
 }
 
 void fxi_set_rflags(FxiCpu *c, uint64_t f) {
     c->lf_op = LF(LF_RAW, 3);
     c->lf_cin = (uint32_t)(f & 0x8d5);   // CF PF AF ZF SF OF
     c->df = (f >> 10) & 1;
+    c->sysflags = (uint32_t)(f & 0x240000);   // ID, AC (no effect in FXI, but they read back)
 }
 
 int fxi_cond(FxiCpu *c, unsigned cc) {
