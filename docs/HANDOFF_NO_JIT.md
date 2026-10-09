@@ -190,7 +190,17 @@ sideload edition (FEX, ~90% of native) stays the full-speed option, from the sam
   name vs lookups vs entering) and names native targets through the fast-forward thunks; pinned
   forms (engine/fxr/fxr_pin_win.c) for what 118's profile showed on the slow path: inc/dec/not/neg
   of memory, 8/16-bit loads, `mov r, gs:[disp]`, one-operand mul/imul/div/idiv (difftest: inc_m_*,
-  movb_ld, muldiv_m, gs_load).
+  movb_ld, muldiv_m, gs_load). **Build 120**: heat. x64 threads start user-interactive (P-cores);
+  each second the profiler moves one that ran under 15% for 3 s to utility QoS (E-cores) and
+  brings back the busiest and any at 35%+ (fxi_win_host.c qos_update/qos_apply; the thread sets its
+  own class on its next entry to x64; MYIOSDECK_ECORES=0 off); the profiler thread itself runs at
+  utility. iOS offers only QoS hints, no core pinning; native-only threads keep their class.
+- **32-bit games without JIT**: not possible yet. Madeira runs them with JIT through WoW64
+  (docs/WOW64.md in Madeira: native aarch64 wow64.dll, FEX's xtajit.dll, every 32-bit process in a
+  4 GB guest window at host base B because XNU's hard 4 GB __PAGEZERO forbids low mappings). Our
+  IPA ships neither the i386 farm nor the aarch64 WoW64 side. Needed: those bundles (signed dylibs
+  for the aarch64 DLLs), a BTCpu* module in place of xtajit.dll, and an i386 mode in the
+  interpreter with every guest address at B + zext32(ea).
 - **Build 74 result (iPhone 15 Pro Max, JIT off)**: FXR 11.6% of native vs FXI 8.7% = **1.33x**
   (integer 20.3% vs 10.9%, float 9.9/8.3, memory 10.9/9.1, branch 8.5/8.5, simd 8.4/7.0), all
   checksums match. Branch-heavy code gains nothing yet (the indirect/jcc paths go through p_slow

@@ -333,6 +333,26 @@ static uint8_t *fault_thread_area(mach_port_t thread) {
     return NULL;
 }
 
+// ---- Performance or efficiency cores (build 120) ----
+// iOS decides which core a thread runs on; its QoS class is the hint: user-interactive threads
+// stay on the performance cores, utility ones go to the efficiency cores, which do the same work
+// for a fraction of the energy and heat (build 118: Stick Fight's P-cores throttled from 3.7 to
+// 2.0 GHz within three minutes, its frame rate with them). Every x64 thread starts
+// user-interactive (build 88: an interpreted thread on an efficiency core runs at about half
+// speed). Once a second the profiler thread looks at how much of it each x64 thread ran (in x64
+// or native code): the busiest one (the game's main loop) and any that ran QOS_HIGH_PCT or more
+// stay on, or come back to, the performance cores at once; one that ran under QOS_LOW_PCT for
+// QOS_LOW_SECS seconds in a row moves to the efficiency cores. The thread switches its own class
+// the next time it enters x64 code (pthread_set_qos_class_self_np acts on the calling thread
+// only); it finds its slot in its CPU area's EmulatorData[1] (+0x38; [0] holds the CPU).
+// Threads that never run x64 code (Wine's, DXMT's, the audio engine's) keep their class.
+// MYIOSDECK_ECORES=0 keeps every x64 thread on the performance cores.
+#define QOS_HIGH_PCT 35
+#define QOS_LOW_PCT 15
+#define QOS_LOW_SECS 3
+static struct { uint32_t run; uint8_t low_secs, want_e, have_e, alive; } g_qos[FAULT_THREADS];
+static int g_qos_on = 1;
+
 static void fault_thread_register(uint8_t *area, uint8_t *teb, FxiCpu *cpu) {
     mach_port_t self = mach_thread_self();
     int slot = -1;
@@ -347,7 +367,48 @@ static void fault_thread_register(uint8_t *area, uint8_t *teb, FxiCpu *cpu) {
     g_fault_threads[slot].area = area;
     g_fault_threads[slot].teb = teb;
     g_fault_threads[slot].cpu = cpu;
+    g_qos[slot].run = 0; g_qos[slot].low_secs = 0; g_qos[slot].want_e = 0; g_qos[slot].have_e = 0;
+    *(uint64_t *)(area + 0x38) = (uint64_t)slot + 1;   // EmulatorData[1]: this thread's slot (qos_apply)
     __atomic_store_n(&g_fault_threads[slot].thread, self, __ATOMIC_RELEASE);
+}
+
+// The calling thread, entering x64 code: the class the profiler chose for it.
+static void qos_apply(void) {
+    uint8_t *area = cpu_area_now();
+    uint64_t s = area ? *(uint64_t *)(area + 0x38) : 0;
+    if (!s || s > FAULT_THREADS) return;
+    int i = (int)s - 1;
+    uint8_t w = __atomic_load_n(&g_qos[i].want_e, __ATOMIC_RELAXED);
+    if (__builtin_expect(w == g_qos[i].have_e, 1)) return;
+    g_qos[i].have_e = w;
+    pthread_set_qos_class_self_np(w ? QOS_CLASS_UTILITY : QOS_CLASS_USER_INTERACTIVE, 0);
+}
+
+// Once a second, on the profiler thread (run: the samples that found the thread running).
+static void qos_update(uint32_t samples) {
+    int busiest = -1;
+    uint32_t most = 0;
+    for (int i = 0; i < FAULT_THREADS; i++)
+        if (g_fault_threads[i].thread && g_qos[i].run > most) { most = g_qos[i].run; busiest = i; }
+    static int logged;
+    for (int i = 0; i < FAULT_THREADS; i++) {
+        if (!g_fault_threads[i].thread || !g_qos[i].alive) continue;   // gone (its slot stays)
+        g_qos[i].alive = 0;
+        unsigned pct = samples ? (unsigned)(100ull * g_qos[i].run / samples) : 100;
+        uint8_t want = g_qos[i].want_e;
+        if (!g_qos_on || i == busiest || pct >= QOS_HIGH_PCT) { want = 0; g_qos[i].low_secs = 0; }
+        else if (pct < QOS_LOW_PCT) { if (g_qos[i].low_secs < 255) g_qos[i].low_secs++; if (g_qos[i].low_secs >= QOS_LOW_SECS) want = 1; }
+        else g_qos[i].low_secs = 0;
+        if (want != g_qos[i].want_e) {
+            __atomic_store_n(&g_qos[i].want_e, want, __ATOMIC_RELAXED);
+            if (logged < 64) {
+                logged++;
+                mid_log("[fxi-win] thread TEB %p to the %s cores (it ran %u%% of the last second)", (void *)g_fault_threads[i].teb,
+                        want ? "efficiency" : "performance", pct);
+            }
+        }
+        g_qos[i].run = 0;
+    }
 }
 
 // ---- Sampling profiler (build 87) ----
@@ -554,11 +615,12 @@ static void prof_report(uint64_t period_samples) {
         uint64_t lk = 0, ex = 0;
         if (c) g_cpu->profile(c, &lk, &ex, &blocks);
         mid_log("[fxi-prof]   thread TEB %p: running %.0f%% of the time, x64 %.0f%% / native %.0f%%, "
-                "%llu lookups/s, %llu native calls/s", (void *)g_fault_threads[best].teb,
+                "%llu lookups/s, %llu native calls/s, %s cores", (void *)g_fault_threads[best].teb,
                 100.0 * bestn / (double)period_samples, 100.0 * g_prof_thr[best].x64 / (double)bestn,
                 100.0 * g_prof_thr[best].native / (double)bestn,
                 (unsigned long long)((lk - g_prof_thr[best].last_lookups) / PROF_PERIOD_S),
-                (unsigned long long)((ex - g_prof_thr[best].last_exits) / PROF_PERIOD_S));
+                (unsigned long long)((ex - g_prof_thr[best].last_exits) / PROF_PERIOD_S),
+                g_qos[best].have_e ? "efficiency" : "performance");
         if (c && g_cpu->counters) {   // FXR: its x64 time by where it goes, and its counters per second
             uint64_t k[4], *w = g_prof_thr[best].ws, *l = g_prof_thr[best].last_cnt;
             g_cpu->counters(c, k);
@@ -670,6 +732,9 @@ static void prof_report(uint64_t period_samples) {
 
 static void *prof_thread(void *arg) {
     (void)arg;
+    // A diagnostic that wakes 500 times a second: efficiency cores (it was created by a game
+    // thread and inherited user-interactive).
+    pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
     uint64_t ticks = 0;
     for (;;) {
         struct timespec ts = { 0, 1000000000 / PROF_HZ };
@@ -679,8 +744,10 @@ static void *prof_thread(void *arg) {
             if (!t) continue;
             thread_basic_info_data_t bi;
             mach_msg_type_number_t cnt = THREAD_BASIC_INFO_COUNT;
-            if (thread_info(t, THREAD_BASIC_INFO, (thread_info_t)&bi, &cnt) != KERN_SUCCESS || bi.run_state != TH_STATE_RUNNING)
-                continue;
+            if (thread_info(t, THREAD_BASIC_INFO, (thread_info_t)&bi, &cnt) != KERN_SUCCESS) continue;
+            g_qos[i].alive = 1;
+            if (bi.run_state != TH_STATE_RUNNING) continue;
+            g_qos[i].run++;   // running, x64 or native: how busy it is (qos_update)
             // The thread may have exited and Wine freed its CPU area (build 87 crashed here
             // reading it directly): read InSimulation through vm_read_overwrite.
             FxiCpu *c = g_fault_threads[i].cpu;
@@ -717,7 +784,9 @@ static void *prof_thread(void *arg) {
                 if (!g_prof_hits[h].n) { g_prof_hits[h].rip = rip; g_prof_hits[h].n = 1; break; }
             }
         }
-        if (++ticks % (PROF_HZ * PROF_PERIOD_S) == 0) prof_report(PROF_HZ * PROF_PERIOD_S);
+        ++ticks;
+        if (ticks % PROF_HZ == 0) qos_update(PROF_HZ);
+        if (ticks % (PROF_HZ * PROF_PERIOD_S) == 0) prof_report(PROF_HZ * PROF_PERIOD_S);
     }
     return NULL;
 }
@@ -804,10 +873,11 @@ static long host_thread_init(void) {
         g_cpu->set_teb(*slot, (uint64_t)(uintptr_t)teb);
     }
     fault_thread_register(area, teb, *slot);
-    // Game threads at user-interactive QoS: the scheduler keeps them on the performance cores.
+    // Game threads start at user-interactive QoS: the scheduler keeps them on the performance cores.
     // Build 88's log had the busiest thread (Stick Fight's audio) spending 113 of 249 ms on an
     // efficiency core, at about half the speed; one interpreted thread cannot use more than one
-    // core, so it should at least be a fast one.
+    // core, so a busy one should at least be a fast one. Quiet ones move to the efficiency cores
+    // later (qos_update).
     pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
     static pthread_once_t prof_once = PTHREAD_ONCE_INIT;
     pthread_once(&prof_once, prof_start);
@@ -839,6 +909,8 @@ void *mid_fxi_win_host_table(int tsd_offset) {
     mid_log("[fxi-win] x64 CPU: %s", g_cpu->name);
     const char *nat = getenv("MYIOSDECK_FXR_NATIVE");
     if (g_cpu->set_native && !(nat && !strcmp(nat, "0"))) g_cpu->set_native(host_native_kind);
+    const char *ecores = getenv("MYIOSDECK_ECORES");
+    g_qos_on = !(ecores && !strcmp(ecores, "0"));
     return &table;
 }
 
@@ -861,6 +933,7 @@ uint64_t fxi_win_glue_run(FxiCpu *c) {
         announced = 1;
         mid_log("[fxi-win] first x64 code at %#llx", (unsigned long long)g_cpu->rip(c));
     }
+    qos_apply();
     uint64_t target = g_cpu->run(c);
     if (!target) {
         fxi_win_exc e;
