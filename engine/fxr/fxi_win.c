@@ -43,13 +43,19 @@ int fxi_win_is_ec(FxiCpu *c, uint64_t rip) {
     return (int)((ld64(bitmap + ((rip >> 18) << 3)) >> ((rip >> 12) & 63)) & 1);
 }
 
+// FXR: the host's answer for a native target: a function FXR runs itself (fxr_pin.c, p_nat_*)
+static int (*g_native_kind)(uint64_t target);                                 // FXR
+void fxi_win_set_native(int (*kind)(uint64_t target)) { g_native_kind = kind; }   // FXR
+
 Block *fxi_win_exit_block(uint64_t rip) {
     Block *b = calloc(1, sizeof(Block) + sizeof(Uop));
     b->rip = rip;
     b->n = 1;
     b->u[0].fn = fxi_named("ec_exit");
     b->u[0].imm = rip;
+    b->u[0].rip = rip;  // FXR: a fault in a native function FXR runs itself is reported here
     fxr_init_slow(b);   // FXR: its handlers run uops through u->p (here: FXI's handler, the state spilled)
+    if (g_native_kind) fxr_init_native(b, g_native_kind(rip));   // FXR: TlsGetValue, critical sections
     return b;
 }
 
@@ -84,6 +90,7 @@ static Block *entry_block(FxiCpu *c, uint64_t rip) {
     // the block's first uop, fxr_pin.h IBTC): returns from native calls come back to the same rips
     __typeof__(c->fxr_ibtc[0]) *e = &c->fxr_ibtc[(rip ^ (rip >> 10)) & 1023u];                       // FXR
     if (c->fxr_ready && e->rip == rip && e->u) return (Block *)(void *)((char *)e->u - offsetof(Block, u));   // FXR
+    c->n_entry_miss++;                                                                                // FXR
     Block *b = fxi_lookup(c, rip);                                                                    // FXR
     if (c->fxr_ready && b != fxi_stop) { e->rip = rip; e->u = b->u; }                                 // FXR
     return b;                                                                                         // FXR
@@ -92,6 +99,7 @@ static Block *entry_block(FxiCpu *c, uint64_t rip) {
 uint64_t fxi_win_run(FxiCpu *c) {
     c->stop = 0;
     c->cur = NULL;
+    c->fxr_phase = FXR_PH_ENTER;   // FXR: the profiler (fxi_win_sample)
     if (c->err) c->err[0] = 0;
     Block *b = entry_block(c, c->rip);
     if (!c->stop) fxr_enter(c, b);   // FXR (Windows mode: experimental; fault state, fxr_win_host_state)
@@ -130,6 +138,12 @@ uint64_t fxi_win_profile(FxiCpu *c, uint64_t *lookups, uint64_t *exits, uint64_t
     *lookups = c->n_lookups; *exits = c->n_exits; *blocks = c->vm->blocks;
     return u ? u->rip : c->rip;
 }
+
+// FXR profiler counters: uops run by FXI's handlers (exits included), indirect-branch cache misses,
+// entries from native code that missed it, native calls FXR ran itself.
+void fxi_win_counters(FxiCpu *c, uint64_t out[4]) {                                    // FXR
+    out[0] = c->n_slow; out[1] = c->n_ibtc_miss; out[2] = c->n_entry_miss; out[3] = c->n_native;   // FXR
+}                                                                                      // FXR
 
 // Profiler: calls into native code per target since the last call (counts are reset).
 int fxi_win_exit_counts(FxiCpu *c, uint64_t *targets, uint64_t *counts, int max) {

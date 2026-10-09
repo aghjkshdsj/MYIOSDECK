@@ -108,7 +108,14 @@ struct FxiCpu {
     // block, direct-mapped. Returns, indirect jumps and calls look here before the block table.
     int fxr_ready;
     struct { uint64_t rip; struct Uop *u; } fxr_ibtc[1024];
+    // FXR: for the Windows profiler (fxi_win_sample, fxi_win_counters): what the thread does
+    // outside the pinned handlers (FXR_PH_*; they never write it), and counters: uops run by FXI's
+    // handlers (p_slow, exits included), indirect-branch cache misses, entries from native code
+    // that missed it, calls into native functions FXR ran itself (fxr_pin.c, p_nat_*)
+    uint32_t fxr_phase;
+    uint64_t n_slow, n_ibtc_miss, n_entry_miss, n_native;
 };
+enum { FXR_PH_RUN, FXR_PH_SLOW, FXR_PH_LOOKUP, FXR_PH_ENTER };   // FXR: FxiCpu.fxr_phase
 
 // One decoded instruction (or fused pair). FXR: 80 bytes.
 #define FXR_NOBOUND 4      // FXR: Uop.fdir bit
@@ -220,6 +227,7 @@ void fxr_profile_dump(struct Fxi *vm);          // FXR diagnostic build: the hot
 #endif
 void fxr_init_stop(Block *b);                   // FXR: the stop block's pinned handler
 void fxr_init_slow(Block *b);                   // FXR: every uop of a block built outside the lowering runs FXI's handler (p_slow)
+void fxr_init_native(Block *b, int kind);       // FXR: an exit block whose native function FXR runs itself (fxr_pin.c, p_nat_*)
 #define FXI_GOTO_BLOCK(c, b) do { Block *fxi_gb_ = (b); __attribute__((musttail)) return fxi_gb_->u[0].fn((c), fxi_gb_->u); } while (0)
 
 extern Block *fxi_stop;                         // one "stop" uop: leaves the dispatch chain

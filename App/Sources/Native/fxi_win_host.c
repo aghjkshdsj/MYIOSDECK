@@ -64,7 +64,14 @@ typedef struct {
     // FXR: the x64 state from the host registers of the thread (x0-x30, sp, pc, q0-q7), at a fault
     // (fault = 1) or a stop; 1 = exact (the CPU loaded). NULL for FXI: its state is in memory.
     int (*host_state)(void *c, const uint64_t *x31, uint64_t sp, uint64_t *pc, const void *q, int fault, uint64_t *rip);
+    // FXR (NULL for FXI): the native functions it runs itself (named by the host), and the
+    // profiler's view of a stopped thread (WS_* below), its counters and FXI handler names.
+    void (*set_native)(int (*kind)(uint64_t target));
+    int (*sample)(void *c, uint64_t pc, uint64_t x21, int (*rd)(uint64_t, void *, size_t), uint64_t *rip, const void **fn);
+    void (*counters)(void *c, uint64_t out[4]);
+    const char *(*op_name)(const void *fn, char *buf, size_t n);
 } win_cpu;
+enum { WS_UNKNOWN, WS_PINNED, WS_SLOW, WS_LOOKUP, WS_ENTER, WS_COUNT };   // engine/fxr/fxi.h FXR_WS_*
 
 static void *fxi_cpu_new(void) { return fxi_win_cpu_new(); }
 static uint64_t fxi_run(void *c) { return fxi_win_run(c); }
@@ -81,7 +88,7 @@ static uint64_t fxi_profile(void *c, uint64_t *l, uint64_t *e, uint64_t *b) { re
 static int fxi_exit_counts(void *c, uint64_t *t, uint64_t *n, int max) { return fxi_win_exit_counts(c, t, n, max); }
 static const win_cpu k_fxi = { "FXI", fxi_cpu_new, fxi_run, fxi_error, fxi_set_teb, fxi_rip, fxi_load_context,
                                fxi_save_context, fxi_exception, fxi_fault_rip, fxi_trail, fxi_df_source, fxi_profile,
-                               fxi_exit_counts, NULL };
+                               fxi_exit_counts, NULL, NULL, NULL, NULL, NULL };
 
 // fxr_win_shim.c
 void *mid_fxr_win_cpu_new(void);
@@ -98,10 +105,15 @@ int mid_fxr_win_df_source(void *c, uint64_t *rip);
 uint64_t mid_fxr_win_profile(void *c, uint64_t *lookups, uint64_t *exits, uint64_t *blocks);
 int mid_fxr_win_exit_counts(void *c, uint64_t *targets, uint64_t *counts, int max);
 int mid_fxr_win_host_state(void *c, const uint64_t *x31, uint64_t sp, uint64_t *pc, const void *q, int fault, uint64_t *rip);
+void mid_fxr_win_set_native(int (*kind)(uint64_t target));
+int mid_fxr_win_sample(void *c, uint64_t pc, uint64_t x21, int (*rd)(uint64_t, void *, size_t), uint64_t *rip, const void **fn);
+void mid_fxr_win_counters(void *c, uint64_t out[4]);
+const char *mid_fxr_win_op_name(const void *fn, char *buf, size_t n);
 static const win_cpu k_fxr = { "FXR", mid_fxr_win_cpu_new, mid_fxr_win_run, mid_fxr_win_error, mid_fxr_win_set_teb,
                                mid_fxr_win_rip, mid_fxr_win_load_context, mid_fxr_win_save_context,
                                mid_fxr_win_exception, mid_fxr_win_fault_rip, mid_fxr_win_trail, mid_fxr_win_df_source,
-                               mid_fxr_win_profile, mid_fxr_win_exit_counts, mid_fxr_win_host_state };
+                               mid_fxr_win_profile, mid_fxr_win_exit_counts, mid_fxr_win_host_state,
+                               mid_fxr_win_set_native, mid_fxr_win_sample, mid_fxr_win_counters, mid_fxr_win_op_name };
 static const win_cpu *g_cpu = &k_fxi;
 
 static uint8_t *teb_now(void) {
@@ -346,17 +358,26 @@ static void fault_thread_register(uint8_t *area, uint8_t *teb, FxiCpu *cpu) {
 // block lookups and calls into native code per second, x64 time per module (from the PEB's
 // loader list; Mono's generated code is outside every module) and the hottest instructions.
 // Sampling is racy by design and costs the game nothing (one Mach call per running thread).
+// FXR (build 119): FXR keeps no "last instruction" while its pinned handlers run, so a sample
+// reads the thread's pc and x21 (thread_get_state stops it for a moment): a pinned handler's pc
+// means guest code at full speed, x21 its uop and so the exact x64 instruction; elsewhere FXR's
+// phase says FXI's handler for an instruction (slow path, named), a block lookup, or the way in
+// from native code. The report splits each thread's x64 time that way and names the FXI
+// handlers that take the most, the instructions most worth a pinned form.
 #define PROF_HZ 500
 #define PROF_PERIOD_S 10
 #define PROF_SLOTS 16384
 typedef struct { uint64_t rip, n; } prof_hit;
-static prof_hit g_prof_hits[PROF_SLOTS];
-static struct { uint64_t x64, native, last_lookups, last_exits; } g_prof_thr[FAULT_THREADS];
+static prof_hit g_prof_hits[PROF_SLOTS];   // rip | where << 56 (FXR: WS_*)
+static prof_hit g_prof_fns[512];           // FXR: FXI handler -> samples in it
+static struct { uint64_t x64, native, last_lookups, last_exits, ws[WS_COUNT], last_cnt[4]; } g_prof_thr[FAULT_THREADS];
+static int prof_rd(uint64_t a, void *out, size_t n);
 
 static int vmr(uint64_t a, void *out, size_t n) {
     vm_size_t got = 0;
     return vm_read_overwrite(mach_task_self(), (vm_address_t)a, n, (vm_address_t)out, &got) == KERN_SUCCESS && got == n;
 }
+static int prof_rd(uint64_t a, void *out, size_t n) { return vmr(a, out, n); }
 
 typedef struct { uint64_t base, size, x64; char name[48]; } prof_mod;
 // The process's modules, from PEB->Ldr->InLoadOrderModuleList (read without faulting).
@@ -382,8 +403,16 @@ static int prof_modules(uint8_t *teb, prof_mod *m, int max) {
     return n;
 }
 
-// The export of a module closest below addr ("name+0x10"), from its PE export directory.
+static uint64_t ffs_target(uint64_t a);
+static int read_name(uint64_t a, char *s, size_t n);
+// The export of a module whose x64 fast-forward thunk leads to addr (Wine's ARM64EC DLLs: the
+// export is the thunk, addr its native code), else the export closest below addr ("name+0x10"),
+// from its PE export directory. Names found are kept (the scan reads every export).
 static void prof_export_name(const prof_mod *m, uint64_t addr, char *out, size_t outsz) {
+    static struct { uint64_t addr; char name[96]; } cache[64];
+    static unsigned cache_n;
+    for (unsigned i = 0; i < cache_n && i < 64; i++)
+        if (cache[i].addr == addr) { snprintf(out, outsz, "%s", cache[i].name); return; }
     snprintf(out, outsz, "?");
     uint32_t lfanew, dir_rva, nnames, funcs_rva, names_rva, ords_rva;
     uint64_t b = m->base;
@@ -394,18 +423,104 @@ static void prof_export_name(const prof_mod *m, uint64_t addr, char *out, size_t
         !vmr(b + dir_rva + 0x20, &names_rva, 4) || !vmr(b + dir_rva + 0x24, &ords_rva, 4) || nnames > 20000) {
         snprintf(out, outsz, "?tab"); return;
     }
-    uint32_t rva = (uint32_t)(addr - b), best_rva = 0, best_name = 0;
-    for (uint32_t i = 0; i < nnames; i++) {
+    uint32_t rva = (uint32_t)(addr - b), best_rva = 0, best_name = 0, thunk_name = 0;
+    for (uint32_t i = 0; i < nnames && !thunk_name; i++) {
         uint16_t ord; uint32_t f, nm;
         if (!vmr(b + ords_rva + 2ull * i, &ord, 2) || !vmr(b + funcs_rva + 4ull * ord, &f, 4)) { snprintf(out, outsz, "?ord"); return; }
+        if (f != rva && ffs_target(b + f) == addr && vmr(b + names_rva + 4ull * i, &nm, 4)) thunk_name = nm;
         if (f <= rva && f >= best_rva && vmr(b + names_rva + 4ull * i, &nm, 4)) { best_rva = f; best_name = nm; }
     }
+    if (thunk_name) { best_name = thunk_name; best_rva = rva; }
     if (!best_name) { snprintf(out, outsz, "?below(%u names)", nnames); return; }
     char name[64] = { 0 };
-    if (!vmr(b + best_name, name, sizeof name - 1)) { snprintf(out, outsz, "?str"); return; }
-    name[sizeof name - 1] = 0;
+    if (!read_name(b + best_name, name, sizeof name)) { snprintf(out, outsz, "?str"); return; }
     if (rva == best_rva) snprintf(out, outsz, "%s", name);
     else snprintf(out, outsz, "%s+%#x", name, rva - best_rva);
+    cache[cache_n % 64].addr = addr;
+    snprintf(cache[cache_n % 64].name, sizeof cache[0].name, "%s", out);
+    cache_n++;
+}
+
+// ---- Native functions FXR runs itself (build 119) ----
+// Mono's hottest calls into Wine are TlsGetValue and Enter/LeaveCriticalSection (Stick Fight,
+// build 118: 2.8 M a second on the main thread, each a full transition to native code and back).
+// FXR runs Wine's code paths for them itself (engine/fxr/fxr_pin.c, p_nat_*) once this names the
+// native target of an exit block: the ARM64EC code an export's x64 fast-forward thunk jumps to,
+// found through the export table of the PE image the target lies in (Wine's DLLs are mapped from
+// the signed dylibs, where dladdr gives the image's start: symbol myiosdeck_pe_image).
+// MYIOSDECK_FXR_NATIVE=0 turns it off.
+static const struct { const char *name; int kind; } k_native[] = {
+    { "TlsGetValue", 1 }, { "RtlEnterCriticalSection", 2 }, { "RtlLeaveCriticalSection", 3 },
+};
+#define N_NATIVE (sizeof k_native / sizeof k_native[0])
+static uint64_t g_native_addr[N_NATIVE];
+static uint64_t g_native_pe[128];   // images already searched (FXR calls in under its translation lock)
+static int g_native_npe;
+
+// An export's code: where its x64 fast-forward thunk (mov rax, rsp; mov [rax+0x20], rbx; push rbp;
+// pop rbp; jmp rel32) leads, or the export itself.
+static uint64_t ffs_target(uint64_t a) {
+    static const uint8_t k_ffs[10] = { 0x48, 0x8b, 0xc4, 0x48, 0x89, 0x58, 0x20, 0x55, 0x5d, 0xe9 };
+    uint8_t k[14];
+    if (!vmr(a, k, sizeof k) || memcmp(k, k_ffs, sizeof k_ffs)) return a;
+    int32_t rel;
+    memcpy(&rel, k + 10, 4);
+    return a + 14 + (uint64_t)(int64_t)rel;
+}
+static int read_name(uint64_t a, char *s, size_t n) {   // a NUL-terminated name, cut at n - 1
+    for (size_t len = n - 1; len >= 8; len /= 2)
+        if (vmr(a, s, len)) { s[len] = 0; return 1; }
+    return 0;
+}
+// The code export `want` of the PE32+ image at base leads to (binary search: Wine sorts the names);
+// 0 when it has no such export or forwards it.
+static uint64_t pe_export_code(uint64_t base, const char *want) {
+    uint16_t mz, magic;
+    uint32_t lfanew, sig, dir_rva, dir_size, nnames, funcs_rva, names_rva, ords_rva;
+    if (!vmr(base, &mz, 2) || mz != 0x5a4d || !vmr(base + 0x3c, &lfanew, 4) || lfanew > 0x1000 ||
+        !vmr(base + lfanew, &sig, 4) || sig != 0x4550 || !vmr(base + lfanew + 24, &magic, 2) || magic != 0x20b ||
+        !vmr(base + lfanew + 24 + 112, &dir_rva, 4) || !vmr(base + lfanew + 24 + 116, &dir_size, 4) || !dir_rva)
+        return 0;
+    uint64_t d = base + dir_rva;
+    if (!vmr(d + 0x18, &nnames, 4) || !vmr(d + 0x1c, &funcs_rva, 4) || !vmr(d + 0x20, &names_rva, 4) ||
+        !vmr(d + 0x24, &ords_rva, 4) || nnames > 65536)
+        return 0;
+    uint32_t lo = 0, hi = nnames;
+    while (lo < hi) {
+        uint32_t mid = lo + (hi - lo) / 2, nm, f;
+        uint16_t ord;
+        char s[48];
+        if (!vmr(base + names_rva + 4ull * mid, &nm, 4) || !read_name(base + nm, s, sizeof s)) return 0;
+        int cmp = strcmp(s, want);
+        if (cmp < 0) { lo = mid + 1; continue; }
+        if (cmp > 0) { hi = mid; continue; }
+        if (!vmr(base + ords_rva + 2ull * mid, &ord, 2) || !vmr(base + funcs_rva + 4ull * ord, &f, 4)) return 0;
+        if (f >= dir_rva && f < dir_rva + dir_size) return 0;   // a forwarder
+        return ffs_target(base + f);
+    }
+    return 0;
+}
+static int host_native_kind(uint64_t target) {
+    Dl_info di;
+    if (dladdr((const void *)(uintptr_t)target, &di) && di.dli_sname && !strcmp(di.dli_sname, "myiosdeck_pe_image")) {
+        uint64_t base = (uint64_t)(uintptr_t)di.dli_saddr;
+        int seen = 0;
+        for (int i = 0; i < g_native_npe && !seen; i++) seen = g_native_pe[i] == base;
+        if (!seen && g_native_npe < 128) {
+            g_native_pe[g_native_npe++] = base;
+            for (size_t k = 0; k < N_NATIVE; k++) {
+                if (g_native_addr[k]) continue;
+                uint64_t a = pe_export_code(base, k_native[k].name);
+                if (!a) continue;
+                g_native_addr[k] = a;
+                mid_log("[fxi-win] FXR runs %s itself (its ARM64EC code at %#llx is not entered)", k_native[k].name,
+                        (unsigned long long)a);
+            }
+        }
+    }
+    for (size_t k = 0; k < N_NATIVE; k++)
+        if (g_native_addr[k] == target) return k_native[k].kind;
+    return 0;
 }
 
 static int prof_cmp_hit(const void *a, const void *b) {
@@ -444,23 +559,38 @@ static void prof_report(uint64_t period_samples) {
                 100.0 * g_prof_thr[best].native / (double)bestn,
                 (unsigned long long)((lk - g_prof_thr[best].last_lookups) / PROF_PERIOD_S),
                 (unsigned long long)((ex - g_prof_thr[best].last_exits) / PROF_PERIOD_S));
+        if (c && g_cpu->counters) {   // FXR: its x64 time by where it goes, and its counters per second
+            uint64_t k[4], *w = g_prof_thr[best].ws, *l = g_prof_thr[best].last_cnt;
+            g_cpu->counters(c, k);
+            double x = g_prof_thr[best].x64 ? (double)g_prof_thr[best].x64 : 1.0;
+            mid_log("[fxi-prof]     FXR x64 time: pinned handlers %.0f%%, FXI handlers (slow path) %.0f%%, block lookups "
+                    "%.0f%%, entering from native %.0f%%, unknown %.0f%% | per second: %llu uops by FXI handlers, %llu "
+                    "indirect-branch cache misses, %llu entries that missed it, %llu native calls run by FXR",
+                    100.0 * w[WS_PINNED] / x, 100.0 * w[WS_SLOW] / x, 100.0 * w[WS_LOOKUP] / x, 100.0 * w[WS_ENTER] / x,
+                    100.0 * w[WS_UNKNOWN] / x, (unsigned long long)((k[0] - l[0]) / PROF_PERIOD_S),
+                    (unsigned long long)((k[1] - l[1]) / PROF_PERIOD_S), (unsigned long long)((k[2] - l[2]) / PROF_PERIOD_S),
+                    (unsigned long long)((k[3] - l[3]) / PROF_PERIOD_S));
+        }
         g_prof_thr[best].x64 = g_prof_thr[best].native = 0;   // shown: do not pick it again
     }
     for (int i = 0; i < FAULT_THREADS; i++) {                 // counters for the next period
         if (!g_fault_threads[i].thread) continue;
         FxiCpu *c = g_fault_threads[i].cpu;
         if (c) g_cpu->profile(c, &g_prof_thr[i].last_lookups, &g_prof_thr[i].last_exits, &blocks);
+        if (c && g_cpu->counters) g_cpu->counters(c, g_prof_thr[i].last_cnt);
         g_prof_thr[i].x64 = g_prof_thr[i].native = 0;
+        memset(g_prof_thr[i].ws, 0, sizeof g_prof_thr[i].ws);
     }
     // x64 time per module, then the hottest instructions.
     int nm = teb ? prof_modules(teb, mods, 256) : 0;
     int nh = 0; uint64_t other = 0;
+    const uint64_t rip_mask = (1ull << 56) - 1;   // FXR: the top byte says where (WS_*)
     for (int i = 0; i < PROF_SLOTS; i++) {
         if (!g_prof_hits[i].n) continue;
         sorted[nh++] = g_prof_hits[i];
         int found = 0;
         for (int k = 0; k < nm; k++)
-            if (g_prof_hits[i].rip - mods[k].base < mods[k].size) { mods[k].x64 += g_prof_hits[i].n; found = 1; break; }
+            if ((g_prof_hits[i].rip & rip_mask) - mods[k].base < mods[k].size) { mods[k].x64 += g_prof_hits[i].n; found = 1; break; }
         if (!found) other += g_prof_hits[i].n;
     }
     memset(g_prof_hits, 0, sizeof g_prof_hits);
@@ -478,14 +608,30 @@ static void prof_report(uint64_t period_samples) {
     mid_log("[fxi-prof]   x64 time by module: %s%s(no module: generated/JIT code) %.1f%%", line, o ? ", " : "",
             100.0 * other / (double)x64);
     qsort(sorted, (size_t)nh, sizeof sorted[0], prof_cmp_hit);
-    for (int i = 0; i < nh && i < 16; i++) {
-        const char *mod = "(generated)"; uint64_t off = sorted[i].rip;
+    static const char *const ws_tag[WS_COUNT] = { "", "", " [FXI handler]", " [block lookup]", " [entering]" };
+    for (int i = 0; i < nh && i < (g_cpu->sample ? 24 : 16); i++) {
+        uint64_t rip = sorted[i].rip & rip_mask;
+        unsigned ws = (unsigned)(sorted[i].rip >> 56) % WS_COUNT;
+        const char *mod = "(generated)"; uint64_t off = rip;
         for (int k = 0; k < nm; k++)
-            if (sorted[i].rip - mods[k].base < mods[k].size) { mod = mods[k].name; off = sorted[i].rip - mods[k].base; break; }
+            if (rip - mods[k].base < mods[k].size) { mod = mods[k].name; off = rip - mods[k].base; break; }
         uint8_t code[16]; char hex[49] = "?";
-        if (vmr(sorted[i].rip, code, 16)) for (int b = 0; b < 16; b++) snprintf(hex + 3 * b, 4, "%02x ", code[b]);
-        mid_log("[fxi-prof]   hot %2d: %5.2f%% %s+%#llx (%#llx): %s", i + 1, 100.0 * sorted[i].n / (double)x64, mod,
-                (unsigned long long)off, (unsigned long long)sorted[i].rip, hex);
+        if (vmr(rip, code, 16)) for (int b = 0; b < 16; b++) snprintf(hex + 3 * b, 4, "%02x ", code[b]);
+        mid_log("[fxi-prof]   hot %2d: %5.2f%% %s+%#llx (%#llx)%s: %s", i + 1, 100.0 * sorted[i].n / (double)x64, mod,
+                (unsigned long long)off, (unsigned long long)rip, ws_tag[ws], hex);
+    }
+    if (g_cpu->op_name) {   // FXR: the FXI handlers (slow path) that took the most x64 time
+        static prof_hit fns[512];
+        memcpy(fns, g_prof_fns, sizeof fns);
+        memset(g_prof_fns, 0, sizeof g_prof_fns);
+        qsort(fns, 512, sizeof fns[0], prof_cmp_hit);
+        char line2[640]; int o2 = 0;
+        for (int i = 0; i < 16 && fns[i].n && o2 < 560; i++) {
+            char nmb[48];
+            o2 += snprintf(line2 + o2, sizeof line2 - (size_t)o2, "%s%s %.1f%%", i ? ", " : "",
+                           g_cpu->op_name((const void *)(uintptr_t)fns[i].rip, nmb, sizeof nmb), 100.0 * fns[i].n / (double)x64);
+        }
+        if (o2) mid_log("[fxi-prof]   x64 time in FXI handlers, by instruction kind: %s", line2);
     }
     mid_log("[fxi-prof]   blocks translated so far: %llu", (unsigned long long)blocks);
     // Calls from x64 into native code per target, all threads: each costs a full transition.
@@ -542,7 +688,29 @@ static void *prof_thread(void *arg) {
             if (!c || !vmr((uint64_t)(uintptr_t)g_fault_threads[i].area, &insim, 1)) continue;
             if (!insim) { g_prof_thr[i].native++; continue; }
             g_prof_thr[i].x64++;
-            uint64_t lk, ex, bl, rip = g_cpu->profile(c, &lk, &ex, &bl);
+            uint64_t lk, ex, bl, rip;
+            int ws = WS_UNKNOWN;
+            if (g_cpu->sample) {   // FXR: where the thread is (see above)
+                arm_thread_state64_t st;
+                mach_msg_type_number_t sn = ARM_THREAD_STATE64_COUNT;
+                const void *fn = NULL;
+                rip = 0;
+                if (thread_get_state(t, ARM_THREAD_STATE64, (thread_state_t)&st, &sn) == KERN_SUCCESS)
+                    ws = g_cpu->sample(c, (uint64_t)arm_thread_state64_get_pc(st), st.__x[21], prof_rd, &rip, &fn);
+                if (ws < 0 || ws >= WS_COUNT) ws = WS_UNKNOWN;
+                g_prof_thr[i].ws[ws]++;
+                if (ws == WS_SLOW && fn) {
+                    uint64_t f = (uint64_t)(uintptr_t)fn, h = (f * 0x9E3779B97F4A7C15ull) >> 55;
+                    for (int probe = 0; probe < 32; probe++, h = (h + 1) & 511) {
+                        if (g_prof_fns[h].rip == f) { g_prof_fns[h].n++; break; }
+                        if (!g_prof_fns[h].n) { g_prof_fns[h].rip = f; g_prof_fns[h].n = 1; break; }
+                    }
+                }
+                if (ws == WS_UNKNOWN) continue;
+                rip = (rip & ((1ull << 56) - 1)) | (uint64_t)ws << 56;
+            } else {
+                rip = g_cpu->profile(c, &lk, &ex, &bl);
+            }
             uint64_t h = (rip * 0x9E3779B97F4A7C15ull) >> 50;
             for (int probe = 0; probe < 32; probe++, h = (h + 1) & (PROF_SLOTS - 1)) {
                 if (g_prof_hits[h].rip == rip) { g_prof_hits[h].n++; break; }
@@ -669,6 +837,8 @@ void *mid_fxi_win_host_table(int tsd_offset) {
     const char *cpu = getenv("MYIOSDECK_WIN_CPU");   // set by WineController from Settings
     g_cpu = cpu && !strcmp(cpu, "fxr") ? &k_fxr : &k_fxi;
     mid_log("[fxi-win] x64 CPU: %s", g_cpu->name);
+    const char *nat = getenv("MYIOSDECK_FXR_NATIVE");
+    if (g_cpu->set_native && !(nat && !strcmp(nat, "0"))) g_cpu->set_native(host_native_kind);
     return &table;
 }
 

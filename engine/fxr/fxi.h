@@ -81,6 +81,21 @@ void fxr_win_index(void);
 /// Returns 0 when the state is not exact there (a stop: let the thread run on and try again).
 /// Async-signal-safe.
 int fxr_win_host_state(FxiCpu *c, fxr_host_state *h, int fault, uint64_t *rip);
+/// FXR: native functions it runs itself instead of leaving for them. For every native target an
+/// exit block is built for, kind(target) says which one it is: 1 TlsGetValue, 2
+/// RtlEnterCriticalSection, 3 RtlLeaveCriticalSection, 0 none (called under the translation lock).
+void fxi_win_set_native(int (*kind)(uint64_t target));
+/// FXR profiler: a sample of the thread running c, stopped at host pc with x21; rd copies n bytes
+/// from addr (1, or 0 when unreadable). Returns where the time goes (FXR_WS_*), *rip the x64
+/// instruction, *fn FXI's handler (FXR_WS_SLOW). Racy by design.
+enum { FXR_WS_UNKNOWN, FXR_WS_PINNED, FXR_WS_SLOW, FXR_WS_LOOKUP, FXR_WS_ENTER };
+int fxi_win_sample(FxiCpu *c, uint64_t pc, uint64_t x21, int (*rd)(uint64_t addr, void *out, size_t n), uint64_t *rip,
+                   const void **fn);
+/// FXR profiler: a name for FXI's handler fn ("alu add rm 32", "push_M", ...) in buf.
+const char *fxi_win_op_name(const void *fn, char *buf, size_t n);
+/// FXR profiler counters: [0] uops run by FXI's handlers (exits included), [1] indirect-branch
+/// cache misses, [2] entries from native code that missed it, [3] native calls run by FXR itself.
+void fxi_win_counters(FxiCpu *c, uint64_t out[4]);
 
 #ifdef __cplusplus
 }

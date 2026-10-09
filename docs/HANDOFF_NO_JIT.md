@@ -176,6 +176,18 @@ sideload edition (FEX, ~90% of native) stays the full-speed option, from the sam
   (Settings > Without JIT > Windows games: FXR, opt-in, untested on device). Not done: Wine's
   thread-context requests (GetThreadContext on a thread in simulation) do not ask the CPU yet
   (FXI does not either).
+- **FXR Windows mode on the device (builds 117-119)**: 117 jumped to pc 0 at the first DLL call
+  (exit blocks had no FXR handler; 118: fxr_init_slow, CI `winstate_test winexit`). 118: Stick
+  Fight runs on FXR (menu ~12 fps, play ~8 fps falling to 7.5 as the A17's P-cores throttle from
+  3.7 to 2.0 GHz; nothing in FXR grows: blocks, profile and call rates flat); Crab Game crashed
+  40 ms in: `add rcx, [rbx] ; mov rbx, -1 ; cmp rcx, rdx ; je`, the lowering's loop-step hoist ran
+  the mov first (can_hoist accepted a memory source; difftest `fz_hoist`). **Build 119**: that
+  fix; FXR runs TlsGetValue and the uncontended RtlEnter/LeaveCriticalSection itself (Stick
+  Fight's main thread made 2.8 M such calls a second, ~96% of its calls into native code; Wine's
+  code paths on the same fields, Wine's function when a lock is contended; the host names the
+  targets from the export tables, fxi_win_host.c `host_native_kind`; CI `winstate_test
+  winnative`); the profiler samples FXR threads' pc/x21 (pinned handlers vs FXI handlers by
+  name vs lookups vs entering) and names native targets through the fast-forward thunks.
 - **Build 74 result (iPhone 15 Pro Max, JIT off)**: FXR 11.6% of native vs FXI 8.7% = **1.33x**
   (integer 20.3% vs 10.9%, float 9.9/8.3, memory 10.9/9.1, branch 8.5/8.5, simd 8.4/7.0), all
   checksums match. Branch-heavy code gains nothing yet (the indirect/jcc paths go through p_slow

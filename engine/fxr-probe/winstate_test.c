@@ -107,6 +107,96 @@ static void on_stop(int sig, siginfo_t *si, void *ctx) {
     }
 }
 
+// ---- native functions FXR runs itself (fxr_pin.c, p_nat_*) ----
+// Each runs as the exit block of its native target (kind_of names three fake ones), after the x64
+// fast-forward thunk: rcx the argument, rsp at the return address. The fast paths return there
+// (an exit block seeded in the thread's indirect-branch cache) with the result in rax; when Wine's
+// code must run, the thread stops at the native function with nothing changed.
+#define NAT_TLS 0x7ffe00001000ull
+#define NAT_ENTER 0x7ffe00002000ull
+#define NAT_LEAVE 0x7ffe00003000ull
+#define NAT_RET 0x7ffe00004000ull
+static int kind_of(uint64_t t) { return t == NAT_TLS ? 1 : t == NAT_ENTER ? 2 : t == NAT_LEAVE ? 3 : 0; }
+static uint8_t g_teb[0x2000] __attribute__((aligned(16)));
+static uint64_t g_stack[64], g_tls_ext[1024];
+typedef struct { uint64_t debug; int32_t lock, rec; uint64_t owner, sem, spin; } crit;
+static int g_nat_bad;
+static void nat_check(int ok, const char *what) {
+    printf("  %s: %s\n", what, ok ? "ok" : "WRONG");
+    if (!ok) g_nat_bad++;
+}
+// Runs the native block b with rcx = arg; 1 when it returned to NAT_RET (rax, rsp popped), 0 when it
+// stopped at its native target with the registers as they were; -1 otherwise.
+static int nat_call(FxiCpu *c, Block *b, uint64_t arg, Block *ret) {
+    for (int i = 0; i < 16; i++) c->r[i] = 0x1000 * (uint64_t)(i + 1) + 0x11;
+    c->r[RCX] = arg;
+    g_stack[32] = NAT_RET;
+    c->r[RSP] = (uint64_t)(uintptr_t)&g_stack[32];
+    c->fxr_ibtc[(NAT_RET ^ (NAT_RET >> 10)) & 1023u].rip = NAT_RET;   // fxr_pin.h IBTC()
+    c->fxr_ibtc[(NAT_RET ^ (NAT_RET >> 10)) & 1023u].u = ret->u;
+    c->stop = 0;
+    fxr_enter(c, b);
+    if (c->stop != FXI_STOP_EC) return -1;
+    for (int i = 0; i < 16; i++)
+        if (i != RAX && i != RSP && i != RCX && c->r[i] != 0x1000 * (uint64_t)(i + 1) + 0x11) return -1;
+    if (c->rip == NAT_RET && c->r[RSP] == (uint64_t)(uintptr_t)&g_stack[33] && c->r[RCX] == arg) return 1;
+    if (c->rip == b->rip && c->r[RSP] == (uint64_t)(uintptr_t)&g_stack[32] && c->r[RAX] == 0x1011 && c->r[RCX] == arg) return 0;
+    return -1;
+}
+static int winnative(void) {
+    fxr_win_set_native(kind_of);
+    FxiCpu *c = fxr_win_cpu_new();
+    Block *tls = fxr_win_exit_block(NAT_TLS), *enter = fxr_win_exit_block(NAT_ENTER), *leave = fxr_win_exit_block(NAT_LEAVE);
+    Block *ret = fxr_win_exit_block(NAT_RET);
+    fxr_enter(c, ret);   // the first run sets the indirect-branch cache up
+    c->r[R_GS] = (uint64_t)(uintptr_t)g_teb;
+    uint32_t tid = 0x1234, err;
+    memcpy(g_teb + 0x48, &tid, 4);
+    uint64_t v = 0xfeedface12345678ull, ext = (uint64_t)(uintptr_t)g_tls_ext, z = 0;
+    memcpy(g_teb + 0x1480 + 8 * 5, &v, 8);
+    g_tls_ext[3] = 0xabcdef;
+    memcpy(g_teb + 0x1780, &ext, 8);
+    printf("winnative: TlsGetValue, RtlEnterCriticalSection, RtlLeaveCriticalSection run by FXR\n");
+    err = 0x99; memcpy(g_teb + 0x68, &err, 4);
+    int r = nat_call(c, tls, 5, ret);
+    memcpy(&err, g_teb + 0x68, 4);
+    nat_check(r == 1 && c->r[RAX] == v && err == 0, "TlsGetValue(5): the slot, LastError 0");
+    r = nat_call(c, tls, 64 + 3, ret);
+    nat_check(r == 1 && c->r[RAX] == 0xabcdef, "TlsGetValue(67): an expansion slot");
+    r = nat_call(c, tls, 64 + 1024, ret);
+    memcpy(&err, g_teb + 0x68, 4);
+    nat_check(r == 1 && c->r[RAX] == 0 && err == 87, "TlsGetValue(1088): NULL, ERROR_INVALID_PARAMETER");
+    memcpy(g_teb + 0x1780, &z, 8);
+    err = 0x99; memcpy(g_teb + 0x68, &err, 4);
+    r = nat_call(c, tls, 70, ret);
+    memcpy(&err, g_teb + 0x68, 4);
+    nat_check(r == 1 && c->r[RAX] == 0 && err == 0, "TlsGetValue(70) without expansion slots: NULL, LastError 0");
+    crit cs = { 0x5eb, -1, 0, 0, 0, 0 };
+    uint64_t a = (uint64_t)(uintptr_t)&cs;
+    r = nat_call(c, enter, a, ret);
+    nat_check(r == 1 && c->r[RAX] == 0 && cs.lock == 0 && cs.rec == 1 && cs.owner == tid, "enter a free section");
+    r = nat_call(c, enter, a, ret);
+    nat_check(r == 1 && cs.lock == 1 && cs.rec == 2 && cs.owner == tid, "enter it again (nested)");
+    r = nat_call(c, leave, a, ret);
+    nat_check(r == 1 && c->r[RAX] == 0 && cs.lock == 0 && cs.rec == 1 && cs.owner == tid, "leave the nested level");
+    r = nat_call(c, leave, a, ret);
+    nat_check(r == 1 && cs.lock == -1 && cs.rec == 0 && cs.owner == 0, "leave the last level (no waiter)");
+    cs = (crit){ 0x5eb, 0, 1, 0x999, 0, 0 };
+    r = nat_call(c, enter, a, ret);
+    nat_check(r == 0 && cs.lock == 0 && cs.rec == 1 && cs.owner == 0x999, "enter one another thread holds: Wine's code, nothing changed");
+    cs = (crit){ 0x5eb, 1, 1, tid, 0, 0 };
+    r = nat_call(c, leave, a, ret);
+    nat_check(r == 0 && cs.lock == 1 && cs.rec == 1 && cs.owner == tid, "leave with a waiter: Wine's code, nothing changed");
+    cs = (crit){ 0x5eb, -1, 0, 0, 0, 0 };
+    r = nat_call(c, leave, a, ret);
+    nat_check(r == 0 && cs.lock == -1 && cs.rec == 0 && cs.owner == 0, "leave a section not acquired: Wine's code");
+    uint64_t k[4];
+    fxr_win_counters(c, k);
+    nat_check(k[3] == 8, "8 calls run by FXR (counter)");
+    printf("winnative: %s\n", g_nat_bad ? "FAILED" : "all exact");
+    return g_nat_bad != 0;
+}
+
 static void *stopper(void *arg) {
     (void)arg;
     struct timespec ts = { 0, 20000 };   // 20 us
@@ -202,6 +292,7 @@ int main(int argc, char **argv) {
         printf("winexit: exit block %s\n", ok ? "stops at its native target, registers spilled" : "FAILED (no handler, or wrong stop)");
         return !ok;
     }
+    if (!strcmp(argv[2], "winnative")) return winnative();
     if (!strcmp(argv[2], "fault") && argc > 3) {
         g_site = atoi(argv[3]);
         sa.sa_sigaction = on_fault;

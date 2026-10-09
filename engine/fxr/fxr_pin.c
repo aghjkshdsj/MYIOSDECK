@@ -26,9 +26,12 @@ static uint16_t k_cctab[16];   // cmov truth tables per condition code (pcond_ta
 // Windows mode: the state goes to the CPU structure first, so a fault while translating the
 // target (fetching its code) has the exact x64 state (fxr_win_host_state).
 #define WIN_SPILL() do { if (FXI_UNLIKELY(c->vm->windows)) { SPILL_R(); SPILL_F(); SPILL_X(); } } while (0)
+// c->fxr_phase: what the thread does outside the pinned handlers, for the Windows profiler
+// (fxi_win_sample); the pinned handlers never write it.
 #define DEF_MISS(NAME, SLOT, RIP)                                                          \
     PX NAME(FXR_PARAMS) {                                                                  \
         WIN_SPILL();                                                                       \
+        c->fxr_phase = FXR_PH_LOOKUP;                                                      \
         Block *b = fxi_lookup(c, (RIP));                                                   \
         if (b != fxi_stop) __atomic_store_n(&(SLOT), b->u, __ATOMIC_RELEASE);              \
         PGO(b->u);                                                                         \
@@ -38,6 +41,8 @@ DEF_MISS(p_miss_f, u->ulink2, u->aux)    // a conditional branch's fallthrough (
 DEF_MISS(p_miss_g, u->ulink, u->aux)     // goto (a block split) and syscall: the next instruction
 PX p_miss_ind(FXR_PARAMS) {
     WIN_SPILL();
+    c->fxr_phase = FXR_PH_LOOKUP;
+    c->n_ibtc_miss++;
     Block *b = fxi_lookup(c, T);
     if (b != fxi_stop) { __typeof__(c->fxr_ibtc[0]) *e = IBTC(T); e->u = b->u; e->rip = T; }
     PGO(b->u);
@@ -83,12 +88,83 @@ PH p_syscall(FXR_PARAMS) {
     PCHAIN(u->ulink, p_miss_g);
 }
 // Anything without a pinned form: FXI's handler, with the registers in memory around it.
+// c->cur is the uop (a fault in FXI's handler belongs to it; the profiler names the handler).
 PX p_slow(FXR_PARAMS) {
     SPILL_R(); SPILL_F(); SPILL_X();
+    c->cur = u;
+    c->fxr_phase = FXR_PH_SLOW;
+    c->n_slow++;
     u->fn(c, u);
     if (FXI_UNLIKELY(c->stop)) return;
     RELOAD_R(); RELOAD_F(); RELOAD_X();
     PNEXT();
+}
+
+// ---- Windows mode: native functions FXR runs itself (fxi_win.c, fxi_win_set_native) ----
+// The hottest calls from x64 code into Wine do a few loads: Stick Fight's main thread (build 118)
+// called TlsGetValue 1.6 M times a second and RtlEnter/LeaveCriticalSection 0.6 M times each (Mono
+// reads its thread's TLS slots and takes a lock around most runtime calls), and every call paid a
+// full transition to native code and back (spill, the glue, the ARM64EC entry thunk, a block
+// lookup on return). These handlers run Wine's own code paths on the same fields instead
+// (Madeira's Wine: dlls/kernelbase/thread.c TlsGetValue; dlls/ntdll/sync.c RtlTryEnterCriticalSection
+// and RtlLeaveCriticalSection), with the same atomics, so x64 and native callers share a lock.
+// Whatever needs Wine (a lock held by another thread, waiters to wake, a section not acquired)
+// leaves for Wine's function as before: p_slow runs the exit block's ec_exit, nothing changed.
+// They run as the exit block of the function's ARM64EC code, after the export's x64 fast-forward
+// thunk: rsp points at the return address, rcx holds the argument; the result goes to rax, then
+// ret. The x64 volatile registers and the flags stay as they were (a call may leave anything).
+// TEB (x64 layout, the GS base): LastErrorValue 0x68, ClientId.UniqueThread 0x48, TlsSlots
+// 0x1480, TlsExpansionSlots 0x1780. RTL_CRITICAL_SECTION: LockCount 0x08 (-1 free),
+// RecursionCount 0x0c, OwningThread 0x10 (the thread id).
+#define NAT_RET(V) do { KEEP_R(0); KEEP_R(4); c->n_native++; g0 = (V); g4 += 8; PIND(ret); } while (0)
+PH p_nat_tlsget(FXR_PARAMS) {   // TlsGetValue(index)
+    uint64_t ret = ld64(g4), teb = c->r[R_GS], v = 0;
+    uint32_t i = (uint32_t)g1, err = 0;
+    if (i < 64) v = ld64(teb + 0x1480 + 8ull * i);
+    else if (i - 64 < 1024) { uint64_t x = ld64(teb + 0x1780); if (x) v = ld64(x + 8ull * (i - 64)); }
+    else err = 87;   // ERROR_INVALID_PARAMETER
+    st32(teb + 0x68, err);
+    NAT_RET(v);
+}
+PH p_nat_csenter(FXR_PARAMS) {   // RtlEnterCriticalSection(cs): free, or already ours
+    uint64_t ret = ld64(g4), cs = g1, tid = ld32(c->r[R_GS] + 0x48);
+    int32_t *lock = (int32_t *)(uintptr_t)(cs + 8), free_ = -1;
+    if (__atomic_compare_exchange_n(lock, &free_, 0, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {
+        st64(cs + 0x10, tid);
+        st32(cs + 0xc, 1);
+    } else if (ld64(cs + 0x10) == tid) {
+        __atomic_add_fetch(lock, 1, __ATOMIC_SEQ_CST);
+        st32(cs + 0xc, ld32(cs + 0xc) + 1);
+    } else {
+        PTAIL(p_slow);   // held by another thread: Wine spins and waits
+    }
+    NAT_RET(0);
+}
+PH p_nat_csleave(FXR_PARAMS) {   // RtlLeaveCriticalSection(cs): nested, or the last level with no waiter
+    uint64_t ret = ld64(g4), cs = g1, owner = ld64(cs + 0x10);
+    int32_t *lock = (int32_t *)(uintptr_t)(cs + 8), rc = (int32_t)ld32(cs + 0xc);
+    if (rc > 1) {
+        st32(cs + 0xc, (uint32_t)(rc - 1));
+        __atomic_sub_fetch(lock, 1, __ATOMIC_SEQ_CST);
+    } else if (rc == 1 && __atomic_load_n(lock, __ATOMIC_SEQ_CST) == 0) {
+        int32_t held = 0;
+        st32(cs + 0xc, 0);   // Wine's order: the owner goes before the lock is released
+        st64(cs + 0x10, 0);
+        if (!__atomic_compare_exchange_n(lock, &held, -1, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {
+            st64(cs + 0x10, owner);   // a waiter came: as it was, and Wine wakes it
+            st32(cs + 0xc, 1);
+            PTAIL(p_slow);
+        }
+    } else {
+        PTAIL(p_slow);   // waiters to wake, or not acquired (Wine reports it)
+    }
+    NAT_RET(0);
+}
+// Called with the host's answer for an exit block's target (1 TlsGetValue, 2 RtlEnterCriticalSection,
+// 3 RtlLeaveCriticalSection, 0 none).
+void fxr_init_native(Block *b, int kind) {
+    static const PFn k[] = { 0, p_nat_tlsget, p_nat_csenter, p_nat_csleave };
+    if (kind > 0 && kind < 4) b->u[0].p = k[kind];
 }
 
 #define DEF_PUSHPOP(R, _)                                                                  \
@@ -989,7 +1065,8 @@ static void hidx_build(void) {
     for (size_t i = 0; i < fxr_n_xops; i++) { hidx_tab(&fxr_xops[i].rr[0][0], 81); hidx_tab(fxr_xops[i].rt, 9); }
     for (size_t i = 0; i < fxr_n_xshift; i++) hidx_tab(fxr_xshift[i].h, 9);
     hidx_tab(t_push, 16); hidx_tab(t_pop, 16); hidx_tab(t_call_R, 16); hidx_tab(t_jmp_R, 16); hidx_tab(t_jcc, 16);
-    static const PFn one[] = { p_stop, p_nop, p_jmp, p_goto, p_call, p_ret, p_call_T, p_jmp_T, p_call_M, p_jmp_M, p_syscall };
+    static const PFn one[] = { p_stop, p_nop, p_jmp, p_goto, p_call, p_ret, p_call_T, p_jmp_T, p_call_M, p_jmp_M, p_syscall,
+                               p_nat_tlsget, p_nat_csenter, p_nat_csleave };
     hidx_tab(one, sizeof one / sizeof one[0]);
     qsort(g_hidx, g_hn, sizeof *g_hidx, cmp_uptr);
     size_t n = 0;
@@ -1076,4 +1153,78 @@ int fxr_win_host_state(FxiCpu *c, fxr_host_state *h, int fault, uint64_t *rip) {
     (void)c; (void)h; (void)fault; (void)rip;
     return 0;
 #endif
+}
+
+// ---- Windows profiler (App/Sources/Native/fxi_win_host.c): where a thread's time goes ----
+// A pinned handler's pc means guest code at full speed (x21: its uop, or the next one once the
+// dispatch loaded it); elsewhere the phase the out-of-line paths set says what runs: FXI's handler
+// for c->cur (p_slow), a block lookup or translation, or the way in from native code.
+int fxi_win_sample(FxiCpu *c, uint64_t pc, uint64_t x21, int (*rd)(uint64_t addr, void *out, size_t n), uint64_t *rip,
+                   const void **fn) {
+    *rip = 0;
+    *fn = NULL;
+#ifdef FXR_HOST_STATE
+    Uop u;
+    if (pc >= (uintptr_t)fxr_h_start && pc < (uintptr_t)fxr_h_end) {
+        if (!rd(x21, &u, sizeof u)) return FXR_WS_UNKNOWN;
+        *rip = u.rip;
+        return FXR_WS_PINNED;
+    }
+    uint32_t ph = __atomic_load_n(&c->fxr_phase, __ATOMIC_RELAXED);
+    Uop *cur = __atomic_load_n(&c->cur, __ATOMIC_RELAXED);
+    if (ph == FXR_PH_SLOW && cur && rd((uint64_t)(uintptr_t)cur, &u, sizeof u)) {
+        *rip = u.rip;
+        *fn = (const void *)u.fn;
+        return FXR_WS_SLOW;
+    }
+    if (ph == FXR_PH_LOOKUP) { *rip = c->trail[(c->trail_n - 1) & 15]; return FXR_WS_LOOKUP; }
+    if (ph == FXR_PH_ENTER) { *rip = c->rip; return FXR_WS_ENTER; }
+#else
+    (void)c; (void)pc; (void)x21; (void)rd;
+#endif
+    return FXR_WS_UNKNOWN;
+}
+
+// A name for FXI's handler fn: the lowering's description of it, else a search of the handlers
+// the decoder takes by name, and mul/div.
+static const char *const k_named_ops[] = {
+    "ec_exit", "fail_ud", "trap", "push_I", "push_M", "pop_M", "leave", "pushf", "popf", "cbw", "cwde", "cdqe", "cwd",
+    "cdq", "cqo", "bswap32", "bswap64", "xchg_R_8", "xchg_R_16", "xchg_R_32", "xchg_R_64", "bsf_R", "bsf_M", "bsr_R",
+    "bsr_M", "tzcnt_R", "tzcnt_M", "lzcnt_R", "lzcnt_M", "popcnt_R", "popcnt_M", "shxd_R", "shxd_M", "cld", "std", "clc",
+    "stc", "cmc", "lahf", "sahf", "cpuid", "rdtsc", "stos", "movs", "scas", "cmps", "lods", "lock_alu", "lock_unary",
+    "xchg_M", "cmpxchg_M", "cmpxchg_R", "xadd_M", "xadd_R", "cmpxchg8b", "cmpxchg16b", "bitop_R", "bitop_M", "x87",
+    "fxsave", "fxrstor", "ldmxcsr", "stmxcsr", "fence", "jmp", "jcc", "call", "call_R", "call_M", "jmp_R", "jmp_M", "ret",
+    "goto", "syscall", "stop", "push_R", "pop_R", "nop",
+};
+const char *fxi_win_op_name(const void *fp, char *buf, size_t n) {
+    static const char *const alu[ALU_COUNT] = { "add", "or", "adc", "sbb", "and", "sub", "xor", "cmp", "test" };
+    static const char *const form[F_COUNT] = { "rr", "ri", "rm", "mr", "mi" }, *const sz[4] = { "8", "16", "32", "64" };
+    static const char *const sh[8] = { "rol", "ror", "rcl", "rcr", "shl", "shr", "sal", "sar" };
+    static const char *const un[4] = { "inc", "dec", "not", "neg" }, *const md[4] = { "mul", "imul", "div", "idiv" };
+    pthread_once(&g_once, init_desc);
+    OpFn fn = (OpFn)fp;
+    const Desc *d = fn ? find(fn) : NULL;
+    if (d) switch (d->fam) {
+    case FAM_ALU: snprintf(buf, n, "%s %s %s", alu[d->a % ALU_COUNT], form[d->b % F_COUNT], sz[d->c2 & 3]); return buf;
+    case FAM_MOV: snprintf(buf, n, "mov %s %s", form[d->a % F_COUNT], sz[d->b & 3]); return buf;
+    case FAM_LEA: snprintf(buf, n, "lea %s", sz[d->a & 3]); return buf;
+    case FAM_SHIFT: snprintf(buf, n, "%s %s %s", sh[d->a & 7], d->b ? "m" : "r", sz[d->c2 & 3]); return buf;
+    case FAM_UNARY: snprintf(buf, n, "%s %s %s", un[d->a & 3], d->b ? "m" : "r", sz[d->c2 & 3]); return buf;
+    case FAM_EXT: snprintf(buf, n, "%s %s %s->%s", d->a ? "movsx" : "movzx", d->b ? "m" : "r", sz[d->c2 & 3], sz[d->d & 3]); return buf;
+    case FAM_CMOV: snprintf(buf, n, "cmov %s %s", d->a ? "m" : "r", sz[d->b & 3]); return buf;
+    case FAM_SETCC: snprintf(buf, n, "setcc"); return buf;
+    case FAM_IMUL2: case FAM_IMUL3: snprintf(buf, n, "imul%d %s %s", d->fam == FAM_IMUL2 ? 2 : 3, d->a ? "m" : "r", sz[d->b & 3]); return buf;
+    case FAM_FJCC: snprintf(buf, n, "%s+jcc", d->a ? "test" : "cmp"); return buf;
+    case FAM_X: snprintf(buf, n, "%s %s", fxr_xops[d->a].name, d->b ? "m" : "r"); return buf;
+    case FAM_XI: snprintf(buf, n, "%s imm", fxr_xshift[d->a].name); return buf;
+    default: break;
+    }
+    for (size_t i = 0; fn && i < sizeof k_named_ops / sizeof k_named_ops[0]; i++)
+        if (fxi_named(k_named_ops[i]) == fn) { snprintf(buf, n, "%s", k_named_ops[i]); return buf; }
+    for (int op = 0; fn && op < 4; op++)
+        for (int rm = 0; rm < 2; rm++)
+            for (int si = 0; si < 4; si++)
+                if (fxi_muldiv_tab[op][rm][si] == fn) { snprintf(buf, n, "%s %s %s", md[op], rm ? "m" : "r", sz[si]); return buf; }
+    snprintf(buf, n, "%s", d && d->fam == FAM_XS ? "sse load/store/convert" : "?");
+    return buf;
 }

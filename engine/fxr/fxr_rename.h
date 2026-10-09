@@ -57,6 +57,10 @@
 #define fxi_win_df_source fxr_win_df_source
 #define fxi_win_profile fxr_win_profile
 #define fxi_win_exit_counts fxr_win_exit_counts
+#define fxi_win_set_native fxr_win_set_native
+#define fxi_win_sample fxr_win_sample
+#define fxi_win_op_name fxr_win_op_name
+#define fxi_win_counters fxr_win_counters
 #define fxi_x87_fxrstor fxr_x87_fxrstor
 #define fxi_x87_fxsave fxr_x87_fxsave
 #define fxi_x87_init fxr_x87_init

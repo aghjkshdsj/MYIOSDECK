@@ -71,6 +71,8 @@ host registers, so what Windows needs from a CPU has to be rebuilt:
 | fxi_win_* API | the same functions, renamed fxr_win_* (App/Sources/Native/fxr_win_shim.c wraps them) | done |
 | host integration | fxi_win_host.c picks the CPU (FXI, or FXR with Settings › Without JIT › Windows games: FXR) and passes Wine's ARM64 context, or the Mach thread and NEON state, to fxr_win_host_state at a fault | done, opt-in; not yet tried on a device |
 | suspension in Wine | Wine's NtGetContextThread on an ARM64EC thread in simulation must ask the CPU (as for faults: a hook in Madeira's server); retry while fxr_win_host_state returns 0 | to do (FXI lacks it too) |
+| cheap calls into Wine | TlsGetValue and the uncontended RtlEnter/LeaveCriticalSection run in FXR itself (fxr_pin.c, p_nat_*: Wine's code paths, same fields and atomics; Wine's function when a lock is held elsewhere or has waiters); the host names the targets (fxi_win_host.c, host_native_kind) | done (build 119); CI: winstate_test winnative |
+| where the time goes | the profiler samples FXR threads' pc and x21: pinned handlers, FXI handlers by instruction kind, lookups, entering from native code | done (build 119) |
 
 One relaxation, as in FXI: flags that dead-flag elimination never computed are not recovered.
 At a fault in an instruction that writes the flags itself (cmp/test/add with a memory operand),

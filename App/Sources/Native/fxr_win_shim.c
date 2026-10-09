@@ -32,6 +32,17 @@ uint64_t mid_fxr_win_profile(void *c, uint64_t *lookups, uint64_t *exits, uint64
 int mid_fxr_win_exit_counts(void *c, uint64_t *targets, uint64_t *counts, int max) {
     return fxr_win_exit_counts(c, targets, counts, max);
 }
+// Native functions FXR runs itself: kind(target) 1 TlsGetValue, 2 RtlEnterCriticalSection,
+// 3 RtlLeaveCriticalSection, 0 none.
+void mid_fxr_win_set_native(int (*kind)(uint64_t target)) { fxr_win_set_native(kind); }
+// Profiler: where a stopped thread's time goes (FXR_WS_*: 1 pinned handler, 2 FXI's handler for
+// *rip, 3 block lookup, 4 entering from native code, 0 unknown), its counters, a handler's name.
+int mid_fxr_win_sample(void *c, uint64_t pc, uint64_t x21, int (*rd)(uint64_t, void *, size_t), uint64_t *rip,
+                       const void **fn) {
+    return fxr_win_sample(c, pc, x21, rd, rip, fn);
+}
+void mid_fxr_win_counters(void *c, uint64_t out[4]) { fxr_win_counters(c, out); }
+const char *mid_fxr_win_op_name(const void *fn, char *buf, size_t n) { return fxr_win_op_name(fn, buf, n); }
 
 // The x64 state from the host's registers of the thread running c (x0-x30, sp, pc, q0-q7):
 // fault = 1 at a host fault, 0 at a stop. 1 = exact, the CPU loaded and *rip set; *pc may move.

@@ -162,6 +162,10 @@ def family(name):
 # Pair fusions Windows mode does not use (fxr_pin.c, try_fuse: g_win): their second instruction
 # touches memory after the first wrote a register, so they may report a violation.
 WIN_EXCLUDED = ('p_amr_', 'p_alea_', 'p_ami_', 'p_axz_', 'p_pop2_', 'p_push2_', 'p_popret_')
+# The critical-section functions FXR runs itself (fxr_pin.c, p_nat_cs*) write the section's
+# RecursionCount and OwningThread around the atomic on its LockCount, in Wine's order: guest stores
+# to one 24-byte structure, so a fault between them would need a section that ends inside it.
+NAT_EXCLUDED = ('p_nat_csenter', 'p_nat_csleave')
 
 def main():
     funcs = parse(open(sys.argv[1], errors='replace').read())
@@ -178,7 +182,7 @@ def main():
             bad += 1
             fam[f] += 1
             examples.setdefault(f, (name, v[0]))
-            if not name.startswith(WIN_EXCLUDED): gate.append(name)
+            if not name.startswith(WIN_EXCLUDED + NAT_EXCLUDED): gate.append(name)
     print('precise: %d pinned handlers, %d touch guest memory, %d may fault after a side effect, '
           '%d of them used in Windows mode' % (total, with_guest, bad, len(gate)))
     for f, n in fam.most_common(60):
