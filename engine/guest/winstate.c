@@ -82,8 +82,10 @@ FAULT(f_ret, "mov $0x1008, %%rsp\n\t", "ret")                 // 8: ret
 FAULT(f_rmw, "", "addl $1, (%%rbx)")                          // 9: read-modify-write
 FAULT(f_callm, "", "call *(%%rbx)")                           // 10: call through memory
 FAULT(f_xstore, "", "movaps %%xmm3, 16(%%rbx)")               // 11: a 16-byte store
+FAULT(f_xarith_index, "", "addps (%%rbx,%%rsi), %%xmm0")      // 12: indexed SSE arithmetic
+FAULT(f_xarith_base, "", "mulsd 16(%%rbx), %%xmm7")           // 13: scalar SSE arithmetic
 static void (*const k_faults[])(void) = { f_load, f_store, f_xload, f_push, f_call, f_cmpj, f_ltj, f_pop, f_ret,
-                                          f_rmw, f_callm, f_xstore };
+                                          f_rmw, f_callm, f_xstore, f_xarith_index, f_xarith_base };
 
 int guest_main(int argc, char **argv) {
     if (argc >= 3 && g_streq(argv[1], "loop")) { loop(g_atou(argv[2])); g_puts("loop done\n"); return 0; }

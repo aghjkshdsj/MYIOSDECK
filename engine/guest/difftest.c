@@ -609,6 +609,65 @@ static void fz_xindex(void) {
     out("fz_xindex", h);
 }
 
+// Direct SSE memory arithmetic must preserve scalar upper lanes and handle all
+// address scales and both pinned and memory-backed XMM register classes.
+#define XM_CASE(OP, REG, ADDR, INDEX) do { \
+    v2 result; \
+    __asm__ volatile("movdqu %[input], %%" REG "\n\t" OP " " ADDR ", %%" REG \
+                     "\n\tmovdqu %%" REG ", %[result]" \
+        : [result] "=m"(result) \
+        : [input] "m"(input), [p] "r"(data), [k] "r"((u64)(INDEX)) \
+        : REG, "memory"); \
+    h = vmix(h, result); \
+} while (0)
+#define XM_FORMS(OP) do { \
+    XM_CASE(OP, "xmm0", "(%[p],%[k])", 16); \
+    XM_CASE(OP, "xmm7", "16(%[p],%[k],2)", 8); \
+    XM_CASE(OP, "xmm8", "-16(%[p],%[k],4)", 12); \
+    XM_CASE(OP, "xmm15", "16(%[p],%[k],8)", 4); \
+    XM_CASE(OP, "xmm3", "16(%[p])", 0); \
+} while (0)
+static void gpta_xmem(void) {
+    v2 data[8] __attribute__((aligned(16)));
+    u64 h = 14695981039346656037ull;
+    for (int i = 0; i < N; i++) {
+        v2 input = vfloat(0);
+        for (int j = 0; j < 8; j++) data[j] = vfloat(1);
+        XM_FORMS("addps"); XM_FORMS("subps"); XM_FORMS("mulps");
+        XM_FORMS("addss"); XM_FORMS("subss"); XM_FORMS("mulss");
+        input = vdouble(0);
+        for (int j = 0; j < 8; j++) data[j] = vdouble(1);
+        XM_FORMS("addpd"); XM_FORMS("subpd"); XM_FORMS("mulpd");
+        XM_FORMS("addsd"); XM_FORMS("subsd"); XM_FORMS("mulsd");
+    }
+    out("gpta_xmem", h);
+}
+
+// Force result-only conditions after different lazy-flag writers. A register
+// move separates the writer and branch, exercising the unfused condition path.
+#define ZSP_TEST(OP, CC) do { \
+    u64 r = val(), b = val(), fi = flags_in(), j, f, tmp; \
+    __asm__ volatile(PRE OP "\n\tmovq %[r], %[tmp]" JX(CC) \
+        : [r] "+r"(r), [tmp] "=&r"(tmp), [j] "=&r"(j), [f] "=&r"(f) \
+        : [b] "r"(b), [fi] "r"(fi) : "cc", "memory"); \
+    h = mix(mix(h, j), tmp); \
+} while (0)
+#define ZSP_ALL(CC) \
+    ZSP_TEST("addq %[b], %[r]", CC); ZSP_TEST("subq %[b], %[r]", CC); \
+    ZSP_TEST("adcq %[b], %[r]", CC); ZSP_TEST("sbbq %[b], %[r]", CC); \
+    ZSP_TEST("incq %[r]", CC); ZSP_TEST("decq %[r]", CC); \
+    ZSP_TEST("negq %[r]", CC); ZSP_TEST("xorq %[b], %[r]", CC); \
+    ZSP_TEST("shlq $3, %[r]", CC); ZSP_TEST("shrl $7, %k[r]", CC); \
+    ZSP_TEST("sarw $2, %w[r]", CC); ZSP_TEST("orb %b[b], %b[r]", CC); \
+    ZSP_TEST("", CC)
+static void gpta_result_flags(void) {
+    u64 h = 14695981039346656037ull;
+    for (int i = 0; i < N; i++) {
+        ZSP_ALL(e); ZSP_ALL(ne); ZSP_ALL(s); ZSP_ALL(ns); ZSP_ALL(p); ZSP_ALL(np);
+    }
+    out("gpta_result_flags", h);
+}
+
 typedef void (*test_fn)(void);
 #define ALU_LIST(OP) OP##_q, OP##_l, OP##_w, OP##_b, OP##_mr_q, OP##_rm_l, OP##_mr_b,
 static const test_fn kTests[] = {
@@ -638,7 +697,7 @@ static const test_fn kTests[] = {
     x_movsd_rr, x_movss_rr, x_movhlps, x_movlhps, x_movq_rr, x_unpcklps, x_pinsrw, x_togpr,
     fz_o, fz_no, fz_b, fz_ae, fz_e, fz_ne, fz_be, fz_a, fz_s, fz_ns, fz_p, fz_np, fz_l, fz_ge, fz_le, fz_g,
     fc_o, fc_no, fc_b, fc_ae, fc_e, fc_ne, fc_be, fc_a, fc_s, fc_ns, fc_p, fc_np, fc_l, fc_ge, fc_le, fc_g,
-    fz_call, fz_index, fz_xindex, fz_3op, fz_3gap, fz_x3, fz_hoist,
+    fz_call, fz_index, fz_xindex, fz_3op, fz_3gap, fz_x3, fz_hoist, gpta_xmem, gpta_result_flags,
 };
 
 int guest_main(int argc, char **argv) {

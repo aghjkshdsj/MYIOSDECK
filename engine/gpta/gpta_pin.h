@@ -180,6 +180,21 @@ FXI_INLINE int cc_logic(unsigned cc, uint64_t r, unsigned si) {
 // Any condition from the lazy flags; *slow = 1 for a kind left to FXI's flag code.
 FXI_INLINE int pcond(unsigned cc, uint64_t F0, uint64_t F1, uint64_t F2, uint64_t F3, int *slow) {
     unsigned op = (uint32_t)F0, k = op >> 2, si = op & 3;
+    // ZF/SF/PF depend only on the saved result (or the raw flags word),
+    // regardless of the operation that produced them. Match fxi_flag_zf/sf/pf
+    // without walking the arithmetic-kind cascade or spilling to p_jcc_slow.
+    if ((cc >> 1) == 2) {
+        int v = k == LF_RAW ? (int)((F0 >> 38) & 1) : (F3 & kMask[si]) == 0;
+        return v ^ (int)(cc & 1);
+    }
+    if ((cc >> 1) == 4) {
+        int v = k == LF_RAW ? (int)((F0 >> 39) & 1) : (F3 & kSign[si]) != 0;
+        return v ^ (int)(cc & 1);
+    }
+    if ((cc >> 1) == 5) {
+        int v = k == LF_RAW ? (int)((F0 >> 34) & 1) : PAR(F3);
+        return v ^ (int)(cc & 1);
+    }
     if (FXI_LIKELY(k == LF_SUB)) return cc_sub(cc, F1, F2, si);
     if (k == LF_LOGIC) return cc_logic(cc, F3, si);
     uint64_t m = kMask[si], sb = kSign[si], a = F1 & m, b = F2 & m, r = F3 & m;
@@ -473,10 +488,13 @@ typedef struct { const char *name; PFn h[9]; } XShift;
     X(t_fs_sub, [4][16][16]) X(t_fs_and, [4][16][16]) X(t_fs_subi, [4][16]) X(t_fs_andi, [4][16]) X(t_fs_log, [4][16]) \
     X(t_fs_addr, [4][16]) X(t_fs_subr, [4][16]) X(t_fs_comis, [2][9][9]) \
     X(t_fs_addrr, [4][16][16]) X(t_fs_subrr, [4][16][16]) \
-    X(t_x3, [20][9][9][9]) X(t_arj, [5][2][8][16][16]) X(t_lcj, [2][16][17][16])
+    X(t_x3, [20][9][9][9]) X(t_arj, [5][2][8][16][16]) X(t_lcj, [2][16][17][16]) \
+    X(t_xmemi, [12][9][17][17]) X(t_xmemb, [12][9][17])
 #define GPTA_DECL_TABLE(NAME, DIMS) extern const PFn GPTA_T(NAME) DIMS; extern const PFn gpta_##NAME##_r1 DIMS;
 GPTA_TABLES(GPTA_DECL_TABLE)
 #define t_setcc GPTA_T(t_setcc)
+#define t_xmemi GPTA_T(t_xmemi)
+#define t_xmemb GPTA_T(t_xmemb)
 #define t_alu_rr GPTA_T(t_alu_rr)
 #define t_alu_ri GPTA_T(t_alu_ri)
 #define t_alu_rt GPTA_T(t_alu_rt)

@@ -15,7 +15,7 @@ ARCH_FLAGS=()
 if [ "$(uname -m)" = x86_64 ]; then ARCH_FLAGS=(-mcx16); fi
 CFLAGS="-O2 -std=gnu11 -Wall -Wextra -Wno-unused-parameter -Wno-unused-function -Wno-unused-variable \
 -Wno-unused-but-set-variable -Wno-sign-compare -ffp-contract=off -fno-math-errno -mllvm -enable-tail-merge=false ${ARCH_FLAGS[*]:-} ${EXTRA_CFLAGS:-}"
-SRCS="gpta_pin_x3.c gpta_pin_arj.c gpta_pin_lcj.c gpta_pin_stub.c gpta_pin_step1.c gpta_pin_step2.c gpta_pin_step3.c gpta_pin_mem.c gpta_pin_mem2.c gpta_pin_fuse.c gpta_pin_sse.c gpta_pin_alu.c gpta_pin_br.c gpta_pin.c
+SRCS="gpta_pin_xmem.c gpta_pin_xmem_r1.c gpta_pin_x3.c gpta_pin_arj.c gpta_pin_lcj.c gpta_pin_stub.c gpta_pin_step1.c gpta_pin_step2.c gpta_pin_step3.c gpta_pin_mem.c gpta_pin_mem2.c gpta_pin_fuse.c gpta_pin_sse.c gpta_pin_alu.c gpta_pin_br.c gpta_pin.c
       gpta_pin_alu_r1.c gpta_pin_sse_r1.c gpta_pin_mem_r1.c gpta_pin_mem2_r1.c gpta_pin_step3_r1.c gpta_pin_br_r1.c gpta_pin_step1_r1.c gpta_pin_step2_r1.c
       fxi_core.c fxi_decode.c fxi_flags.c fxi_ops.c fxi_sse.c fxi_atomic.c fxi_x87.c fxi_win.c fxi_main.c"
 JOBS=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)

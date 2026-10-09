@@ -228,7 +228,7 @@ static int is_shuffle(const char *n) {
 // branch keeps one successor: Ertl and Gregg's replication of interpreter instructions. A handler
 // at one place per copy alternates between the copies of a trace, which also spaces out repeats of
 // the same branch (the probe: a branch taken again within a few dispatches costs more).
-#define RMAP_SLOTS (1u << 17)
+#define RMAP_SLOTS (1u << 18)
 typedef struct { PFn p, r; } RPair;
 static RPair *g_rmap;
 static uint64_t hpfn(PFn p) { return ((uint64_t)(uintptr_t)p * 0x9E3779B97F4A7C15ull) >> 40; }
@@ -256,6 +256,7 @@ static void rmap_init(void) {
     RMAP(t_xl_movx); RMAP(t_xs_movx); RMAP(t_xl_movxz); RMAP(t_xs_movxz); RMAP(t_xl_movss); RMAP(t_xl_movsd); RMAP(t_xs_movss); RMAP(t_xs_movsd);
     RMAP(t_xlt_movss); RMAP(t_xlt_movsd); RMAP(t_xlt_movlps); RMAP(t_xlt_movhps); RMAP(t_xst_movss); RMAP(t_xst_movsd);
     RMAP(t_xst_movhps); RMAP(t_xst_movx); RMAP(t_xg); RMAP(t_xgt); RMAP(t_gx);
+    RMAP(t_xmemi); RMAP(t_xmemb);
     for (size_t i = 0; i < gpta_n_xops; i++) {
         rmap_tab(&gpta_xops[i].rr[0][0], &gpta_xops_r1[i].rr[0][0], 81);
         rmap_tab(gpta_xops[i].rt, gpta_xops_r1[i].rt, 9);
@@ -365,6 +366,13 @@ static int greg(unsigned off) { return (off & 7) == 0 && off < 128 ? (int)(off >
 static int simple_mem(const Uop *u) { return u->index == R_ZERO && u->base <= R_ZERO; }        // [base + disp]
 static int ea_ok(const Uop *u) { return u->base <= R_ZERO && u->index <= R_ZERO; }
 static int lean(const Uop *u) { return !u->scale && !u->disp; }   // [base + index]: no scale, no displacement
+static int xmem_index(const char *name) {
+    static const char *const names[] = { "addps", "subps", "mulps", "addpd", "subpd", "mulpd",
+        "addss", "subss", "mulss", "addsd", "subsd", "mulsd" };
+    for (unsigned i = 0; i < sizeof names / sizeof names[0]; i++)
+        if (!strcmp(name, names[i])) return (int)i;
+    return -1;
+}
 static PFn ea_h(const Uop *u) { return (lean(u) ? t_eaz : t_ea)[u->base][u->index]; }   // T = the EA
 
 typedef struct { int at, edge, stub; } Patch;   // after the copy: out[at].ulink (edge 0) / ulink2 = &out[stub]
@@ -531,6 +539,9 @@ static void lower_one(Out *o, const Uop *u) {
         } else {
             if (!ea_ok(u)) break;      // fs/gs operand: FXI's handler
             if (!strcmp(x->name, "movx")) { put_uop(o, u, (lean(u) ? t_xl_movxz : t_xl_movx)[dc][u->base][u->index]); return; }
+            int xm = xmem_index(x->name);
+            if (xm >= 0 && simple_mem(u)) { put_uop(o, u, t_xmemb[xm][dc][u->base]); return; }
+            if (xm >= 0) { put_uop(o, u, t_xmemi[xm][dc][u->base][u->index]); return; }
             y = with_ea(o, u, x->rt[dc]);
         }
         if (d->c2) { uint8_t ix[16]; gpta_xshuffle_index(x->name, (unsigned)u->imm, ix); memcpy(y->xidx, ix, 16); }
