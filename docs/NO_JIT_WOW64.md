@@ -273,10 +273,11 @@ kernelbase, user32, DXMT d3d11/dxgi/winemetal and hello-x86.exe decode 100%.
 - The map hook installs the table for `xtajit.dll` (ARM64); the app links `system32\xtajit.dll`
   to our module without JIT (`MYIOSDECK_NOJIT_WOW_CPU`); `hello-i386.exe` (the hello source built
   for i686) goes into the i386 farm.
-- CI: `llvm-readobj --coff-exports` must list every BTCpu export; a Linux harness
-  (`engine/fxi/wow_test.c`) drives FXI32 through the host protocol with a fake service table:
-  BOP calls, context store/reload, nested simulation with an abandoned inner run, int3/ud2/#DE,
-  a fault at the exact EIP, invalidation.
+- CI: `llvm-readobj --coff-exports` must list every BTCpu export (build-spike.sh);
+  `engine/fxi32/wow_test.c` (fxi.yml) drives FXI32's WoW64 API as the host does, in a real
+  4 GB window: the system-call and unix-call stops with Wine's stack layouts, the context round
+  trip, `fs:` to the TEB32, int3, #DE, a fault at the exact EIP, ud2. **All pass (run
+  37995496475).** Not covered yet: nested simulation (a callback), invalidation.
 - **Phone**: Library > "Windows Hello (x86 32-bit, no JIT)" (hello-i386.exe): the log shows
   `PE probe: machine=0x14c (i386: WoW64)`, `[nojit] xtajit.dll: host table ... (FXI32 is the x86
   CPU)`, `[fxi-wow] first x86 code`, the `[program]` lines ("Hello from Windows (x86, 32-bit)")
