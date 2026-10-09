@@ -48,7 +48,16 @@ final class WineController: ObservableObject, @unchecked Sendable {
         Program(id: "d3d12-cube-x64.exe", title: "Direct3D 12 cube (x64)", detail: "Spinning cube: D3D12 through Madeira's converter to Metal", graphics: true),
     ]
 
-    @Published private(set) var state: State = .idle
+    @Published private(set) var state: State = .idle {
+        // A game (or the long Steam sign-in without JIT) gets no touches: keep iOS from
+        // locking the screen and suspending the app while Wine runs.
+        didSet {
+            switch state {
+            case .booting, .running: ScreenAwake.set("wine", true)
+            default: ScreenAwake.set("wine", false)
+            }
+        }
+    }
     /// The Controller API this Wine session started with (its HID / DirectInput
     /// devices exist only if it started with them).
     @Published private(set) var sessionAPI = "xinput"
@@ -233,7 +242,7 @@ final class WineController: ObservableObject, @unchecked Sendable {
     /// Poll until the Windows program exits, then report how it ended.
     private func watch(_ title: String) {
         let started = Date()
-        var ticks = 0
+        var ticks = 0, clientLogsDumped = false
         while mid_wine_running() != 0 {
             usleep(250_000)
             ticks += 1
@@ -241,9 +250,13 @@ final class WineController: ObservableObject, @unchecked Sendable {
             // show its progress over the (still black) game surface.
             if dockActive, ticks % 4 == 0 {
                 let seconds = Int(Date().timeIntervalSince(started))
+                // Valve's client logs once about 4 min in too, in case the session is cut short.
+                let dumpLogs = !clientLogsDumped && seconds >= 240
+                if dumpLogs { clientLogsDumped = true }
                 Task { @MainActor in
                     let report = MadeiraDock.pollReport()
                     GameHostView.shared.setStatus(MadeiraDock.progressText(report, seconds: seconds))
+                    if dumpLogs { MadeiraDock.logClientLogs() }
                 }
             }
         }
@@ -254,6 +267,7 @@ final class WineController: ObservableObject, @unchecked Sendable {
                 let report = MadeiraDock.pollReport()
                 self.dockFailure = report.failure
                 if let failure = report.failure { dlog("[dock-launch] result=\(report.result ?? -1): \(failure)") }
+                MadeiraDock.logClientLogs()
                 MadeiraDock.cleanup()
                 done.signal()
             }
@@ -277,6 +291,19 @@ final class WineController: ObservableObject, @unchecked Sendable {
             if crashed {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { CrashReporter.shared.programCrashed(title, how: how) }
             }
+        }
+    }
+}
+
+/// Keeps the screen on while anything needs it (a running game, a Steam download): one
+/// switch for the whole app, so one holder ending does not turn it off for another.
+enum ScreenAwake {
+    @MainActor private static var holders = Set<String>()
+    /// Callable from any thread; applied on the main actor in call order.
+    static func set(_ holder: String, _ on: Bool) {
+        Task { @MainActor in
+            if on { holders.insert(holder) } else { holders.remove(holder) }
+            UIApplication.shared.isIdleTimerDisabled = !holders.isEmpty
         }
     }
 }

@@ -238,11 +238,11 @@ final class SteamLibrary: ObservableObject {
     private func run(_ appID: Int) async {
         // Keep the screen awake and ask iOS for background time: a download
         // only advances while the app runs.
-        UIApplication.shared.isIdleTimerDisabled = true
+        ScreenAwake.set("steam-download", true)
         let bg = UIApplication.shared.beginBackgroundTask(withName: "steam-download")
         defer {
             UIApplication.shared.endBackgroundTask(bg)
-            UIApplication.shared.isIdleTimerDisabled = false
+            ScreenAwake.set("steam-download", false)
         }
         downloads[appID] = .active(SteamDownloadProgress())
         do {

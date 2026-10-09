@@ -375,6 +375,40 @@ enum MadeiraDock {
             .appendingPathComponent("MadeiraDock", isDirectory: true).appendingPathComponent("launch.auth")
     }
 
+    /// The session's account name, only to remove it from Valve's client logs (never logged).
+    @MainActor private static var sessionAccount = ""
+
+    /// Valve's client writes its own diagnostics to C:\Program Files (x86)\Steam\logs; its
+    /// connection log says why a sign-in did not complete (connection attempts, CM servers,
+    /// logon results), which Dock's report cannot. After a Dock session: the folder's files
+    /// and the tail of the connection log, without Steam IDs or the account name (SteamLog's
+    /// rule), as [steam-logs] lines.
+    @MainActor static func logClientLogs() {
+        let dir = drive.appendingPathComponent(SteamRuntimeFiles.relativeRoot).appendingPathComponent("logs")
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else {
+            SteamLog.event("[steam-logs] no logs folder"); return
+        }
+        for name in names.sorted() {
+            let size = (try? dir.appendingPathComponent(name).resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            SteamLog.event("[steam-logs] \(name): \(size) bytes")
+        }
+        for name in names.sorted() where name.hasPrefix("connection_log") || name.hasPrefix("stderr") {
+            guard let data = try? Data(contentsOf: dir.appendingPathComponent(name)) else { continue }
+            let lines = String(decoding: data.suffix(48_000), as: UTF8.self).split(whereSeparator: \.isNewline).suffix(250)
+            SteamLog.event("[steam-logs] == \(name), last \(lines.count) lines")
+            for line in lines { SteamLog.event("[steam-logs] " + redact(String(line.prefix(400)))) }
+        }
+    }
+
+    @MainActor private static func redact(_ line: String) -> String {
+        var s = line
+        for pattern in [#"\[U:1:\d+\]"#, #"\b7656119\d{10}\b"#] {
+            s = s.replacingOccurrences(of: pattern, with: "[steam-id]", options: .regularExpression)
+        }
+        if !sessionAccount.isEmpty { s = s.replacingOccurrences(of: sessionAccount, with: "[account]", options: .caseInsensitive) }
+        return s
+    }
+
     /// Removes an unconsumed transfer (session end, sign-out, app start).
     @MainActor static func cleanup() {
         if let url = transferURL { try? FileManager.default.removeItem(at: url) }
@@ -389,6 +423,7 @@ enum MadeiraDock {
     @MainActor static func writeHandoff(account: String, token: String, appID: Int) throws {
         cleanup()
         lastReport = Report()
+        sessionAccount = account
         let report = drive.appendingPathComponent("madeira-dock.txt")
         if FileManager.default.fileExists(atPath: report.path) { try FileManager.default.removeItem(at: report) }
         guard let url = transferURL else { throw DockError.message("Dock's private transfer folder is unavailable.") }

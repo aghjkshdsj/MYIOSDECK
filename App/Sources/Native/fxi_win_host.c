@@ -4,6 +4,7 @@
 // (engine/wine/patches/nojit_dylib.py) stores mid_fxi_win_host_table() into that DLL when it
 // maps it; the DLL's exports branch through the table to fxi_win_glue.S and to the C here.
 
+#include <dlfcn.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -440,6 +441,11 @@ static void prof_report(uint64_t period_samples) {
         const char *mod = "?"; char fn[96] = "?";
         for (int k = 0; k < nm; k++)
             if (calls[i].rip - mods[k].base < mods[k].size) { mod = mods[k].name; prof_export_name(&mods[k], calls[i].rip, fn, sizeof fn); break; }
+        // Wine's ARM64EC DLLs are mapped from signed dylibs: when no export is at or below the
+        // target (log 54: "?below" for every ntdll/kernel32 target), the dylib's own symbols may be.
+        Dl_info di;
+        if (fn[0] == '?' && dladdr((const void *)(uintptr_t)calls[i].rip, &di) && di.dli_sname)
+            snprintf(fn, sizeof fn, "%s+%#llx [dylib]", di.dli_sname, (unsigned long long)(calls[i].rip - (uintptr_t)di.dli_saddr));
         mid_log("[fxi-prof]   native %2d: %5.1f%% %llu/s %s!%s (%#llx)", i + 1, 100.0 * calls[i].n / (double)total_calls,
                 (unsigned long long)(calls[i].n / PROF_PERIOD_S), mod, fn, (unsigned long long)calls[i].rip);
     }
