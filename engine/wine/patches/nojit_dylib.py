@@ -157,10 +157,11 @@ static int ios_nojit_mprotect( void *base, size_t size, int unix_prot, int *ret 
 }
 
 /* Step D: the emulator DLL (xtajit64.dll = engine/pedylib/emu) forwards Wine's x64-emulator
- * interface to FXI in the app through its exported MyiosdeckFxiHost slot. */
-static void ios_nojit_install_fxi( struct ios_nojit_image *im )
+ * interface to FXI in the app through its exported MyiosdeckFxiHost slot. 32-bit games
+ * (docs/NO_JIT_WOW64.md): the WoW64 CPU module (xtajit.dll, aarch64) forwards wow64.dll's
+ * BTCpu* interface to FXI32 through MyiosdeckWowHost. */
+static void ios_nojit_install_host( struct ios_nojit_image *im, const char *slot_name, void *(*table)( int ) )
 {
-    extern void *mid_fxi_win_host_table( int tsd_offset );
     extern int ios_teb_tls_slot_offset;
     IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)im->base;
     IMAGE_NT_HEADERS *nt = (IMAGE_NT_HEADERS *)(im->base + dos->e_lfanew);
@@ -174,18 +175,29 @@ static void ios_nojit_install_fxi( struct ios_nojit_image *im )
     for (i = 0; dir->Size && i < exp->NumberOfNames; i++)
     {
         void **slot;
-        if (strcmp( im->base + names[i], "MyiosdeckFxiHost" )) continue;
+        if (strcmp( im->base + names[i], slot_name )) continue;
         slot = (void **)(im->base + funcs[ords[i]]);
         if ((char *)slot < im->data)
         {
-            ios_nojit_trace( "[nojit] xtajit64.dll: MyiosdeckFxiHost is not in writable data\n" );
+            ios_nojit_trace( "[nojit] %s: %s is not in writable data\n", im->name, slot_name );
             return;
         }
-        *slot = mid_fxi_win_host_table( ios_teb_tls_slot_offset );
-        ios_nojit_trace( "[nojit] xtajit64.dll: FXI host table %p installed (FXI is the x64 CPU)\n", *slot );
+        *slot = table( ios_teb_tls_slot_offset );
+        ios_nojit_trace( "[nojit] %s: host table %p installed (%s)\n", im->name, *slot,
+                         im->machine == IMAGE_FILE_MACHINE_ARM64 ? "FXI32 is the x86 CPU" : "FXI is the x64 CPU" );
         return;
     }
-    ios_nojit_trace( "[nojit] xtajit64.dll: no MyiosdeckFxiHost export -- x64 code cannot run\n" );
+    ios_nojit_trace( "[nojit] %s: no %s export -- its code cannot run\n", im->name, slot_name );
+}
+
+static void ios_nojit_install_fxi( struct ios_nojit_image *im )
+{
+    extern void *mid_fxi_win_host_table( int tsd_offset );
+    extern void *mid_fxi_wow_host_table( int tsd_offset );
+    if (im->machine == IMAGE_FILE_MACHINE_AMD64 && !strcmp( im->name, "xtajit64.dll" ))
+        ios_nojit_install_host( im, "MyiosdeckFxiHost", mid_fxi_win_host_table );
+    if (im->machine == IMAGE_FILE_MACHINE_ARM64 && !strcmp( im->name, "xtajit.dll" ))
+        ios_nojit_install_host( im, "MyiosdeckWowHost", mid_fxi_wow_host_table );
 }
 
 /* Find (and dlopen once) the signed dylib for an image. Called outside virtual_mutex.
@@ -259,7 +271,7 @@ static struct ios_nojit_image *ios_nojit_load( const UNICODE_STRING *nt_name, un
             pthread_mutex_unlock( &ios_nojit_lock );
             ios_nojit_trace( "[nojit] %s: instance #%d at %p+0x%lx (another Windows process)\n", name, k,
                              im->base, (unsigned long)im->size );
-            if (!strcmp( name, "xtajit64.dll" )) ios_nojit_install_fxi( im );
+            ios_nojit_install_fxi( im );   /* xtajit64.dll / xtajit.dll: the CPU's host table */
             return im;
         }
     }
@@ -294,7 +306,7 @@ static struct ios_nojit_image *ios_nojit_load( const UNICODE_STRING *nt_name, un
              name, img, (unsigned long)im->size, (unsigned long)(data - img), ios_teb_tls_slot_offset,
              machine == IMAGE_FILE_MACHINE_ARM64 ? " (aarch64)" : "" );
     if (!ios_teb_tls_slot_offset) ios_nojit_trace( "[nojit] WARNING: TEB TSD slot not known yet\n" );
-    if (!strcmp( name, "xtajit64.dll" )) ios_nojit_install_fxi( im );
+    ios_nojit_install_fxi( im );   /* xtajit64.dll / xtajit.dll: the CPU's host table */
     return im;
 }
 

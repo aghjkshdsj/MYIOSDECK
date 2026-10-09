@@ -1,0 +1,15 @@
+; The ntdll functions the WoW64 CPU module (xtajit_wow.c) imports: its import library is made
+; from this list (llvm-dlltool), since mingw's libntdll.a lacks some of Wine's WoW64 exports.
+LIBRARY ntdll.dll
+EXPORTS
+  DbgPrint
+  LdrGetDllHandle
+  LdrGetProcedureAddress
+  NtAllocateVirtualMemory
+  NtQueryInformationProcess
+  NtSuspendThread
+  NtTerminateProcess
+  RtlCaptureContext
+  RtlWow64GetCurrentCpuArea
+  RtlWow64GetThreadContext
+  RtlWow64SetThreadContext

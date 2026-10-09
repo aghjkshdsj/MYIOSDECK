@@ -46,6 +46,11 @@ targets:
       - path: engine/fxi
         excludes: ["fxi_main.c", "*.sh"]
         compilerFlags: ["-O2", "-ffp-contract=off"]
+      # FXI32, FXI built for i386 guests (the x86 CPU of 32-bit games, docs/NO_JIT_WOW64.md); its
+      # names are fx32_* (engine/fxi/fxi_i386.h).
+      - path: engine/fxi32
+        excludes: ["fx32_main.c", "*.sh"]
+        compilerFlags: ["-O2", "-ffp-contract=off"]
       # FXR, FXI with the guest registers pinned in host registers (experimental, Linux guests
       # only). Its copy of the FXI sources is renamed to fxr_* (engine/fxr/fxr_rename.h).
       - path: engine/fxr
@@ -84,6 +89,7 @@ targets:
           - "$(SRCROOT)/App/Generated"
           - "$(SRCROOT)/engine/guest"
           - "$(SRCROOT)/engine/fxi"
+          - "$(SRCROOT)/engine/fxi32"
           - "$(MYIOSDECK_FEX_HEADERS)"
           - "$(MYIOSDECK_WINE_HEADERS)"
         OTHER_LDFLAGS:

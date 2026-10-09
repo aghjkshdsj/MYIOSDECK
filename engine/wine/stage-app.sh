@@ -50,6 +50,29 @@ if mark not in s:
     open(p, "w").write(s)
 PY
 
+# 32-bit games without JIT (docs/NO_JIT_WOW64.md): with MYIOSDECK_NOJIT_WOW_CPU set, wow64.dll's
+# CPU module (system32\xtajit.dll, FEX with JIT) is our FXI32 front end (engine/pedylib/emu).
+python3 - "$A/WineProcessBridge.m" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+mark = "MYIOSDECK_NOJIT_WOW_CPU"
+anchor = 'dprintf(STDERR_FILENO, "[WineProc] Symlinked %d DLLs from %s -> sys32\\n", linked, bundle_subdir);\n'
+if mark not in s:
+    assert s.count(anchor) == 1, "WineProcessBridge.m anchor"
+    s = s.replace(anchor, anchor + r'''            {
+                const char *wow = getenv("MYIOSDECK_NOJIT_WOW_CPU");
+                if (wow && *wow) {
+                    NSString *dst = [sys32Dir stringByAppendingPathComponent:@"xtajit.dll"];
+                    [fm removeItemAtPath:dst error:nil];
+                    BOOL ok = [fm createSymbolicLinkAtPath:dst withDestinationPath:[NSString stringWithUTF8String:wow] error:nil];
+                    dprintf(STDERR_FILENO, "[WineProc] no-JIT: xtajit.dll -> %s (%s)\n", wow, ok ? "ok" : "FAILED");
+                }
+            }
+''')
+    open(p, "w").write(s)
+PY
+
 LINK=""
 for f in "$LIBS"/*.a; do LINK="$LINK \$(SRCROOT)/${f#"$ROOT/"}"; done
 mkdir -p "$ROOT/Config" "$ROOT/App/Generated"

@@ -24,8 +24,10 @@ static void say(const char *fmt, ...) {
     if (n > 0) report_len += (size_t)n < sizeof report - report_len ? (size_t)n : sizeof report - report_len - 1;
 }
 
-#ifdef _M_ARM64EC
+#if defined(_M_ARM64EC)
 #define HELLO_ARCH "ARM64EC"
+#elif defined(_M_IX86)
+#define HELLO_ARCH "x86, 32-bit"   // hello-i386.exe: WoW64, its code in FXI32
 #else
 #define HELLO_ARCH "ARM64"
 #endif

@@ -63,8 +63,8 @@ server parses our PE's headers and the map hook maps our signed dylib.
 | `BTCpuGetBopCode()` | process_init, thread_init | **guest** address of the system-call entry | the BOP page's guest address `g` |
 | `__wine_get_unix_opcode()` | process_init | **guest** address of the unix-call entry | `g + 2` |
 | `BTCpuSimulate()` | `cpu_simulate` loop; nested from `Wow64KiUserCallbackDispatcher` and `Wow64ApcRoutine` | run x86 code from the thread's context; may return (the loop calls it again) or be left by longjmp/unwind | naked: capture the entry `CONTEXT` (RtlCaptureContext), `H_SIMULATE(entry_ctx)` |
-| `BTCpuGetContext(thread, process, NULL, WOW64_CONTEXT*)` | wow64 internals only, always with `GetCurrentThread()` (exception dispatch, callbacks, APCs, the initial context); a 32-bit `NtGetContextThread` reads the CPU area directly (`RtlWow64GetThreadContext`) | current 32-bit state | flush our state to the CPU area if the thread is us, then `RtlWow64GetThreadContext` |
-| `BTCpuSetContext(...)` | exception dispatch, NtContinue, callbacks, APCs, initial context | replace the 32-bit state | `RtlWow64SetThreadContext`, then mark the thread's state dirty: reloaded before the next x86 instruction |
+| `BTCpuGetContext(thread, process, NULL, WOW64_CONTEXT*)` | wow64 internals only, always with `GetCurrentThread()` (exception dispatch, callbacks, APCs, the initial context); a 32-bit `NtGetContextThread` reads the CPU area directly (`RtlWow64GetThreadContext`) | current 32-bit state | `RtlWow64GetThreadContext`: every call comes while the thread is outside x86 code, when the CPU area is exact (2.3), so no call into the app (as wow64cpu) |
+| `BTCpuSetContext(...)` | exception dispatch, NtContinue, callbacks, APCs, initial context | replace the 32-bit state | `RtlWow64SetThreadContext`, then `WOW64_CPURESERVED_FLAG_RESET_STATE` on the current thread's CPU area: the app reloads before the next x86 instruction (2.3) |
 | `BTCpuResetToConsistentState(EXCEPTION_POINTERS*)` | `Wow64PrepareForException`, for every exception the 64-bit side dispatches | turn a fault inside the emulator into a guest exception | `H_RESET`: when the faulting pc is inside FXI32 (normally caught earlier, 2.5), rebuild the guest state and restore the entry context; else nothing |
 | `BTCpuSuspendLocalThread(thread, count)` | not called by this Wine (wow64's NtSuspendThread is a plain one) | | `NtSuspendThread` |
 | `BTCpuFlushInstructionCache2/Heavy(addr, size)` | NtFlushInstructionCache, cross-process work | host address | `H_INVALIDATE(addr - B, size)` (Heavy with NULL,0 = everything) |
@@ -89,8 +89,9 @@ data slot `MyiosdeckWowHost`; the map hook (`nojit_dylib.py`) stores the app's t
 `mid_fxi_wow_host_table(tsd_offset)` into it when it maps `xtajit.dll` for an ARM64 image. Calls
 from the module into the app are plain `blr` with 64-bit arguments (the Apple arm64 ABI and the
 Windows arm64 ABI agree on x0-x7/v0-v7 and callee-saved x19-x28; x18 is never used by either
-side's interface). Slots: `H_PROCESS_INIT, H_THREAD_INIT, H_THREAD_TERM, H_SIMULATE,
-H_GET_CONTEXT, H_SET_CONTEXT, H_RESET, H_INVALIDATE, H_FEATURE, H_CPU_INFO`.
+side's interface). Slots: `H_PROCESS_INIT, H_THREAD_INIT, H_THREAD_TERM, H_SIMULATE, H_RESET,
+H_INVALIDATE, H_FEATURE, H_CPU_INFO`. Contexts never need the app: the CPU area is the
+hand-over (2.4), and the module reads and writes it with Wine's own functions.
 
 Calls from the app back into Windows code (system calls, unix calls, exceptions) go through one
 export of the module, `MyiosdeckWowCall(fn, a0, a1, a2)`: FEX's `SEHFrameTrampoline2Args`. Its
@@ -146,14 +147,16 @@ its per-thread CPU on TEB64 and keeps the pointer in slot 14.
   (codes in syscall.c: 0 #DE, 3 breakpoint, 4 overflow, 5 bounds, 6 #UD, 0x29 fastfail, 0x2d
   debug service), dispatches it to the 32-bit `KiUserExceptionDispatcher` with `BTCpuSetContext`,
   and the app goes on there.
-- **A host fault in guest memory** (B + ea not mapped / not writable): the Mach exception reaches
-  Madeira's server; `engine/wine/patches/nojit_fault_hook.py` already asks the app
-  (`mid_fxi_mach_fault`) before Madeira's last-resort delivery. For a thread that is running x86
-  code in FXI32 the app redirects it to a fault entry: exact EIP from the uop that touched memory
-  (`c->cur`, as in FXI's x64 Windows mode), state to the CPU area, a 64-bit record
-  (`STATUS_ACCESS_VIOLATION`, info[0] read/write, info[1] host fault address), then
-  `Wow64PassExceptionToGuest(&ptrs)` through `MyiosdeckWowCall`, then simulation goes on at the
-  32-bit dispatcher. A fault outside the window (an FXI32 bug) ends the program with a log line.
+- **A host fault in guest memory** (B + ea not mapped / not writable): unlike FXI's x64 mode,
+  which runs on a separate emulator stack (hence `nojit_fault_hook.py`), FXI32 runs on the
+  thread's own stack inside BTCpuSimulate, so Madeira's server delivers the fault normally to
+  the 64-bit KiUserExceptionDispatcher, which calls `BTCpuResetToConsistentState` first. When the
+  thread was interpreting x86 code, the app puts the state at the faulting instruction (exact EIP
+  from the uop that touched memory, `c->cur`) into the CPU area, sets ExceptionAddress to
+  B + EIP (an execute fault: info = { 8, B + EIP }) and replaces the dispatch context with the
+  one BTCpuSimulate captured. Dispatch then reaches wow64's handler on `cpu_simulate`, which
+  passes the exception to the 32-bit dispatcher (`Wow64PassExceptionToGuest`) and unwinds back
+  into the simulate loop: FEX's scheme exactly.
 - **Exceptions in native 64-bit code** take Wine's normal path; `BTCpuResetToConsistentState`
   has nothing to do for them.
 
@@ -240,6 +243,10 @@ new bundle folders.
   The log's `[WineProc]` lines now show the syswow64/sysaa64 links.
 
 ### Stage 2: FXI32 in CI
+**Status (2026-10-09, run 37992360512):** fxi32 builds (symbols renamed, checked), difftest32's
+163 forms match native exactly, bench matches native in every kernel for both the SSE2 and the
+x87 float build (3.3-9.3% of native on the x86-64 runner), and the i386 farm's kernel32,
+kernelbase, user32, DXMT d3d11/dxgi/winemetal and hello-x86.exe decode 100%.
 - engine/fxi i386 build (2.8) as a Linux host tool `fxi32` that runs static i386 ELF guests
   (`int 0x80` syscalls) inside a window at a high `B` (mmap'ed 4 GB reservation), so a missing
   `+B` faults instead of passing by accident.
@@ -253,17 +260,27 @@ new bundle folders.
 
 ### Stage 3: the CPU module and the app host
 - `engine/pedylib/emu/xtajit_wow.c` (aarch64 PE, 16 KB sections, exports of 2.1,
-  `MyiosdeckWowHost`, `MyiosdeckWowCall`), converted with `--strict`.
-- `App/Sources/Native/fxi_wow_host.c` + glue: 2.2-2.7; the fault hook's i386 branch; the map hook
-  installs the table for `xtajit.dll` (ARM64).
-- The app symlinks `system32\xtajit.dll` to our module without JIT (`MYIOSDECK_NOJIT_WOW_CPU`).
+  `MyiosdeckWowHost`, `MyiosdeckWowCall`; imports only ntdll, through
+  `xtajit_wow_ntdll.def`), converted with `--strict`; build-spike.sh fails when an export is
+  missing.
+- `engine/fxi32/fxi_wow.c` (API `engine/fxi32/fx32.h`): a CPU per thread, one block cache per
+  process (by window), run until the BOP page / an exception / an error, I386_CONTEXT load and
+  save (ExtendedRegisters = fxsave; FloatSave derived from it).
+- `App/Sources/Native/fxi_wow_host.c`: 2.2-2.6. A fault while interpreting needs no Mach-hook
+  branch: FXI32 runs on the thread's own stack inside BTCpuSimulate, so Wine delivers it
+  normally and `BTCpuResetToConsistentState` turns it into the guest's (state at the faulting
+  instruction into the CPU area, dispatch restarted from BTCpuSimulate's captured context).
+- The map hook installs the table for `xtajit.dll` (ARM64); the app links `system32\xtajit.dll`
+  to our module without JIT (`MYIOSDECK_NOJIT_WOW_CPU`); `hello-i386.exe` (the hello source built
+  for i686) goes into the i386 farm.
 - CI: `llvm-readobj --coff-exports` must list every BTCpu export; a Linux harness
   (`engine/fxi/wow_test.c`) drives FXI32 through the host protocol with a fake service table:
   BOP calls, context store/reload, nested simulation with an abandoned inner run, int3/ud2/#DE,
   a fault at the exact EIP, invalidation.
-- **Phone**: Library > "Windows Hello (x86, no JIT)" (Madeira's hello-x86.exe): the log shows
-  `PE probe: machine=0x14c (i386: WoW64)`, `[wow-base]`, `MADEIRA-X86-32: hello from a 32-bit PE`,
-  exit code 42.
+- **Phone**: Library > "Windows Hello (x86 32-bit, no JIT)" (hello-i386.exe): the log shows
+  `PE probe: machine=0x14c (i386: WoW64)`, `[nojit] xtajit.dll: host table ... (FXI32 is the x86
+  CPU)`, `[fxi-wow] first x86 code`, the `[program]` lines ("Hello from Windows (x86, 32-bit)")
+  and exit code 42.
 
 ### Stage 4: 32-bit programs in the app
 - WineController: a 32-bit game starts without JIT when the bundle has the WoW64 set (no refusal);

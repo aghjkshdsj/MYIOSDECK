@@ -81,13 +81,19 @@ static int scan_pe(const char *path) {
     unsigned nwork = 0;
     if (u32at(opt + 16)) work[nwork++] = u32at(opt + 16);   // AddressOfEntryPoint
 #if FXI_I386
-    {   // exported functions (a forwarder's RVA points into the export directory: skipped)
+    {   // exported functions: exports in an executable section (msvcrt and ntdll also export
+        // data, e.g. _iob or Wow64Transition; a forwarder points into the export directory)
         uint32_t exp_rva = u32at(dirs), exp_size = u32at(dirs + 4);
         const unsigned char *exp = exp_size ? RVA(exp_rva) : NULL;
         const unsigned char *fn = exp ? RVA(u32at(exp + 28)) : NULL;
         for (uint32_t i = 0; fn && i < u32at(exp + 20) && nwork < MAX_WORK; i++) {
             uint32_t r = u32at(fn + 4 * i);
-            if (r && (r < exp_rva || r >= exp_rva + exp_size)) work[nwork++] = r;
+            if (!r || (r >= exp_rva && r < exp_rva + exp_size)) continue;
+            for (uint32_t k = 0; k < nsec; k++) {
+                const unsigned char *s = sec + k * 40;
+                uint32_t va = u32at(s + 12), vsz = u32at(s + 8);
+                if (r >= va && r < va + vsz && (u32at(s + 36) & 0x20000020)) { work[nwork++] = r; break; }
+            }
         }
     }
 #endif

@@ -67,13 +67,6 @@ build_wine_extras() {
     for f in "$OUT/winepe/xtajit64.dll" "$OUT/winepe/hello-arm64ec.exe"; do
         python3 "$HERE/pe2dylib.py" convert --strict --keep-ext "$f" "$OUT/wine" | tail -3
     done
-    # The same hello as plain ARM64: an aarch64 Wine session, the 64-bit half of every WoW64
-    # (32-bit) process (docs/NO_JIT_WOW64.md). Its dylib goes with the aarch64 farm's (wine-a64).
-    mkdir -p "$OUT/winepe-a64" "$OUT/wine-a64"
-    aarch64-w64-mingw32-clang -O2 -fno-stack-protector -Wl,--section-alignment=0x4000 \
-        -o "$OUT/winepe-a64/hello-aarch64.exe" "$HERE/hello/hello-arm64ec.c"
-    llvm-readobj --file-headers --coff-imports "$OUT/winepe-a64/hello-aarch64.exe" | grep -E 'Machine|Name:' | head -20 || true
-    python3 "$HERE/pe2dylib.py" convert --strict --keep-ext "$OUT/winepe-a64/hello-aarch64.exe" "$OUT/wine-a64" | tail -3
     # The x64 test suite for FXI inside Wine (step D): plain x86-64, its code is interpreted.
     x86_64-w64-mingw32-clang -O2 -c -o "$B/suite-x64.o" "$HERE/hello/suite-x64.c"
     x86_64-w64-mingw32-clang++ -O2 -c -o "$B/suite-x64-cxx.o" "$HERE/hello/suite-x64-cxx.cpp"
@@ -81,6 +74,47 @@ build_wine_extras() {
     llvm-readobj --coff-imports "$OUT/winepe/suite-x64.exe" | grep -E 'Name:' | sort -u | head -20 || true
 }
 ( set -e; build_wine_extras ) || { echo "::warning::Wine no-JIT extras failed"; fail=1; }
+
+# 32-bit games without JIT (WoW64, docs/NO_JIT_WOW64.md), apart from the x64 pieces above so a
+# failure here leaves those alone. aarch64 PE files go to $OUT/winepe-a64 (bundled with the
+# aarch64 farm), their dylib sources to $OUT/wine-a64; i386 programs to $OUT/winepe-x86 (bundled
+# with the i386 farm).
+build_wow64_extras() {
+    # The same hello as plain ARM64: an aarch64 Wine session, the 64-bit half of every WoW64
+    # (32-bit) process. Its dylib goes with the aarch64 farm's (wine-a64).
+    mkdir -p "$OUT/winepe-a64" "$OUT/wine-a64"
+    aarch64-w64-mingw32-clang -O2 -fno-stack-protector -Wl,--section-alignment=0x4000 \
+        -o "$OUT/winepe-a64/hello-aarch64.exe" "$HERE/hello/hello-arm64ec.c"
+    llvm-readobj --file-headers --coff-imports "$OUT/winepe-a64/hello-aarch64.exe" | grep -E 'Machine|Name:' | head -20 || true
+    python3 "$HERE/pe2dylib.py" convert --strict --keep-ext "$OUT/winepe-a64/hello-aarch64.exe" "$OUT/wine-a64" | tail -3
+    # The WoW64 CPU module wow64.dll loads as xtajit.dll (docs/NO_JIT_WOW64.md, stage 3): FXI32's
+    # front end. ntdll is its only import (the 64-bit half of a WoW64 process has nothing else).
+    llvm-dlltool -m arm64 -d "$HERE/emu/xtajit_wow_ntdll.def" -l "$B/libntdll_wow.a"
+    aarch64-w64-mingw32-clang -O2 -fno-stack-protector -shared -nostdlib -Wl,--section-alignment=0x4000 \
+        -o "$OUT/winepe-a64/xtajit.dll" "$HERE/emu/xtajit_wow.c" "$B/libntdll_wow.a"
+    local want="BTCpuFlushInstructionCache2 BTCpuFlushInstructionCacheHeavy BTCpuGetBopCode BTCpuGetContext
+        BTCpuIsProcessorFeaturePresent BTCpuNotifyMapViewOfSection BTCpuNotifyMemoryAlloc BTCpuNotifyMemoryDirty
+        BTCpuNotifyMemoryFree BTCpuNotifyMemoryProtect BTCpuNotifyProcessExecuteFlagsChange BTCpuNotifyReadFile
+        BTCpuNotifyUnmapViewOfSection BTCpuProcessInit BTCpuProcessTerm BTCpuResetToConsistentState BTCpuSetContext
+        BTCpuSimulate BTCpuSuspendLocalThread BTCpuThreadInit BTCpuThreadTerm BTCpuUpdateProcessorInformation
+        __wine_get_unix_opcode MyiosdeckWowHost MyiosdeckWowCall"
+    local exports
+    exports=$(llvm-readobj --coff-exports "$OUT/winepe-a64/xtajit.dll" | sed -n 's/^ *Name: //p')
+    for e in $want; do grep -qx "$e" <<< "$exports" || { echo "xtajit.dll lacks export $e" >&2; return 1; }; done
+    llvm-readobj --coff-imports "$OUT/winepe-a64/xtajit.dll" | grep -E 'Name:' | head -20 || true
+    python3 "$HERE/pe2dylib.py" convert --strict --keep-ext "$OUT/winepe-a64/xtajit.dll" "$OUT/wine-a64" | tail -3
+    # Windows Hello as a 32-bit program (the same source, i686): the first x86 code FXI32 runs
+    # inside Wine; bundled in the i386 farm (C:\windows\syswow64) by build-ipa.yml.
+    mkdir -p "$OUT/winepe-x86"
+    i686-w64-mingw32-clang -O2 -o "$OUT/winepe-x86/hello-i386.exe" "$HERE/hello/hello-arm64ec.c"
+    llvm-readobj --file-headers --coff-imports "$OUT/winepe-x86/hello-i386.exe" | grep -E 'Machine|Name:' | head -20 || true
+    # The x86 test suite (stage 4): the x64 suite's tests plus a window-procedure callback.
+    i686-w64-mingw32-clang -O2 -c -o "$B/suite-x86.o" "$HERE/hello/suite-x86.c"
+    i686-w64-mingw32-clang++ -O2 -c -o "$B/suite-x86-cxx.o" "$HERE/hello/suite-x64-cxx.cpp"
+    i686-w64-mingw32-clang++ -static -o "$OUT/winepe-x86/suite-x86.exe" "$B/suite-x86.o" "$B/suite-x86-cxx.o" -luser32
+    llvm-readobj --coff-imports "$OUT/winepe-x86/suite-x86.exe" | grep -E 'Name:' | sort -u | head -20 || true
+}
+( set -e; build_wow64_extras ) || echo "::warning::WoW64 (32-bit) extras failed: no 32-bit test programs or CPU module"
 
 # Madeira Dock (github.com/willfaust/madeira-dock, GPL-3.0-or-later with the Madeira Converter
 # Exception, Copyright 2026 125hz): dockhost.exe, the headless host that loads Valve's own Steam

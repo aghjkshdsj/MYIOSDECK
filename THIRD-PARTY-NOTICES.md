@@ -14,6 +14,7 @@
 | FEX submodules: fmt, xxHash, range-v3, unordered_dense, SoftFloat-3e, cephes | Linked through FEXCore | MIT / BSD-2-Clause / BSL-1.0 / BSD-3-Clause / MIT-style |
 | [Wine](https://www.winehq.org) via [Madeira's fork](https://github.com/willfaust/wine) (`engine/wine/PIN`) | Windows DLL farms: ARM64EC and aarch64 (Madeira's prebuilt PE files, also wrapped as signed dylibs), i386 (built from source in CI, `engine/wine/build-i386.sh`, for 32-bit games); unix side linked statically | LGPL-2.1-or-later |
 | [DXMT](https://github.com/3Shain/dxmt) via [Madeira's fork](https://github.com/willfaust/dxmt) (`engine/dxmt/PIN`) | Direct3D 9/10/11 → Metal: ARM64EC and i386 DLLs built from source in CI, unix side linked statically | MIT (upstream); D3D9 import LGPL-2.1-or-later; Madeira's changes GPL-3.0-or-later (with the Madeira Converter Exception for 125hz's) |
+| [FEX-Emu](https://github.com/FEX-Emu/FEX) WOW64 module (`Source/Windows/WOW64/Module.cpp`, via Madeira's fork) | The BTCpu* contract, the BOP-page convention and the unwind-frame trampoline, ported to C in `engine/pedylib/emu/xtajit_wow.c` (the no-JIT WoW64 CPU module) | MIT (upstream); Madeira's guest-window changes GPL-3.0-or-later with the Madeira Converter Exception |
 | [Madeira](https://github.com/willfaust/Madeira) `tests/x86/hello-x86.c` | `hello-x86.exe`, the 32-bit (WoW64) smoke test, built in CI | GPL-3.0-or-later with the Madeira Converter Exception |
 
 Steam is a trademark of Valve Corporation. iPhone, iOS and Metal are trademarks of Apple Inc.

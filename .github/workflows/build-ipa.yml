@@ -187,6 +187,8 @@ jobs:
           mkdir -p "$I386"
           I386_RUN=$(bash tools/latest-run.sh wine-i386.yml || true)
           if [ -n "$I386_RUN" ] && gh run download "$I386_RUN" -R "$GITHUB_REPOSITORY" -n wine-i386-farm -D "$I386"; then
+            # The 32-bit test programs (engine/pedylib/build-spike.sh): C:\windows\syswow64\*.exe
+            cp App/Generated/pedylib/winepe-x86/*.exe "$I386/" 2>/dev/null || true
             echo "- WoW64 i386 farm: run $I386_RUN, $(ls "$I386" | wc -l | tr -d ' ') files, $(du -sh "$I386" | cut -f1)" | tee -a "$GITHUB_STEP_SUMMARY"
           else
             echo "- WoW64 i386 farm: none yet (wine-i386.yml): no target is treated as 32-bit" | tee -a "$GITHUB_STEP_SUMMARY"
@@ -231,6 +233,8 @@ jobs:
           if [ -d App/Generated/pedylib/wine-a64 ] && ls App/Generated/pedylib/wine-a64/*.S > /dev/null 2>&1; then
             bash engine/pedylib/link-dylibs.sh App/Generated/pedylib/wine-a64 App/Generated/PE/wine-a64 ||
               echo "::warning::aarch64 Wine dylibs did not link; this IPA cannot run 32-bit games or aarch64 programs without JIT."
+            # The WoW64 CPU module (FXI32's front end): the app links system32\xtajit.dll to this file.
+            cp App/Generated/pedylib/winepe-a64/xtajit.dll App/Generated/PE/wine-a64/ 2>/dev/null || true
           fi
 
       - name: Generate Xcode project
