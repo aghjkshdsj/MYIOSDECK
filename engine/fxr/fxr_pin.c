@@ -939,8 +939,9 @@ void fxr_enter(FxiCpu *c, Block *b) {
 
 // ---- Windows mode: the x64 state at a host fault or at a stop of the thread ----
 // FXR keeps the guest registers in host registers (FXR_PARAMS, preserve_none on ARM64): RAX x22,
-// RCX x23, RDX x24, RBX x28, RSP x27, RBP x0, RSI x25, RDI x26, R8-R14 x1-x7, R15 x9, T x10,
-// flags x11-x14, XMM0-7 v0-v7; x21 is the uop. At a fault inside a pinned handler (section
+// RCX x23, RDX x24, RBX x28, RSP x27, RBP x0, RSI x25, RDI x26, R8-R14 x1-x7, R15 x10, T x11,
+// flags x12, x13, x14, x9 (clang gives x9 last: frame lowering's scratch), XMM0-7 v0-v7; x21 is
+// the uop. At a fault inside a pinned handler (section
 // fxr_h) those hold the x64 state as before the instruction: no handler writes guest-visible
 // state before its last guest memory access (engine/fxr-probe/precise.py checks it in CI, and
 // Windows mode lowers the forms that would to FXI's handlers). Outside the pinned handlers the
@@ -956,7 +957,7 @@ extern const char __start_fxr_h[], __stop_fxr_h[];
 #define fxr_h_start __start_fxr_h
 #define fxr_h_end __stop_fxr_h
 #endif
-static const uint8_t k_host_gpr[16] = { 22, 23, 24, 28, 27, 0, 25, 26, 1, 2, 3, 4, 5, 6, 7, 9 };   // RAX..R15
+static const uint8_t k_host_gpr[16] = { 22, 23, 24, 28, 27, 0, 25, 26, 1, 2, 3, 4, 5, 6, 7, 10 };   // RAX..R15
 #endif
 
 static uintptr_t *g_hidx;   // every pinned handler's start, sorted
@@ -1016,7 +1017,7 @@ static int64_t x21_moved(uintptr_t h, uintptr_t pc) {
 }
 static void load_host(FxiCpu *c, const fxr_host_state *h) {
     for (int i = 0; i < 16; i++) c->r[i] = h->x[k_host_gpr[i]];
-    uint64_t F0 = h->x[11], F1 = h->x[12], F2 = h->x[13], F3 = h->x[14];
+    uint64_t F0 = h->x[12], F1 = h->x[13], F2 = h->x[14], F3 = h->x[9];
     SPILL_F();
     for (int i = 0; i < 8; i++) memcpy(&c->xmm[i], h->q[i], 16);
 }

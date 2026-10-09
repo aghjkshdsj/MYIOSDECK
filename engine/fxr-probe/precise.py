@@ -13,9 +13,9 @@
 # through the handler's own code (branches inside it followed both ways).
 import collections, re, sys
 
-PINNED_GPR = {22, 23, 24, 25, 26, 27, 28, 0, 1, 2, 3, 4, 5, 6, 7, 9}   # guest RAX..R15
-FLAGS = {11, 12, 13, 14}                                                # F0..F3
-T_REG = 10
+PINNED_GPR = {22, 23, 24, 25, 26, 27, 28, 0, 1, 2, 3, 4, 5, 6, 7, 10}  # guest RAX..R15 (R15: x10)
+FLAGS = {12, 13, 14, 9}                                                 # F0..F3 (clang assigns x9 last)
+T_REG = 11
 INTERNAL = {20, 21, 'sp'}
 
 def reg(tok):
