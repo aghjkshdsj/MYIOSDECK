@@ -8,5 +8,6 @@
 #import "Native/fxi_bridge.h"
 #import "Native/fxr_bridge.h"
 #import "Native/pe_dylib.h"
+#import "Native/inno_unpack.h"
 // Steam content decoders (liblzma shim, zstd decoder, zip chunks) for SwiftSteam's downloads.
 #import "Steam/SwiftSteam/lzma_shim.h"

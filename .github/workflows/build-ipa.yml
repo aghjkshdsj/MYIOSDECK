@@ -104,6 +104,25 @@ jobs:
           git checkout -- Config/Blink.xcconfig
           rm -f App/Generated/blink_version.h
 
+      - name: Cache the GOG installer unpacker's downloads
+        uses: actions/cache@v4
+        with:
+          path: engine/innoextract/deps
+          key: innoextract-deps-${{ hashFiles('engine/innoextract/PIN') }}-${{ runner.os }}
+
+      # innoextract + Boost for iOS: "My games" unpacks GOG offline installers (CustomGames.swift).
+      - name: Build the GOG installer unpacker (innoextract) for iOS
+        id: inno
+        continue-on-error: true
+        run: bash engine/innoextract/build.sh ios
+
+      - name: Build without the unpacker
+        if: steps.inno.outcome != 'success'
+        run: |
+          echo "::warning::innoextract did not build; this IPA cannot unpack GOG installers (see the 'Build the GOG installer unpacker' log)."
+          git checkout -- Config/Inno.xcconfig
+          rm -f App/Generated/inno_version.h
+
       - name: Stage Wine (stage 2) from the latest Wine unix build
         id: wine
         continue-on-error: true
@@ -243,6 +262,7 @@ jobs:
             echo "- IPA: \`$NAME\`"
             echo "- FEXCore (JIT): ${{ steps.fex.outcome }}"
             echo "- Blink (no-JIT interpreter): ${{ steps.blink.outcome }}"
+            echo "- GOG installer unpacker (innoextract): ${{ steps.inno.outcome }}"
             echo "- Wine (stage 2): ${{ steps.wine.outcome }}"
             echo "- DXMT (stage 3): ${{ steps.dxmt.outcome }}"
             echo "- No-JIT spike DLLs (signed dylibs): $PEDYLIBS"

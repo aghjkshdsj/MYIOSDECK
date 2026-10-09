@@ -21,6 +21,8 @@ unpack() {
         { fail "innoextract $(basename "$1") ($2)"; return 1; }
     "$TEST" extract "$1" "$3/ours" "$2" > "$3/ours.json" ||
         { fail "unpack_test $(basename "$1") ($2): $(cat "$3/ours.json")"; return 1; }
+    jq -e '.ok and .done == .total and .errors == 0' "$3/ours.json" > /dev/null ||
+        { fail "unpack_test $(basename "$1") ($2): bad answer: $(head -c 400 "$3/ours.json")"; return 1; }
 }
 
 same() { # dir label
@@ -84,8 +86,10 @@ for verdir in "$DIR"/*/; do
         pass "$ver: missing setup_mid_lzma2-2.bin reported" || { fail "$ver: missing part"; cat "$w/inspect.json"; }
     if "$TEST" extract "$w/in/setup_mid_lzma2.exe" "$w/out" english > "$w/extract.json"; then
         fail "$ver: unpacking without a part succeeded"
-    else
+    elif jq -e '(.ok | not) and (.error | length > 0)' "$w/extract.json" > /dev/null; then
         pass "$ver: unpacking without a part fails: $(jq -r .error "$w/extract.json")"
+    else
+        fail "$ver: unpacking without a part: bad answer: $(head -c 400 "$w/extract.json" | od -c | head -8)"
     fi
 
     # Part names in another case (copied from a case-insensitive disk) still count.
