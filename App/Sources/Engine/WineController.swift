@@ -102,6 +102,26 @@ final class WineController: ObservableObject, @unchecked Sendable {
         run(Program(id: plan.exe, title: title, detail: "", graphics: true, noJIT: noJIT), args: plan.arguments)
     }
 
+    /// A Steam game started through Madeira Dock (App/Sources/Steam/MadeiraDock.swift): Wine runs
+    /// dockhost.exe, which loads Valve's own steamclient64.dll, signs in with the user's token
+    /// (the one-use transfer the caller wrote), asks Valve's client whether the account owns the
+    /// game and has it start the game with Valve's LaunchApp. The game then finds a running,
+    /// signed-in Steam client, as on a PC. Without JIT the host, Valve's client and the game are
+    /// x64 code in FXI; the game is the host's child process.
+    func runDockGame(_ game: DockGame, launchOption: UInt32, title: String) {
+        let noJIT = !mid_jit_pool_ready()
+        for k in ["MADEIRA_STEAM_APPID", "MADEIRA_STEAM_APPPATH", "MADEIRA_WORKDIR"] { unsetenv(k) }   // no direct start
+        MadeiraDock.configure(game, launchOption: launchOption)
+        dlog("[dock-launch] app=\(game.id) launch-option=\(launchOption) noJIT=\(noJIT ? 1 : 0)")
+        dockActive = true
+        run(Program(id: MadeiraDock.executable, title: title, detail: "", graphics: true, noJIT: noJIT))
+    }
+
+    /// Set while a Dock session runs: watch() polls the host's report (C:\madeira-dock.txt).
+    private(set) var dockActive = false
+    /// The host's failure, in words, when its report ended with a nonzero result.
+    @Published private(set) var dockFailure: String?
+
     /// IMAGE_FILE_HEADER.Machine of a C:\ path in the prefix (0x8664 x64, 0x14c i386; 0 unreadable).
     func peMachine(windowsPath: String) -> UInt16 {
         guard windowsPath.count > 3, windowsPath.dropFirst().hasPrefix(":\\") else { return 0 }
@@ -204,7 +224,24 @@ final class WineController: ObservableObject, @unchecked Sendable {
     /// Poll until the Windows program exits, then report how it ended.
     private func watch(_ title: String) {
         let started = Date()
-        while mid_wine_running() != 0 { usleep(250_000) }
+        var ticks = 0
+        while mid_wine_running() != 0 {
+            usleep(250_000)
+            ticks += 1
+            // Madeira Dock: log the host's report fields as they change ([dock-report]).
+            if dockActive, ticks % 8 == 0 { Task { @MainActor in _ = MadeiraDock.pollReport() } }
+        }
+        if dockActive {
+            let done = DispatchSemaphore(value: 0)
+            Task { @MainActor in
+                let report = MadeiraDock.pollReport()
+                self.dockFailure = report.failure
+                if let failure = report.failure { dlog("[dock-launch] result=\(report.result ?? -1): \(failure)") }
+                MadeiraDock.cleanup()
+                done.signal()
+            }
+            done.wait()
+        }
         var status: UInt32 = 0
         let crashed = wine_crash_exit_status(&status) != 0
         let secs = String(format: "%.1f s", Date().timeIntervalSince(started))

@@ -34,6 +34,12 @@ struct SettingsView: View {
                         .font(.footnote).foregroundStyle(Deck.dim)
                 }
 
+                DeckCard(title: "Steam", icon: "gamecontroller.fill") {
+                    Toggle("Start games through Steam (Madeira Dock)", isOn: $settings.steamViaDock).tint(Deck.accent)
+                    Text("On: Valve's own Steam client (downloaded once from Valve, about 72 MB) signs in with your account, checks the licence and starts the game, so games that need Steam running work. Off: the game's program starts on its own (for DRM-free games).")
+                        .font(.footnote).foregroundStyle(Deck.dim)
+                }
+
                 DeckCard(title: "JIT", icon: "bolt.fill") {
                     Picker("JIT pool", selection: $settings.jitPoolMB) {
                         Text("256 MB").tag(256)

@@ -152,6 +152,11 @@ jobs:
           # Wine runs bare-name programs from system32, which Madeira links to the farm.
           [ -f App/Generated/pedylib/winepe/hello-arm64ec.exe ] && cp App/Generated/pedylib/winepe/hello-arm64ec.exe "$FARM/"
           [ -f App/Generated/pedylib/winepe/suite-x64.exe ] && cp App/Generated/pedylib/winepe/suite-x64.exe "$FARM/"
+          # Madeira Dock: Valve's own Steam client starts games that need Steam (MadeiraDock.swift).
+          if [ -f App/Generated/pedylib/winepe/dockhost.exe ]; then
+            cp App/Generated/pedylib/winepe/dockhost.exe App/Generated/pedylib/winepe/dock-notices.txt "$FARM/"
+            echo "- Madeira Dock: dockhost.exe $(sha256sum "$FARM/dockhost.exe" | cut -c1-16)" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
           echo "- No-JIT Wine: $ok PE files as signed dylibs, $skip not converted" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Build without Wine

@@ -147,8 +147,14 @@ struct LibraryView: View {
                 }
                 Divider().overlay(Deck.panelHi)
                 SteamGamesGrid(library: steamLibrary, playBlocker: steamPlayBlocker, onPlay: { playSteam($0) })
+                if let dockProgress {
+                    HStack { ProgressView(); Text(dockProgress).font(.subheadline).foregroundStyle(Deck.dim) }
+                }
                 if let playError {
                     StatusRow(label: "Could not start the game", detail: playError, level: .bad)
+                }
+                if let failure = wine.dockFailure {
+                    StatusRow(label: "Steam (Madeira Dock) did not start the game", detail: failure, level: .bad)
                 }
             } else {
                 Text("Sign in with your Steam account name and password (Steam Guard supported) or a QR code from the Steam app. The sign-in token stays in this device's Keychain; the password is never stored.")
@@ -211,7 +217,11 @@ struct LibraryView: View {
         Task { @MainActor in
             do {
                 let plan = try await steamLibrary.launchPlan(game.id)
-                wine.runSteamGame(appID: game.id, title: game.name, plan: plan)
+                if MadeiraDock.bundled && settings.steamViaDock {
+                    try await startThroughDock(game, plan: plan)
+                } else {
+                    wine.runSteamGame(appID: game.id, title: game.name, plan: plan)
+                }
                 if case .failed(let why) = wine.state { playError = why; return }
                 guard case .booting = wine.state else { return }
                 // Let the game sheet finish closing before the surface is presented.
@@ -222,6 +232,36 @@ struct LibraryView: View {
                 playError = error.localizedDescription
             }
         }
+    }
+
+    /// Progress of the one-time download of Valve's client components (Madeira Dock).
+    @State private var dockProgress: String?
+
+    /// Madeira Dock: Valve's own Steam client starts the game (MadeiraDock.swift). The first
+    /// time, Valve's client components come from Valve's update servers (pinned sizes and
+    /// SHA-256, about 72 MB); then the one-use sign-in transfer is written, MYIOSDECK's own
+    /// Steam connection logs off (Dock becomes this account's client) and the host starts.
+    @MainActor private func startThroughDock(_ game: OwnedSteamGame, plan: SteamLaunchPlan) async throws {
+        if !MadeiraDock.clientInstalled {
+            dockProgress = "Downloading Steam components from Valve…"
+            defer { dockProgress = nil }
+            try await SteamRuntimeInstaller.shared.prepare(prefix: wine.prefixURL) { text in
+                await MainActor.run { dockProgress = text }
+            }
+            dlog("[dock-setup] Valve's client components installed")
+        }
+        guard let dockGame = MadeiraDock.games(drive: MadeiraDock.drive).first(where: { $0.id == game.id }) else {
+            throw DockError.message("Steam's install record for this game was not found. Reinstall the game from the Steam library.")
+        }
+        try MadeiraDock.validate(dockGame, drive: MadeiraDock.drive)
+        guard let sign = SteamSignIn.credentialsForDock() else {
+            throw DockError.message("Your Steam sign-in has expired. Sign in to Steam again.")
+        }
+        await steamLibrary.endSessionForDock()
+        try MadeiraDock.writeHandoff(account: sign.accountName, token: sign.refreshToken, appID: game.id)
+        wine.runDockGame(dockGame, launchOption: plan.launchIndex, title: game.name)
+        if case .booting = wine.state { return }
+        MadeiraDock.cleanup()
     }
 
     private var windowsCard: some View {
