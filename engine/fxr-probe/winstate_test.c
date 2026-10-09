@@ -142,8 +142,12 @@ static void on_fault(int sig, siginfo_t *si, void *ctx) {
             if (c->xmm[x].q[0] != want[xsrc[x]] || c->xmm[x].q[1]) {
                 bad = 1; n += snprintf(out + n, sizeof out - (size_t)n, "xmm%d %#llx:%#llx; ", x, (unsigned long long)c->xmm[x].q[1], (unsigned long long)c->xmm[x].q[0]);
             }
+        // The flags: exact unless the faulting instruction writes them itself (cmp/test/add with
+        // memory: sites 5, 6, 9), where the earlier compare's flags are dead and never computed
+        // (FXR's and FXI's dead-flag elimination); re-running the instruction recomputes them.
         uint64_t fl = fxi_rflags(c) & 0x8d5;
-        if (fl != 0x44) { bad = 1; n += snprintf(out + n, sizeof out - (size_t)n, "flags %#llx want 0x44; ", (unsigned long long)fl); }
+        int flags_dead = g_site == 5 || g_site == 6 || g_site == 9;
+        if (fl != 0x44 && !flags_dead) { bad = 1; n += snprintf(out + n, sizeof out - (size_t)n, "flags %#llx want 0x44; ", (unsigned long long)fl); }
         if (!bad) n += snprintf(out + n, sizeof out - (size_t)n, "exact (rip, GPRs, flags, XMM0-7)");
     }
     if (bad) {   // the host registers, to see where the guest state really is

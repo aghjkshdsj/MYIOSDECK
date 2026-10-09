@@ -214,12 +214,14 @@ static void replicate(Uop *u, int M, int copies) {
 
 // Diagnostic knobs, for A/B runs in CI (the defaults are what ships): FXR_TRACES=0 no loop traces,
 // FXR_TRACE_UOPS=n the uop budget for a trace's copies, FXR_REPLICAS=0 no handler replicas.
-static int g_traces = 1, g_trace_uops = 48, g_replicas = 1;
+static int g_traces = 1, g_trace_uops = 48, g_replicas = 1, g_win_force;
+// FXR_WINLOWER=1: lower as for Windows mode (the exact-state test, engine/fxr-probe/winstate_test.c)
 static void knobs(void) {
     const char *e;
     if ((e = getenv("FXR_TRACES"))) g_traces = atoi(e);
     if ((e = getenv("FXR_TRACE_UOPS"))) g_trace_uops = atoi(e);
     if ((e = getenv("FXR_REPLICAS"))) g_replicas = atoi(e);
+    if ((e = getenv("FXR_WINLOWER"))) g_win_force = atoi(e);
 }
 
 static void init_desc(void) {
@@ -832,7 +834,7 @@ static int find_trace(struct Fxi *vm, Block *b, Block **seg, int *edge) {
 
 Block *fxr_lower(struct Fxi *vm, Block *b) {
     pthread_once(&g_once, init_desc);
-    g_win = vm && vm->windows;
+    g_win = (vm && vm->windows) || g_win_force;
     Block *seg[TRACE_SEGS];
     int edge[TRACE_SEGS], ns = g_traces ? find_trace(vm, b, seg, edge) : 0, nseg = ns ? ns : 1;
     if (!ns) seg[0] = b;

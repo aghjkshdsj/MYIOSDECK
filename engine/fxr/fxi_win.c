@@ -87,7 +87,7 @@ uint64_t fxi_win_run(FxiCpu *c) {
     c->cur = NULL;
     if (c->err) c->err[0] = 0;
     Block *b = entry_block(c, c->rip);
-    if (!c->stop) fxr_enter(c, b);   // FXR (Windows mode is not supported by FXR yet)
+    if (!c->stop) fxr_enter(c, b);   // FXR (Windows mode: experimental; fault state, fxr_win_host_state)
     if (c->stop == FXI_STOP_EC) {
         c->stop = 0;
         return c->rip;

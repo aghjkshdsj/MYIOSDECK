@@ -177,6 +177,14 @@ def main():
         name, (a, mn, why) = examples[f]
         print('  %6d / %-6d %-28s e.g. %s at +%#x (%s) after %s%s' % (n, famall[f], f, name, a - funcs[name][0][0], mn, why,
               '' if name.startswith(WIN_EXCLUDED) else '   <- used in Windows mode'))
+    shown = 0
+    for f, n in fam.most_common():   # the code of a few examples used in Windows mode
+        name, (a, mn, why) = examples[f]
+        if name.startswith(WIN_EXCLUDED) or shown >= 10: continue
+        shown += 1
+        print('-- %s (violation at %#x)' % (name, a))
+        for ia, imn, iops in funcs[name][:40]:
+            print('   %s %-8s %s%s' % ('>' if ia == a else ' ', imn, iops, ''))
     sys.exit(1 if gate else 0)
 
 if __name__ == '__main__':
