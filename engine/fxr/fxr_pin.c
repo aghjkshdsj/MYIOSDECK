@@ -465,6 +465,16 @@ static int try_fuse(Out *o, const Uop *u, uint32_t left) {
             if (fd) edge_stubs(o, fd, k == 0 ? t_fs_addr[a->c2][D] : k == 1 ? t_fs_subr[a->c2][D] : t_fs_log[a->c2][D]);
             return 2;
         }
+        if (a->fam == FAM_ALU && a->b == F_RR && a->c2 >= 2 && D >= 0 && S >= 0 && cc8(cc) >= 0) {   // ... reg, reg
+            int k = a->a == ALU_ADD ? 0 : a->a == ALU_SUB ? 1 : a->a == ALU_AND ? 2 : a->a == ALU_OR ? 3 : a->a == ALU_XOR ? 4 : -1;
+            if (k < 0) return 0;
+            int si = a->c2;   // add/sub of a register with itself: the operands cannot be recovered
+            fs = k == 0 ? (S != D ? t_fs_addrr[si][D][S] : 0) : k == 1 ? (S != D ? t_fs_subrr[si][D][S] : 0) : t_fs_log[si][D];
+            if (fd && !fs) return 0;
+            put_uop(o, v, t_arj[k][si - 2][cc8(cc)][D][S]);
+            if (fd) edge_stubs(o, fd, fs);
+            return 2;
+        }
         if (a->fam == FAM_UNARY && !a->b && a->c2 >= 2 && D >= 0 && (a->a == U_INC || a->a == U_DEC) && !fd) {
             int ci = cc == 4 ? 0 : cc == 5 ? 1 : cc == 8 ? 2 : cc == 9 ? 3 : -1;   // inc/dec keep CF: no stub
             if (ci < 0) return 0;
@@ -484,6 +494,24 @@ static int try_fuse(Out *o, const Uop *u, uint32_t left) {
         x->disp = u->disp;
         if (fd) edge_stubs(o, fd, t_fs_log[a->b][D]);
         return 2;
+    }
+    // mov D, [base + disp] + FXI's fused cmp D, imm / jcc (the load's displacement in fimm)
+    if (a->fam == FAM_MOV && a->a == F_RM && a->b >= 2 && D >= 0 && simple_mem(u) && (int64_t)(int32_t)u->disp == u->disp &&
+        b->fam == FAM_FJCC && b->a == 0 && b->b && b->c2 == (a->b == 3) && greg(v->dst) == D) {
+        x = put_uop(o, v, t_lcj[a->b == 3][b->d & 15][u->base][D]);
+        x->fimm = (int32_t)u->disp;
+        if (fd) edge_stubs(o, fd, t_fs_subi[a->b][D]);
+        return 2;
+    }
+    // movaps/movups/movdqa D, S ; op D, X -> D = S op X (X == D reads the copy, S)
+    if (a->fam == FAM_X && !a->b && b->fam == FAM_X && !b->b && v->dst == u->dst && !strcmp(fxr_xops[a->a].name, "movx")) {
+        int k = x3_index(fxr_xops[b->a].name);
+        if (k >= 0) {
+            unsigned X = v->src == u->dst ? u->src : v->src;
+            x = put_uop(o, v, t_x3[k][xcls(u->dst)][xcls(u->src)][xcls(X)]);
+            x->dst = u->dst; x->src = u->src; x->base = (uint8_t)X;
+            return 2;
+        }
     }
     // loop step: add/sub D, imm|reg + FXI's fused cmp (D, S | S, D | D, imm) / jcc
     if (a->fam == FAM_ALU && (a->a == ALU_ADD || a->a == ALU_SUB) && a->c2 >= 2 && D >= 0 &&

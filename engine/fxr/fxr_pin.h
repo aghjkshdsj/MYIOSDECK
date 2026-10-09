@@ -386,7 +386,9 @@ typedef struct { const char *name; PFn h[9]; } XShift;
     X(t_sic, [2][2][10][16][16]) X(t_sicr, [2][2][10][16][16]) X(t_sii, [2][2][10][16]) X(t_sri, [2][2][10][16][16]) \
     X(t_3op, [10][2][16][16]) \
     X(t_fs_sub, [4][16][16]) X(t_fs_and, [4][16][16]) X(t_fs_subi, [4][16]) X(t_fs_andi, [4][16]) X(t_fs_log, [4][16]) \
-    X(t_fs_addr, [4][16]) X(t_fs_subr, [4][16]) X(t_fs_comis, [2][9][9])
+    X(t_fs_addr, [4][16]) X(t_fs_subr, [4][16]) X(t_fs_comis, [2][9][9]) \
+    X(t_fs_addrr, [4][16][16]) X(t_fs_subrr, [4][16][16]) \
+    X(t_x3, [20][9][9][9]) X(t_arj, [5][2][8][16][16]) X(t_lcj, [2][16][17][16])
 #define FXR_DECL_TABLE(NAME, DIMS) extern const PFn fxr_##NAME DIMS;
 FXR_TABLES(FXR_DECL_TABLE)
 #define t_setcc fxr_t_setcc
@@ -472,6 +474,37 @@ FXR_TABLES(FXR_DECL_TABLE)
 #define t_fs_addr fxr_t_fs_addr
 #define t_fs_subr fxr_t_fs_subr
 #define t_fs_comis fxr_t_fs_comis
+#define t_fs_addrr fxr_t_fs_addrr
+#define t_fs_subrr fxr_t_fs_subrr
+#define t_x3 fxr_t_x3
+#define t_arj fxr_t_arj
+#define t_lcj fxr_t_lcj
+// The SSE ops with a 3-operand fused form (copy ; op), in t_x3 order; -1 when not one of them
+static inline int x3_index(const char *n) {
+    static const char *const k[20] = { "addps", "subps", "mulps", "divps", "addpd", "subpd", "mulpd", "divpd",
+        "addss", "subss", "mulss", "divss", "addsd", "subsd", "mulsd", "divsd", "pand", "pandn", "por", "pxor" };
+    for (int i = 0; i < 20; i++) if (!strcmp(n, k[i])) return i;
+    return -1;
+}
+// The 8 conditions ALU results are most often tested for (b ae e ne s ns l ge), for t_arj
+#define C8(M, ...) M(2, __VA_ARGS__) M(3, __VA_ARGS__) M(4, __VA_ARGS__) M(5, __VA_ARGS__) M(8, __VA_ARGS__) \
+    M(9, __VA_ARGS__) M(12, __VA_ARGS__) M(13, __VA_ARGS__)
+static inline int cc8(unsigned cc) {
+    static const signed char k[16] = { -1, -1, 0, 1, 2, 3, -1, -1, 4, 5, -1, -1, 6, 7, -1, -1 };
+    return k[cc & 15];
+}
+// A third XMM operand's class macros (index in u->base), for 3-operand SSE pairs
+#define X9C(F, ...) F(0, __VA_ARGS__) F(1, __VA_ARGS__) F(2, __VA_ARGS__) F(3, __VA_ARGS__) F(4, __VA_ARGS__) \
+    F(5, __VA_ARGS__) F(6, __VA_ARGS__) F(7, __VA_ARGS__) F(M, __VA_ARGS__)
+#define XX_0 x0
+#define XX_1 x1
+#define XX_2 x2
+#define XX_3 x3
+#define XX_4 x4
+#define XX_5 x5
+#define XX_6 x6
+#define XX_7 x7
+#define XX_M xld(&c->xmm[u->base])
 // The 10 conditions counted loops exit on (b ae e ne be a l ge le g), for the loop-step fusions
 #define C10(M, ...) M(2, __VA_ARGS__) M(3, __VA_ARGS__) M(4, __VA_ARGS__) M(5, __VA_ARGS__) M(6, __VA_ARGS__) \
     M(7, __VA_ARGS__) M(12, __VA_ARGS__) M(13, __VA_ARGS__) M(14, __VA_ARGS__) M(15, __VA_ARGS__)

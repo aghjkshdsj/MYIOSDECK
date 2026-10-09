@@ -411,6 +411,17 @@ static u64 g_m[4];
             h = mix(mix(h, r), j);                                                            \
             r = a; __asm__ volatile("addl %k[b], %k[r]\n\tcmpl $2000000, %k[r]" JX(X) : [r] "+r"(r), [j] "=&r"(j), [f] "=&r"(f) : [b] "r"(b) : "cc", "memory"); \
             h = mix(mix(mix(h, r), j), f & ARITH);                                            \
+            /* ALU reg, reg + jcc; load + cmp imm + jcc */                                    \
+            r = a; __asm__ volatile("subq %[b], %[r]" JX(X) : [r] "+r"(r), [j] "=&r"(j), [f] "=&r"(f) : [b] "r"(b) : "cc", "memory"); \
+            h = mix(mix(mix(h, r), j), f & ARITH);                                            \
+            r = a; __asm__ volatile("addl %k[b], %k[r]" JX(X) : [r] "+r"(r), [j] "=&r"(j), [f] "=&r"(f) : [b] "r"(b) : "cc", "memory"); \
+            h = mix(mix(mix(h, r), j), f & ARITH);                                            \
+            r = a; __asm__ volatile("andl %k[b], %k[r]" JN(X) : [r] "+r"(r), [j] "=&r"(j) : [b] "r"(b) : "cc", "memory"); \
+            h = mix(mix(h, r), j);                                                            \
+            __asm__ volatile("movl %[m], %k[r]\n\tcmpl $0x7fff0000, %k[r]" JX(X) : [r] "=&r"(r), [j] "=&r"(j), [f] "=&r"(f) : [m] "m"(g_m[1]) : "cc", "memory"); \
+            h = mix(mix(mix(h, r), j), f & ARITH);                                            \
+            __asm__ volatile("movq %[m], %[r]\n\tcmpq $-5, %[r]" JN(X) : [r] "=&r"(r), [j] "=&r"(j) : [m] "m"(g_m[(i & 8) ? 0 : 1]) : "cc", "memory"); \
+            h = mix(mix(h, r), j);                                                            \
         }                                                                                     \
         out("fz_" #X, h);                                                                     \
     }
@@ -483,6 +494,26 @@ static void fz_3op(void) {
     }
     out("fz_3op", h);
 }
+// movaps D, S ; op D, X (3-operand SSE pairs), including X == D (the op reads the copy)
+static void fz_x3(void) {
+    u64 h = 14695981039346656037ull;
+    for (int i = 0; i < N; i++) {
+        v2 a = vfloat(0), b = vfloat(0), d = vdouble(0), e = vdouble(1), r;
+        __asm__ volatile("movaps %[a], %[r]\n\taddps %[b], %[r]" : [r] "=&x"(r) : [a] "x"(a), [b] "x"(b));
+        h = vmix(h, r);
+        __asm__ volatile("movaps %[a], %[r]\n\tmulps %[r], %[r]" : [r] "=&x"(r) : [a] "x"(a));
+        h = vmix(h, r);
+        __asm__ volatile("movapd %[d], %[r]\n\tsubsd %[e], %[r]" : [r] "=&x"(r) : [d] "x"(d), [e] "x"(e));
+        h = vmix(h, r);
+        __asm__ volatile("movapd %[d], %[r]\n\tdivsd %[e], %[r]" : [r] "=&x"(r) : [d] "x"(d), [e] "x"(e));
+        h = vmix(h, r);
+        __asm__ volatile("movaps %[a], %[r]\n\txorps %[b], %[r]" : [r] "=&x"(r) : [a] "x"(a), [b] "x"(b));
+        h = vmix(h, r);
+        __asm__ volatile("movdqa %[a], %[r]\n\tpandn %[b], %[r]" : [r] "=&x"(r) : [a] "x"(a), [b] "x"(b));
+        h = vmix(h, r);
+    }
+    out("fz_x3", h);
+}
 // loads and stores with [base + index*scale + disp]
 static void fz_index(void) {
     static u64 arr[48];
@@ -531,7 +562,7 @@ static const test_fn kTests[] = {
     x_movsd_rr, x_movss_rr, x_movhlps, x_movlhps, x_movq_rr, x_unpcklps, x_pinsrw, x_togpr,
     fz_o, fz_no, fz_b, fz_ae, fz_e, fz_ne, fz_be, fz_a, fz_s, fz_ns, fz_p, fz_np, fz_l, fz_ge, fz_le, fz_g,
     fc_o, fc_no, fc_b, fc_ae, fc_e, fc_ne, fc_be, fc_a, fc_s, fc_ns, fc_p, fc_np, fc_l, fc_ge, fc_le, fc_g,
-    fz_call, fz_index, fz_3op,
+    fz_call, fz_index, fz_3op, fz_x3,
 };
 
 int guest_main(int argc, char **argv) {
