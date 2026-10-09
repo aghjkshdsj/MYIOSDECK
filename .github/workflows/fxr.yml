@@ -111,20 +111,20 @@ jobs:
             sudo "$PERF" stat -e cycles,instructions,branches,branch-misses,L1-icache-load-misses,L1-dcache-load-misses \
               "$RUNNER_TEMP/fxr/fxr" guests/bench_sse2.elf "${k%%:*}" "${k##*:}" 2>&1 | grep -vE '^\s*$' | tail -12
           done
-          echo "== diagnostic: A/B of FXR's knobs (fxr_pin.c; the defaults ship), kernel ns, median of 3"
+          echo "== diagnostic: A/B of FXR's knobs (fxr_pin.c; the defaults ship), kernel ns, median of 5, configurations interleaved"
+          cfgs=(default FXR_REPLICAS=0 FXR_TRACES=0)
           for k in integer:3 float:16 memory:50 branch:6 simd:150; do
-            for cfg in default FXR_REPLICAS=0 FXR_TRACES=0 FXR_TRACE_UOPS=24 FXR_TRACE_UOPS=96 "FXR_TRACES=0 FXR_REPLICAS=0"; do
-              ns=$(for r in 1 2 3; do env $([ "$cfg" = default ] || echo $cfg) taskset -c 1 "$RUNNER_TEMP/fxr/fxr" guests/bench_sse2.elf "${k%%:*}" "${k##*:}" 2>/dev/null | grep -o " ns=[0-9]*" | cut -d= -f2; done | sort -n | sed -n 2p)
-              printf "  %-8s %-30s %s\n" "${k%%:*}" "$cfg" "$ns"
+            declare -A res=()
+            for r in 1 2 3 4 5; do
+              for cfg in "${cfgs[@]}"; do
+                v=$(env $([ "$cfg" = default ] || echo $cfg) taskset -c 1 "$RUNNER_TEMP/fxr/fxr" guests/bench_sse2.elf "${k%%:*}" "${k##*:}" 2>/dev/null | grep -o " ns=[0-9]*" | cut -d= -f2)
+                res[$cfg]="${res[$cfg]:-} $v"
+              done
             done
-          done
-          echo "== diagnostic: FXR built without tail merging (each edge of a branch keeps its own indirect jump), kernel ns, median of 3"
-          EXTRA_CFLAGS="-mllvm -enable-tail-merge=false" CC=clang-19 bash engine/fxr/build.sh /tmp/fxr_ntm > /dev/null
-          for k in integer:3 float:16 memory:50 branch:6 simd:150; do
-            for bin in "$RUNNER_TEMP/fxr/fxr" /tmp/fxr_ntm/fxr; do
-              ns=$(for r in 1 2 3; do taskset -c 1 "$bin" guests/bench_sse2.elf "${k%%:*}" "${k##*:}" 2>/dev/null | grep -o " ns=[0-9]*" | cut -d= -f2; done | sort -n | sed -n 2p)
-              printf "  %-8s %-30s %s\n" "${k%%:*}" "$bin" "$ns"
+            for cfg in "${cfgs[@]}"; do
+              printf "  %-8s %-30s %s\n" "${k%%:*}" "$cfg" "$(tr ' ' '\n' <<< "${res[$cfg]}" | sed '/^$/d' | sort -n | sed -n 3p)"
             done
+            unset res
           done
           echo "== diagnostic: one threaded dispatch on this CPU (engine/fxr-probe/dispatch_probe.c, 200M dispatches)"
           for b in "plain:"; do
@@ -177,8 +177,8 @@ jobs:
         run: |
           cd engine/fxr
           xcrun -sdk iphoneos clang --version | head -1
-          srcs="fxr_pin_x3.c fxr_pin_arj.c fxr_pin_lcj.c fxr_pin_stub.c fxr_pin_step1.c fxr_pin_step2.c fxr_pin_step3.c fxr_pin_mem.c fxr_pin_mem2.c fxr_pin_fuse.c fxr_pin_sse.c fxr_pin_alu.c fxr_pin_br.c fxr_pin.c fxr_pin_alu_r1.c fxr_pin_sse_r1.c fxr_pin_mem_r1.c fxr_pin_mem2_r1.c fxr_pin_step3_r1.c fxi_core.c fxi_decode.c fxi_flags.c fxi_ops.c fxi_sse.c fxi_atomic.c fxi_x87.c fxi_win.c"
-          printf '%s\n' $srcs | xargs -P "$(sysctl -n hw.ncpu)" -I{} sh -c 'xcrun -sdk iphoneos clang -arch arm64 -O2 -std=gnu11 -ffp-contract=off -miphoneos-version-min=17.0 -c "{}" -o "/tmp/$(basename {} .c).o"'
+          srcs="fxr_pin_x3.c fxr_pin_arj.c fxr_pin_lcj.c fxr_pin_stub.c fxr_pin_step1.c fxr_pin_step2.c fxr_pin_step3.c fxr_pin_mem.c fxr_pin_mem2.c fxr_pin_fuse.c fxr_pin_sse.c fxr_pin_alu.c fxr_pin_br.c fxr_pin.c fxr_pin_alu_r1.c fxr_pin_sse_r1.c fxr_pin_mem_r1.c fxr_pin_mem2_r1.c fxr_pin_step3_r1.c fxr_pin_br_r1.c fxr_pin_step1_r1.c fxr_pin_step2_r1.c fxi_core.c fxi_decode.c fxi_flags.c fxi_ops.c fxi_sse.c fxi_atomic.c fxi_x87.c fxi_win.c"
+          printf '%s\n' $srcs | xargs -P "$(sysctl -n hw.ncpu)" -I{} sh -c 'xcrun -sdk iphoneos clang -arch arm64 -O2 -std=gnu11 -ffp-contract=off -mllvm -enable-tail-merge=false -miphoneos-version-min=17.0 -c "{}" -o "/tmp/$(basename {} .c).o"'
           echo "preserve_none: $(echo '__attribute__((preserve_none)) void f(void){}' | xcrun -sdk iphoneos clang -arch arm64 -x c -c - -o /dev/null 2>&1 && echo supported || echo NOT supported)"
           bash probe_cc.sh "xcrun -sdk iphoneos clang -arch arm64" || true
           ls -la /tmp/fxr_pin*.o

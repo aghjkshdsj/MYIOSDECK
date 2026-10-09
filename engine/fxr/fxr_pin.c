@@ -178,21 +178,27 @@ static void rmap_init(void) {
     for (size_t i = 0; i < fxr_n_xshift; i++) rmap_tab(fxr_xshift[i].h, fxr_xshift_r1[i].h, 9);
     // fxr_pin_mem.c, fxr_pin_mem2.c, fxr_pin_step3.c
     RMAP(t_ldi); RMAP(t_ldz8s); RMAP(t_stx); RMAP(t_sri); RMAP(t_sii); RMAP(t_3op);
+    // fxr_pin_br.c, fxr_pin_step1.c, fxr_pin_step2.c: the branches that most often close a loop
+    RMAP(t_fjc_rr); RMAP(t_fjc_ri); RMAP(t_fjt_ri); RMAP(t_fjt_rr); RMAP(t_fjt_rrx); RMAP(t_sic); RMAP(t_sicr);
 }
 // u: `copies` copies of M uops (a block: one copy). A handler at several places in a copy takes
-// the replica at every second place; one at a single place takes it in every second copy.
+// the replica at every second place. When every handler of the copy has a replica, those at a
+// single place take it in every second copy (so each copy's last handler still has one successor;
+// with a handler left out, the one before it would get two).
 static void replicate(Uop *u, int M, int copies) {
     unsigned char *k = calloc((size_t)M, 1);
+    int all = 1;
     for (int j = 0; j < M; j++) {
         int occ = 0, cnt = 0;
         for (int i = 0; i < M; i++) if (u[i].p == u[j].p) { cnt++; if (i < j) occ++; }
         k[j] = (unsigned char)(cnt > 1 ? 1 + (occ & 1) : 0);   // 0: alternate by copy
+        if (!rmap_get(u[j].p)) all = 0;
     }
     for (int j = 0; j < M; j++) {
         PFn r = rmap_get(u[j].p);
         if (!r) continue;
         for (int c = 0; c < copies; c++)
-            if (k[j] ? k[j] == 2 : (c & 1)) u[c * M + j].p = r;
+            if (k[j] ? k[j] == 2 : all && (c & 1)) u[c * M + j].p = r;
     }
     free(k);
 }
