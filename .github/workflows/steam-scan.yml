@@ -26,7 +26,10 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/steam" && cd "$RUNNER_TEMP/steam"
           origin=$(sed -n 's/.*static let origin = "\(https:[^"]*\)".*/\1/p' "$GITHUB_WORKSPACE/App/Sources/Steam/SteamRuntime.swift")
-          grep -o 'Package(file: "[^"]*", bytes: [0-9_]*,[^)]*sha256: "[0-9a-f]*"' "$GITHUB_WORKSPACE/App/Sources/Steam/SteamRuntime.swift" | \
+          # Each Package(...) spans two lines in the Swift source: join first.
+          tr -d '\n' < "$GITHUB_WORKSPACE/App/Sources/Steam/SteamRuntime.swift" | tr -s ' ' | \
+            grep -o 'Package(file: "[^"]*", bytes: [0-9_]*, *sha256: "[0-9a-f]*"' > packages.txt
+          test -s packages.txt
           while IFS= read -r line; do
             file=$(sed -n 's/.*file: "\([^"]*\)".*/\1/p' <<< "$line")
             bytes=$(sed -n 's/.*bytes: \([0-9_]*\),.*/\1/p' <<< "$line" | tr -d _)
@@ -34,10 +37,10 @@ jobs:
             curl -fsSL -o pkg.zip "$origin$file"
             test "$(stat -c %s pkg.zip)" = "$bytes"
             echo "$sha  pkg.zip" | sha256sum -c - > /dev/null
-            unzip -q -o pkg.zip -d unpacked
+            unzip -q -o pkg.zip -d unpacked || [ $? -eq 1 ]   # 1 = warnings: Valve's names use backslashes
             rm pkg.zip
             echo "verified $file ($bytes bytes)"
-          done
+          done < packages.txt
       - name: fxi --scan-pe over every 64-bit PE in the client
         run: |
           cd "$RUNNER_TEMP/steam/unpacked"
