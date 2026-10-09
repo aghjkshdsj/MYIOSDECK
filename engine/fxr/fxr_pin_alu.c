@@ -152,7 +152,8 @@ const PFn t_stti[4] = { p_stti_8, p_stti_16, p_stti_32, p_stti_64 };
     PH p_sti_64_##B(FXR_PARAMS) { st64(g##B + (uint64_t)u->disp, u->imm); PNEXT(); }
 R17(DEF_BASE, _)
 // T = base + index << scale + disp
-#define DEF_EA(I, B) PH p_ea_##B##_##I(FXR_PARAMS) { T = g##B + (g##I << u->scale) + (uint64_t)u->disp; PNEXT(); }
+#define DEF_EA(I, B) PH p_ea_##B##_##I(FXR_PARAMS) { T = g##B + (g##I << u->scale) + (uint64_t)u->disp; PNEXT(); } \
+    PH p_eaz_##B##_##I(FXR_PARAMS) { T = g##B + g##I; PNEXT(); }   /* no scale, no displacement */
 #define DEF_EA_ROW(B, _) R17B(DEF_EA, B)
 R17(DEF_EA_ROW, _)
 
@@ -179,6 +180,9 @@ const PFn t_sti_bi[4][17][17] = { { R17(ROW_MBI, psi_8) }, { R17(ROW_MBI, psi_16
 #define E_EA(I, B) p_ea_##B##_##I,
 #define ROW_EA(B, _) { R17B(E_EA, B) },
 const PFn t_ea[17][17] = { R17(ROW_EA, _) };
+#define E_EAZ(I, B) p_eaz_##B##_##I,
+#define ROW_EAZ(B, _) { R17B(E_EAZ, B) },
+const PFn t_eaz[17][17] = { R17(ROW_EAZ, _) };
 #define ROW_RR(D, NAME) { R16B(E_RR, D, NAME) },
 #define E_RR(S, D, NAME) p_##NAME##_##D##_##S,
 const PFn t_mov_rr[2][16][16] = { { R16(ROW_RR, mov_rr_32) }, { R16(ROW_RR, mov_rr_64) } };

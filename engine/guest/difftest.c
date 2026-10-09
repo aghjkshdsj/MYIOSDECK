@@ -553,6 +553,28 @@ static void fz_index(void) {
     }
     out("fz_index", h);
 }
+// 16-byte moves, SSE and ALU ops with [base + index] memory operands, without scale or
+// displacement (the lean forms) and with them
+static void fz_xindex(void) {
+    static u64 arr[48] __attribute__((aligned(16)));
+    u64 h = 14695981039346656037ull;
+    for (int i = 0; i < N; i++) {
+        for (int q = 0; q < 48; q++) arr[q] = val();
+        u64 k = (rnd() & 7) * 16, v = val(), r = v;
+        v2 a, b;
+        __asm__ volatile("movdqu (%[p],%[k]), %[a]\n\tmovdqu 16(%[p],%[k]), %[b]\n\tpaddq %[b], %[a]\n\t"
+                         "movdqu %[a], 128(%[p],%[k])\n\tmovdqu %[b], (%[p],%[k])"
+                         : [a] "=&x"(a), [b] "=&x"(b) : [p] "r"(arr), [k] "r"(k) : "memory");
+        h = vmix(vmix(h, a), b);
+        __asm__ volatile("movdqa (%[p],%[k]), %[a]\n\tpaddd (%[p],%[k]), %[a]\n\tpsubq 16(%[p],%[k]), %[a]\n\tmovdqa %[a], 256(%[p])"
+                         : [a] "=&x"(a) : [p] "r"(arr), [k] "r"(k) : "memory");
+        h = vmix(h, a);
+        __asm__ volatile("addq (%[p],%[k]), %[r]\n\txorq 8(%[p],%[k]), %[r]" : [r] "+r"(r) : [p] "r"(arr), [k] "r"(k) : "cc", "memory");
+        h = mix(h, r);
+        for (int q = 0; q < 48; q++) h = mix(h, arr[q]);
+    }
+    out("fz_xindex", h);
+}
 
 typedef void (*test_fn)(void);
 #define ALU_LIST(OP) OP##_q, OP##_l, OP##_w, OP##_b, OP##_mr_q, OP##_rm_l, OP##_mr_b,
@@ -583,7 +605,7 @@ static const test_fn kTests[] = {
     x_movsd_rr, x_movss_rr, x_movhlps, x_movlhps, x_movq_rr, x_unpcklps, x_pinsrw, x_togpr,
     fz_o, fz_no, fz_b, fz_ae, fz_e, fz_ne, fz_be, fz_a, fz_s, fz_ns, fz_p, fz_np, fz_l, fz_ge, fz_le, fz_g,
     fc_o, fc_no, fc_b, fc_ae, fc_e, fc_ne, fc_be, fc_a, fc_s, fc_ns, fc_p, fc_np, fc_l, fc_ge, fc_le, fc_g,
-    fz_call, fz_index, fz_3op, fz_3gap, fz_x3,
+    fz_call, fz_index, fz_xindex, fz_3op, fz_3gap, fz_x3,
 };
 
 int guest_main(int argc, char **argv) {

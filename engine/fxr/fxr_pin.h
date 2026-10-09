@@ -399,13 +399,13 @@ typedef struct { const char *name; PFn h[9]; } XShift;
     X(t_setcc, [16][16]) X(t_alu_rr, [2][ALU_COUNT][2][16][16]) X(t_alu_ri, [2][ALU_COUNT][2][16]) \
     X(t_alu_rt, [2][ALU_COUNT][2][16]) X(t_alu_tr, [2][ALU_COUNT][4][16]) X(t_alu_ti, [2][ALU_COUNT][4]) \
     X(t_stti, [4]) X(t_ld, [2][17][16]) X(t_st, [4][17][16]) X(t_lea, [2][17][16]) X(t_sti, [4][17]) \
-    X(t_sti_bi, [4][17][17]) X(t_ea, [17][17]) X(t_mov_rr, [2][16][16]) X(t_mov_ri, [2][16]) X(t_movt, [2][16]) \
+    X(t_sti_bi, [4][17][17]) X(t_ea, [17][17]) X(t_eaz, [17][17]) X(t_mov_rr, [2][16][16]) X(t_mov_ri, [2][16]) X(t_movt, [2][16]) \
     X(t_ldt, [K_COUNT][16]) X(t_stt, [4][16]) X(t_ext, [K_COUNT][16][16]) X(t_sh, [2][5][2][2][16]) \
     X(t_un, [2][2][4][16]) X(t_imul2, [2][2][16][16]) X(t_imul3, [2][2][16][16]) X(t_imul2t, [2][2][16]) \
     X(t_imul3t, [2][2][16]) X(t_cmov, [2][16][16]) X(t_cmovt, [2][16]) \
     X(t_fjc_rr, [2][16][16][16]) X(t_fjc_ri, [2][16][16]) X(t_fjt_ri, [2][16][16]) X(t_fjt_rr, [2][16][16]) \
     X(t_fjt_rrx, [2][16][16]) \
-    X(t_xl_movx, [9][17][17]) X(t_xs_movx, [9][17][17]) X(t_xl_movss, [9][17]) X(t_xl_movsd, [9][17]) \
+    X(t_xl_movx, [9][17][17]) X(t_xs_movx, [9][17][17]) X(t_xl_movxz, [9][17][17]) X(t_xs_movxz, [9][17][17]) X(t_xl_movss, [9][17]) X(t_xl_movsd, [9][17]) \
     X(t_xs_movss, [9][17]) X(t_xs_movsd, [9][17]) X(t_xlt_movss, [9]) X(t_xlt_movsd, [9]) X(t_xlt_movlps, [9]) \
     X(t_xlt_movhps, [9]) X(t_xst_movss, [9]) X(t_xst_movsd, [9]) X(t_xst_movhps, [9]) X(t_xst_movx, [9]) \
     X(t_xg, [XG_COUNT][9][16]) X(t_xgt, [4][9]) X(t_gx, [GX_COUNT][9][16]) \
@@ -435,6 +435,7 @@ FXR_TABLES(FXR_DECL_TABLE)
 #define t_sti FXR_T(t_sti)
 #define t_sti_bi FXR_T(t_sti_bi)
 #define t_ea FXR_T(t_ea)
+#define t_eaz FXR_T(t_eaz)
 #define t_mov_rr FXR_T(t_mov_rr)
 #define t_mov_ri FXR_T(t_mov_ri)
 #define t_movt FXR_T(t_movt)
@@ -456,6 +457,8 @@ FXR_TABLES(FXR_DECL_TABLE)
 #define t_fjt_rrx FXR_T(t_fjt_rrx)
 #define t_xl_movx FXR_T(t_xl_movx)
 #define t_xs_movx FXR_T(t_xs_movx)
+#define t_xl_movxz FXR_T(t_xl_movxz)
+#define t_xs_movxz FXR_T(t_xs_movxz)
 #define t_xl_movss FXR_T(t_xl_movss)
 #define t_xl_movsd FXR_T(t_xl_movsd)
 #define t_xs_movss FXR_T(t_xs_movss)

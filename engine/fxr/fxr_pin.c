@@ -164,11 +164,11 @@ static void rmap_init(void) {
     g_rmap = calloc(RMAP_SLOTS, sizeof *g_rmap);
     // fxr_pin_alu.c
     RMAP(t_alu_rr); RMAP(t_alu_ri); RMAP(t_alu_rt); RMAP(t_alu_tr); RMAP(t_alu_ti); RMAP(t_stti); RMAP(t_ld);
-    RMAP(t_st); RMAP(t_lea); RMAP(t_sti); RMAP(t_sti_bi); RMAP(t_ea); RMAP(t_mov_rr); RMAP(t_mov_ri); RMAP(t_movt);
+    RMAP(t_st); RMAP(t_lea); RMAP(t_sti); RMAP(t_sti_bi); RMAP(t_ea); RMAP(t_eaz); RMAP(t_mov_rr); RMAP(t_mov_ri); RMAP(t_movt);
     RMAP(t_ldt); RMAP(t_stt); RMAP(t_ext); RMAP(t_sh); RMAP(t_un); RMAP(t_imul2); RMAP(t_imul3); RMAP(t_imul2t);
     RMAP(t_imul3t); RMAP(t_cmov); RMAP(t_cmovt);
     // fxr_pin_sse.c
-    RMAP(t_xl_movx); RMAP(t_xs_movx); RMAP(t_xl_movss); RMAP(t_xl_movsd); RMAP(t_xs_movss); RMAP(t_xs_movsd);
+    RMAP(t_xl_movx); RMAP(t_xs_movx); RMAP(t_xl_movxz); RMAP(t_xs_movxz); RMAP(t_xl_movss); RMAP(t_xl_movsd); RMAP(t_xs_movss); RMAP(t_xs_movsd);
     RMAP(t_xlt_movss); RMAP(t_xlt_movsd); RMAP(t_xlt_movlps); RMAP(t_xlt_movhps); RMAP(t_xst_movss); RMAP(t_xst_movsd);
     RMAP(t_xst_movhps); RMAP(t_xst_movx); RMAP(t_xg); RMAP(t_xgt); RMAP(t_gx);
     for (size_t i = 0; i < fxr_n_xops; i++) {
@@ -277,6 +277,8 @@ static void init_desc(void) {
 static int greg(unsigned off) { return (off & 7) == 0 && off < 128 ? (int)(off >> 3) : -1; }   // pinnable GPR
 static int simple_mem(const Uop *u) { return u->index == R_ZERO && u->base <= R_ZERO; }        // [base + disp]
 static int ea_ok(const Uop *u) { return u->base <= R_ZERO && u->index <= R_ZERO; }
+static int lean(const Uop *u) { return !u->scale && !u->disp; }   // [base + index]: no scale, no displacement
+static PFn ea_h(const Uop *u) { return (lean(u) ? t_eaz : t_ea)[u->base][u->index]; }   // T = the EA
 
 typedef struct { int at, edge, stub; } Patch;   // after the copy: out[at].ulink (edge 0) / ulink2 = &out[stub]
 typedef struct { Uop *out; int n, np; Patch patch[2]; } Out;
@@ -298,7 +300,7 @@ static void edge_stubs(Out *o, unsigned fdir, PFn fs) {
 }
 // T = EA of src, then the op itself
 static Uop *with_ea(Out *o, const Uop *src, PFn p) {
-    put_uop(o, src, t_ea[src->base][src->index]);
+    put_uop(o, src, ea_h(src));
     return put_uop(o, src, p);
 }
 
@@ -441,7 +443,7 @@ static void lower_one(Out *o, const Uop *u) {
             y = put_uop(o, u, x->rr[dc][xcls(u->src)]);
         } else {
             if (!ea_ok(u)) break;      // fs/gs operand: FXI's handler
-            if (!strcmp(x->name, "movx")) { put_uop(o, u, t_xl_movx[dc][u->base][u->index]); return; }
+            if (!strcmp(x->name, "movx")) { put_uop(o, u, (lean(u) ? t_xl_movxz : t_xl_movx)[dc][u->base][u->index]); return; }
             y = with_ea(o, u, x->rt[dc]);
         }
         if (d->c2) { uint8_t ix[16]; fxr_xshuffle_index(x->name, (unsigned)u->imm, ix); memcpy(y->xidx, ix, 16); }
@@ -463,7 +465,7 @@ static void lower_one(Out *o, const Uop *u) {
         if (id >= XS_XG) { if (S < 0) break; put_uop(o, u, t_xg[id - XS_XG][dc][S]); return; }
         if (!ea_ok(u)) break;
         switch (id) {
-        case XS_MOVX_MR: put_uop(o, u, t_xs_movx[sc][u->base][u->index]); return;
+        case XS_MOVX_MR: put_uop(o, u, (lean(u) ? t_xs_movxz : t_xs_movx)[sc][u->base][u->index]); return;
         case XS_MOVSS_RM: if (simple_mem(u)) put_uop(o, u, t_xl_movss[dc][u->base]); else with_ea(o, u, t_xlt_movss[dc]); return;
         case XS_MOVSD_RM: if (simple_mem(u)) put_uop(o, u, t_xl_movsd[dc][u->base]); else with_ea(o, u, t_xlt_movsd[dc]); return;
         case XS_MOVSS_MR: if (simple_mem(u)) put_uop(o, u, t_xs_movss[sc][u->base]); else with_ea(o, u, t_xst_movss[sc]); return;
@@ -499,17 +501,17 @@ static int try_fuse(Out *o, const Uop *u, uint32_t left) {
             int t = a->a == ALU_TEST, fm = a->b, si = a->c2;
             if (fm == F_MI && ea_ok(u) && !fd) {   // memory operand: no stub (another thread may change it)
                 if (simple_mem(u)) { x = put_uop(o, v, t_fmi[t][si][cc][u->base]); x->disp = u->disp; }
-                else { put_uop(o, u, t_ea[u->base][u->index]); x = put_uop(o, v, t_fmit[t][si][cc]); }
+                else { put_uop(o, u, ea_h(u)); x = put_uop(o, v, t_fmit[t][si][cc]); }
                 x->fimm = (int32_t)u->imm;
                 return 2;
             }
             if (fm == F_MR && S >= 0 && ea_ok(u) && !fd) {   // cmp/test [mem], reg
-                put_uop(o, u, t_ea[u->base][u->index]);
+                put_uop(o, u, ea_h(u));
                 put_uop(o, v, t_fmr[t ? 2 : 0][si][cc][S]);
                 return 2;
             }
             if (fm == F_RM && !t && D >= 0 && ea_ok(u) && !fd) {   // cmp reg, [mem]
-                put_uop(o, u, t_ea[u->base][u->index]);
+                put_uop(o, u, ea_h(u));
                 put_uop(o, v, t_fmr[1][si][cc][D]);
                 return 2;
             }
@@ -531,7 +533,7 @@ static int try_fuse(Out *o, const Uop *u, uint32_t left) {
                 fs = t_fs_comis[dbl][xcls(u->dst)][xcls(u->src)];
                 x = put_uop(o, v, t_fcj[dbl][cc][xcls(u->dst)][xcls(u->src)]);
             } else if (ea_ok(u) && !fd) {
-                put_uop(o, u, t_ea[u->base][u->index]);
+                put_uop(o, u, ea_h(u));
                 x = put_uop(o, v, t_fcjt[dbl][cc][xcls(u->dst)]);
             } else return 0;
             x->dst = u->dst; x->src = u->src;

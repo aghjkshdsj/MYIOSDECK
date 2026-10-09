@@ -168,6 +168,14 @@ const size_t fxr_n_xshift = sizeof fxr_xshift / sizeof fxr_xshift[0];
 #define DEF_XLS_B(B, X) R17B(DEF_XLS, B, X)
 #define DEF_XLS_X(X, _) R17(DEF_XLS_B, X)
 X9(DEF_XLS_X, _)
+// [base + index] with no scale and no displacement (two thirds of the corpus's indexed moves have
+// no displacement): one ARM64 load or store with a register offset, nothing read from the uop
+#define DEF_XLSZ(I, B, X)                                                                  \
+    PH xl_movxz_##B##_##I##_##X(FXR_PARAMS) { XW_##X(xld((const void *)(uintptr_t)(g##B + g##I))); PNEXT(); } \
+    PH xs_movxz_##B##_##I##_##X(FXR_PARAMS) { xst((void *)(uintptr_t)(g##B + g##I), XS_##X); PNEXT(); }
+#define DEF_XLSZ_B(B, X) R17B(DEF_XLSZ, B, X)
+#define DEF_XLSZ_X(X, _) R17(DEF_XLSZ_B, X)
+X9(DEF_XLSZ_X, _)
 #define DEF_XLS1(B, X)                                                                     \
     PH xl_movss_##B##_##X(FXR_PARAMS) { XW_##X(((FxrV){ ld32(g##B + (uint64_t)u->disp), 0 })); PNEXT(); } \
     PH xl_movsd_##B##_##X(FXR_PARAMS) { XW_##X(((FxrV){ ld64(g##B + (uint64_t)u->disp), 0 })); PNEXT(); } \
@@ -189,6 +197,7 @@ X9(DEF_XLST, _)
 #define ROW_XLS(B, X, NAME) { R17B(E_XLS, B, X, NAME) },
 #define X_XLS(X, NAME) { R17(ROW_XLS, X, NAME) },
 const PFn t_xl_movx[9][17][17] = { X9(X_XLS, xl_movx) }, t_xs_movx[9][17][17] = { X9(X_XLS, xs_movx) };   // [xmm][base][index]
+const PFn t_xl_movxz[9][17][17] = { X9(X_XLS, xl_movxz) }, t_xs_movxz[9][17][17] = { X9(X_XLS, xs_movxz) };
 #define E_XLS1(B, X, NAME) NAME##_##B##_##X,
 #define X_XLS1(X, NAME) { R17(E_XLS1, X, NAME) },
 const PFn t_xl_movss[9][17] = { X9(X_XLS1, xl_movss) }, t_xl_movsd[9][17] = { X9(X_XLS1, xl_movsd) },
