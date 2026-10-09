@@ -81,7 +81,7 @@ static void on_stop(int sig, siginfo_t *si, void *ctx) {
     host_state(ctx, &h);
     g_samples++;
     uint64_t rip;
-    FxiCpu *c = (FxiCpu *)(uintptr_t)h.x[20];
+    FxiCpu *c = (FxiCpu *)(uintptr_t)h.x[10];   // FXR keeps the CPU pointer in x10 (fxi_internal.h)
     if (!fxr_win_host_state(c, &h, 0, &rip)) return;
     g_exact++;
     uint64_t base = c->r[R15];
@@ -120,7 +120,7 @@ static void on_fault(int sig, siginfo_t *si, void *ctx) {
     (void)sig;
     fxr_host_state h;
     host_state(ctx, &h);
-    FxiCpu *c = (FxiCpu *)(uintptr_t)h.x[20];
+    FxiCpu *c = (FxiCpu *)(uintptr_t)h.x[10];   // FXR keeps the CPU pointer in x10 (fxi_internal.h)
     uint64_t rip = 0;
     int ok = fxr_win_host_state(c, &h, 1, &rip);
     char out[1536];

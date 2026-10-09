@@ -9,14 +9,14 @@
 #   precise.py <objdump -d --no-show-raw-insn -j fxr_h output>   (exit 1 if a handler Windows mode
 #   uses has such a path; prints a summary)
 # Model: guest addresses come from the pinned guest registers and T (taint, through ALU ops and
-# loads from guest memory); x20 (CPU), x21 (uop) and sp are FXR's own. Conservative: every path
+# loads from guest memory); x10 (CPU), x21 (uop), sp and static data are FXR's own. Conservative: every path
 # through the handler's own code (branches inside it followed both ways).
 import collections, re, sys
 
-PINNED_GPR = {22, 23, 24, 25, 26, 27, 28, 0, 1, 2, 3, 4, 5, 6, 7, 10}  # guest RAX..R15 (R15: x10)
+PINNED_GPR = {22, 23, 24, 25, 26, 27, 28, 0, 1, 2, 3, 4, 5, 6, 7, 20}  # guest RAX..R15 (R15: x20)
 FLAGS = {12, 13, 14, 9}                                                 # F0..F3 (clang assigns x9 last)
 T_REG = 11
-INTERNAL = {20, 21, 'sp'}
+INTERNAL = {10, 21, 'sp'}   # the CPU pointer, the uop
 
 def reg(tok):
     """Register name -> 'rN' for x/w N, 'vN' for SIMD, 'sp', or None."""
@@ -71,7 +71,7 @@ def analyse(insns):
     # state: (written tags, tainted registers (guest-derived), own registers (FXR pointers: the CPU,
     # the uop, sp, and those plus any offset, e.g. the indirect-branch cache entry))
     init_taint = frozenset({'r%d' % r for r in PINNED_GPR} | {'r%d' % T_REG})
-    init_own = frozenset({"r20", "r21", "sp"})
+    init_own = frozenset({"r10", "r21", "sp"})
     state_in = {0: (frozenset(), init_taint, init_own)}
     work = [0]
     viol = {}
@@ -111,13 +111,12 @@ def analyse(insns):
                 dests = dests + [base]
             if is_store:
                 if is_guest: w.add('guest-store')
-                elif base == 'r20': w.add('cpu-store')
+                elif base in ow_ and base not in ('r21', 'sp'): w.add('cpu-store')   # the CPU structure (XMM8-15, ...)
             for d in dests:
                 if d is None or d == 'sp': continue
                 n = int(d[1:])
                 if d[0] == 'r' and (n in PINNED_GPR or n in FLAGS): w.add(d)
                 if d[0] == 'v' and n < 8: w.add(d)
-                if d[0] == 'r' and n in PINNED_GPR: t.add(d)
         elif o and not NODEST.match(mn):
             d = reg(o[0])
             srcs = [reg(x) for x in o[1:]]
@@ -129,9 +128,8 @@ def analyse(insns):
                     ow_.add(d); t.discard(d)   # an FXR pointer plus an offset stays FXR's memory
                 elif any(s in t for s in srcs if s): t.add(d); ow_.discard(d)
                 else:
-                    ow_.discard(d)
-                    if not (d[0] == 'r' and n in PINNED_GPR): t.discard(d)
-                if d[0] == 'r' and (n in PINNED_GPR or n in FLAGS): w.add(d); t.add(d); ow_.discard(d)
+                    ow_.discard(d); t.discard(d)
+                if d[0] == 'r' and (n in PINNED_GPR or n in FLAGS): w.add(d)   # taint follows the content
                 if d[0] == 'v' and n < 8: w.add(d)
             # instructions writing two registers (umull etc. write one); ldp handled above
         out_state = (frozenset(w), frozenset(t), frozenset(ow_))

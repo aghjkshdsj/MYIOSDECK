@@ -936,12 +936,12 @@ void fxr_enter(FxiCpu *c, Block *b) {
     FxrV x0, x1, x2, x3, x4, x5, x6, x7;
     RELOAD_F();
     RELOAD_X();
-    b->u[0].p(c, b->u, FXR_ARGS);
+    b->u[0].p FXR_CALL(b->u);
 }
 
 // ---- Windows mode: the x64 state at a host fault or at a stop of the thread ----
 // FXR keeps the guest registers in host registers (FXR_PARAMS, preserve_none on ARM64): RAX x22,
-// RCX x23, RDX x24, RBX x28, RSP x27, RBP x0, RSI x25, RDI x26, R8-R14 x1-x7, R15 x10, T x11,
+// RCX x23, RDX x24, RBX x28, RSP x27, RBP x0, RSI x25, RDI x26, R8-R14 x1-x7, R15 x20, CPU x10, T x11,
 // flags x12, x13, x14, x9 (clang gives x9 last: frame lowering's scratch), XMM0-7 v0-v7; x21 is
 // the uop. At a fault inside a pinned handler (section
 // fxr_h) those hold the x64 state as before the instruction: no handler writes guest-visible
@@ -959,7 +959,7 @@ extern const char __start_fxr_h[], __stop_fxr_h[];
 #define fxr_h_start __start_fxr_h
 #define fxr_h_end __stop_fxr_h
 #endif
-static const uint8_t k_host_gpr[16] = { 22, 23, 24, 28, 27, 0, 25, 26, 1, 2, 3, 4, 5, 6, 7, 10 };   // RAX..R15
+static const uint8_t k_host_gpr[16] = { 22, 23, 24, 28, 27, 0, 25, 26, 1, 2, 3, 4, 5, 6, 7, 20 };   // RAX..R15
 #endif
 
 static uintptr_t *g_hidx;   // every pinned handler's start, sorted

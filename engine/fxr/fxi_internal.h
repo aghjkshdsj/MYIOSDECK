@@ -34,8 +34,12 @@ typedef void (*OpFn)(FxiCpu *c, Uop *u);
 
 // FXR dispatch: the 16 guest registers, the EA temporary T and the four lazy-flag words
 // travel between handlers as arguments, which preserve_none keeps in host registers
-// (23 on ARM64: c, u and 21 values). Order: the first nine go to callee-saved x20-x28,
-// so they survive calls into ordinary C; the hottest guest registers come first.
+// (23 on ARM64: c, u and 21 values). ARM64 preserve_none assigns x20-x28, x0-x7, x10-x14, x9
+// in that order: R15 and the uop take x20/x21, the other guest registers x22-x28 and x0-x7, so
+// none is in x8-x17, the registers the compiler takes first as scratch (a guest register about
+// to be overwritten would serve as scratch before a load that may fault, and its value at the
+// fault would be lost: fxr_win_host_state). The CPU pointer (never dead), T and the flag words
+// take x10-x14 and x9.
 #if defined(__aarch64__) && defined(__has_attribute) && __has_attribute(preserve_none)   // x86 hosts: too few argument registers
 #define FXR_CC __attribute__((preserve_none))
 #else
@@ -43,12 +47,13 @@ typedef void (*OpFn)(FxiCpu *c, Uop *u);
 #endif
 // XMM0-7 travel the same way as vector arguments (v0-v7 on ARM64); XMM8-15 stay in c->xmm.
 typedef uint64_t FxrV __attribute__((vector_size(16)));
-#define FXR_PARAMS FxiCpu *c, Uop *u, uint64_t g0, uint64_t g1, uint64_t g2, uint64_t g6, uint64_t g7, \
+#define FXR_PARAMS uint64_t g15, Uop *u, uint64_t g0, uint64_t g1, uint64_t g2, uint64_t g6, uint64_t g7, \
     uint64_t g4, uint64_t g3, uint64_t g5, uint64_t g8, uint64_t g9, uint64_t g10, uint64_t g11, uint64_t g12, \
-    uint64_t g13, uint64_t g14, uint64_t g15, uint64_t T, uint64_t F0, uint64_t F1, uint64_t F2, uint64_t F3, \
+    uint64_t g13, uint64_t g14, FxiCpu *c, uint64_t T, uint64_t F0, uint64_t F1, uint64_t F2, uint64_t F3, \
     FxrV x0, FxrV x1, FxrV x2, FxrV x3, FxrV x4, FxrV x5, FxrV x6, FxrV x7
-#define FXR_ARGS g0, g1, g2, g6, g7, g4, g3, g5, g8, g9, g10, g11, g12, g13, g14, g15, T, F0, F1, F2, F3, \
-    x0, x1, x2, x3, x4, x5, x6, x7
+// The arguments of a handler call for uop U (FXR_PARAMS' order)
+#define FXR_CALL(U) (g15, (U), g0, g1, g2, g6, g7, g4, g3, g5, g8, g9, g10, g11, g12, g13, g14, c, T, F0, F1, F2, F3, \
+    x0, x1, x2, x3, x4, x5, x6, x7)
 typedef FXR_CC void (*PFn)(FXR_PARAMS);
 
 // Register slots. GPRs 0-15 in x86 order (RAX RCX RDX RBX RSP RBP RSI RDI R8-R15);
