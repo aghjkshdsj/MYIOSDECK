@@ -30,7 +30,16 @@
 #define FXR_T2(N, S) FXR_T3(N, S)
 #define FXR_T(N) FXR_T2(N, FXR_RSUF)
 
-#define PH static FXR_CC void
+// The pinned handlers live in their own code section, so a host pc (a fault, a stopped thread)
+// can be told apart from the rest of the program (fxi_win_host_state, fxr_pin.c).
+#if defined(__APPLE__)
+#define FXR_SECTION __attribute__((section("__TEXT,__fxr_h,regular,pure_instructions")))
+#elif defined(__ELF__)
+#define FXR_SECTION __attribute__((section("fxr_h")))
+#else
+#define FXR_SECTION
+#endif
+#define PH static FXR_SECTION FXR_CC void
 // Dispatch: the handler pointer is the uop's first field, so stepping to the next uop is one
 // load with writeback and an indirect branch.
 #ifdef FXR_PROFILE   // diagnostic build: count every dispatch (fxr_profile_dump)

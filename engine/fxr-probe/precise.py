@@ -1,0 +1,163 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# FXR exact-fault check (CI): for every pinned handler (section fxr_h of an ARM64 build), does a
+# guest memory access ever come after a guest-visible side effect on some path through the
+# handler? A host fault at that access would then see a half-done instruction: a pinned guest
+# register, a lazy-flag word, XMM0-7 or the CPU structure already changed, or another guest store
+# already done. Handlers with no such path fault with the x64 state exactly as before the
+# instruction (fxi_win_host_state, fxr_pin.c).
+#   precise.py <objdump -d --no-show-raw-insn -j fxr_h output>   (exit 0; prints a summary)
+# Model: guest addresses come from the pinned guest registers and T (taint, through ALU ops and
+# loads from guest memory); x20 (CPU), x21 (uop) and sp are FXR's own. Conservative: every path
+# through the handler's own code (branches inside it followed both ways).
+import collections, re, sys
+
+PINNED_GPR = {22, 23, 24, 25, 26, 27, 28, 0, 1, 2, 3, 4, 5, 6, 7, 9}   # guest RAX..R15
+FLAGS = {11, 12, 13, 14}                                                # F0..F3
+T_REG = 10
+INTERNAL = {20, 21, 'sp'}
+
+def reg(tok):
+    """Register name -> 'rN' for x/w N, 'vN' for SIMD, 'sp', or None."""
+    tok = tok.strip().lstrip('{').rstrip('}').strip()
+    m = re.match(r'^([xw])(\d+)$', tok)
+    if m: return 'r' + m[2]
+    if tok in ('sp', 'wsp'): return 'sp'
+    m = re.match(r'^([vqdshb])(\d+)(\.|\[|$)', tok)
+    if m: return 'v' + m[2]
+    return None
+
+def split_ops(s):
+    out, depth, cur = [], 0, ''
+    for ch in s:
+        if ch in '[{': depth += 1
+        if ch in ']}': depth -= 1
+        if ch == ',' and depth == 0: out.append(cur.strip()); cur = ''
+        else: cur += ch
+    if cur.strip(): out.append(cur.strip())
+    return out
+
+NODEST = re.compile(r'^(b|bl|br|blr|ret|cbz|cbnz|tbz|tbnz|cmp|cmn|tst|fcmp|fcmpe|ccmp|ccmn|fccmp|fccmpe|prfm|nop|b\..*|st.*|dmb|dsb|isb)$')
+
+def parse(text):
+    funcs, cur = collections.OrderedDict(), None
+    for line in text.splitlines():
+        m = re.match(r'^([0-9a-f]+) <(.+)>:$', line)
+        if m: cur = m[2]; funcs[cur] = []; continue
+        m = re.match(r'^\s+([0-9a-f]+):\s+(\S+)\s*(.*)$', line)
+        if m and cur:
+            ops = re.sub(r'\s*//.*$', '', m[3]).strip()
+            ops = re.sub(r'\s*<[^>]*>$', '', ops)
+            funcs[cur].append((int(m[1], 16), m[2], ops))
+    return funcs
+
+def analyse(insns):
+    """Returns (violations: list of (addr, mnemonic, why)), guest accesses count."""
+    if not insns: return [], 0
+    addrs = [a for a, _, _ in insns]
+    idx = {a: i for i, a in enumerate(addrs)}
+    lo, hi = addrs[0], addrs[-1]
+    def succ(i):
+        a, mn, ops = insns[i]
+        tgt = None
+        m = re.search(r'\b([0-9a-f]+)$', ops) if (mn in ('b', 'cbz', 'cbnz', 'tbz', 'tbnz') or mn.startswith('b.')) else None
+        if m: tgt = int(m[1], 16)
+        out = []
+        if tgt is not None and lo <= tgt <= hi and tgt in idx: out.append(idx[tgt])
+        if mn in ('b', 'br', 'ret', 'blr') or (mn == 'b' and tgt is None): return out
+        if i + 1 < len(insns): out.append(i + 1)
+        return out
+    # state: (written frozenset of tags, tainted frozenset of reg names)
+    init_taint = frozenset({'r%d' % r for r in PINNED_GPR} | {'r%d' % T_REG})
+    state_in = {0: (frozenset(), init_taint)}
+    work = [0]
+    viol = {}
+    guest = 0
+    seen_guest = set()
+    while work:
+        i = work.pop()
+        written, taint = state_in[i]
+        a, mn, ops = insns[i]
+        o = split_ops(ops)
+        w, t = set(written), set(taint)
+        mem = next((x for x in o if x.startswith('[')), None)
+        if mem is not None:
+            inner = mem[1:mem.index(']')]
+            parts = [p.strip() for p in inner.split(',')]
+            base = reg(parts[0])
+            is_guest = base is not None and base not in ('r20', 'r21', 'sp') and base in t
+            is_store = mn.startswith('st') or mn.startswith('cas') or mn.startswith('swp') or mn.startswith('ldadd') \
+                or mn.startswith('ldset') or mn.startswith('ldclr') or mn.startswith('ldeor')
+            if is_guest:
+                if a not in seen_guest: seen_guest.add(a); guest += 1
+                if w and a not in viol: viol[a] = (mn, ','.join(sorted(w)))
+            # destinations of a load (operands before the memory one)
+            dests = []
+            if not is_store:
+                dests = [reg(x) for x in o[:o.index(mem)]]
+            elif mn.startswith(('stxr', 'stlxr', 'stxp', 'stlxp')):
+                dests = [reg(o[0])]   # the status register
+            elif mn.startswith(('cas', 'swp', 'ldadd', 'ldset', 'ldclr', 'ldeor')):
+                dests = [reg(o[1]) if mn.startswith('swp') or mn.startswith('ld') else reg(o[0])]
+            for d in dests:
+                if d is None: continue
+                if is_guest: t.add(d)
+                else: t.discard(d)
+            if ']!' in ops or re.search(r'\],\s*#', ops):   # writeback: the base changes
+                dests = dests + [base]
+            if is_store:
+                if is_guest: w.add('guest-store')
+                elif base == 'r20': w.add('cpu-store')
+            for d in dests:
+                if d is None or d == 'sp': continue
+                n = int(d[1:])
+                if d[0] == 'r' and (n in PINNED_GPR or n in FLAGS): w.add(d)
+                if d[0] == 'v' and n < 8: w.add(d)
+                if d[0] == 'r' and n in PINNED_GPR: t.add(d)
+        elif o and not NODEST.match(mn):
+            d = reg(o[0])
+            srcs = [reg(x) for x in o[1:]]
+            if d is not None and d != 'sp':
+                n = int(d[1:])
+                if any(s in t for s in srcs if s): t.add(d)
+                elif not (d[0] == 'r' and n in PINNED_GPR): t.discard(d)
+                if d[0] == 'r' and (n in PINNED_GPR or n in FLAGS): w.add(d)
+                if d[0] == 'v' and n < 8: w.add(d)
+            # instructions writing two registers (umull etc. write one); ldp handled above
+        out_state = (frozenset(w), frozenset(t))
+        for s in succ(i):
+            if s in state_in:
+                ow, ot = state_in[s]
+                nw, nt = ow | out_state[0], ot | out_state[1]
+                if (nw, nt) == (ow, ot): continue
+                state_in[s] = (nw, nt)
+            else:
+                state_in[s] = out_state
+            work.append(s)
+    return [(a, mn, why) for a, (mn, why) in sorted(viol.items())], guest
+
+def family(name):
+    name = re.sub(r'_(\d+|[ZM]|N|F|IN|I|64N|32N|64F|32F|64|32|16|8)(?=_|$)', '_#', name)
+    return re.sub(r'(_#)+', '_#', name)
+
+def main():
+    funcs = parse(open(sys.argv[1], errors='replace').read())
+    total = with_guest = bad = 0
+    fam = collections.Counter(); famall = collections.Counter(); examples = {}
+    for name, insns in funcs.items():
+        total += 1
+        v, g = analyse(insns)
+        if g: with_guest += 1
+        f = family(name)
+        famall[f] += 1
+        if v:
+            bad += 1
+            fam[f] += 1
+            examples.setdefault(f, (name, v[0]))
+    print('precise: %d pinned handlers, %d touch guest memory, %d may fault after a side effect' % (total, with_guest, bad))
+    for f, n in fam.most_common(60):
+        name, (a, mn, why) = examples[f]
+        print('  %6d / %-6d %-28s e.g. %s at +%#x (%s) after %s' % (n, famall[f], f, name, a - funcs[name][0][0], mn, why))
+
+if __name__ == '__main__':
+    main()
