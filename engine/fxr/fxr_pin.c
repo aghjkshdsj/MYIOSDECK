@@ -607,6 +607,18 @@ static int can_hoist(const Uop *a, const Uop *x, const Uop *c) {
     return reg_rw(x, &rd, &wr) && !(wr & used) && !(rd & (1u << D));
 }
 
+// The 3-operand pair with an instruction between ([a][x][c]: mov D, S ; x ; op D, imm|shift): when
+// x is register-only, reads no flags and neither reads nor writes D, a and c may fuse and run
+// before x (x then sees what it saw before: D is not its business, S is read by the pair first
+// either way, and the flags c leaves are dead, which try_fuse requires of the 3-operand forms).
+static int can_sink(const Uop *a, const Uop *x, const Uop *c) {
+    const Desc *da = find(a->fn), *dc = find(c->fn);
+    if (!da || !dc || da->fam != FAM_MOV || da->a != F_RR || (dc->fam != FAM_ALU && dc->fam != FAM_SHIFT)) return 0;
+    int D = greg(a->dst);
+    unsigned rd, wr;
+    return D >= 0 && greg(a->src) >= 0 && greg(c->dst) == D && reg_rw(x, &rd, &wr) && !((rd | wr) & (1u << D));
+}
+
 static void lower_block(Out *o, const Block *b) {
     for (uint32_t i = 0; i < b->n; i++) {
         if (i + 2 < b->n && can_hoist(&b->u[i], &b->u[i + 1], &b->u[i + 2])) {
@@ -616,6 +628,10 @@ static void lower_block(Out *o, const Block *b) {
             lower_one(o, &b->u[i]);   // not fused after all: a, then c in its turn (order still valid)
             i++;
             continue;
+        }
+        if (i + 2 < b->n && can_sink(&b->u[i], &b->u[i + 1], &b->u[i + 2])) {
+            Uop pair[2] = { b->u[i], b->u[i + 2] };
+            if (try_fuse(o, pair, 2)) { lower_one(o, &b->u[i + 1]); i += 2; continue; }
         }
         if (try_fuse(o, &b->u[i], b->n - i)) { i++; continue; }
         lower_one(o, &b->u[i]);

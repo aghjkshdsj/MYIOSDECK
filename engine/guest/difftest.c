@@ -494,6 +494,27 @@ static void fz_3op(void) {
     }
     out("fz_3op", h);
 }
+// mov D, S ; x ; op D, imm with an independent register-only x between (the pair fuses across x),
+// x writing S or another register; and with the flags read after (no fusion then)
+static void fz_3gap(void) {
+    u64 h = 14695981039346656037ull;
+    for (int i = 0; i < N; i++) {
+        u64 a = val(), b = val(), fi = flags_in(), f, r, s = b;
+        __asm__ volatile("movq %[a], %[r]\n\taddq $1, %[s]\n\tshrq $12, %[r]" : [r] "=&r"(r), [s] "+r"(s) : [a] "r"(a) : "cc");
+        h = mix(mix(h, r), s);
+        s = a;
+        __asm__ volatile("movq %[s], %[r]\n\trolq $13, %[s]\n\tshrq $7, %[r]" : [r] "=&r"(r), [s] "+r"(s) : : "cc");
+        h = mix(mix(h, r), s);
+        s = b;
+        __asm__ volatile("movl %k[s], %k[r]\n\tnotq %[s]\n\txorl $0x3c3c, %k[r]" : [r] "=&r"(r), [s] "+r"(s) : : "cc");
+        h = mix(mix(h, r), s);
+        s = b;
+        __asm__ volatile(PRE "movl %k[a], %k[r]\n\txorq %[a], %[s]\n\taddl $99, %k[r]" POST
+                         : [r] "=&r"(r), [s] "+r"(s), [f] "=&r"(f) : [a] "r"(a), [fi] "r"(fi) : "cc", "memory");
+        h = mix(mix(mix(h, r), s), f & ARITH);
+    }
+    out("fz_3gap", h);
+}
 // movaps D, S ; op D, X (3-operand SSE pairs), including X == D (the op reads the copy)
 static void fz_x3(void) {
     u64 h = 14695981039346656037ull;
@@ -562,7 +583,7 @@ static const test_fn kTests[] = {
     x_movsd_rr, x_movss_rr, x_movhlps, x_movlhps, x_movq_rr, x_unpcklps, x_pinsrw, x_togpr,
     fz_o, fz_no, fz_b, fz_ae, fz_e, fz_ne, fz_be, fz_a, fz_s, fz_ns, fz_p, fz_np, fz_l, fz_ge, fz_le, fz_g,
     fc_o, fc_no, fc_b, fc_ae, fc_e, fc_ne, fc_be, fc_a, fc_s, fc_ns, fc_p, fc_np, fc_l, fc_ge, fc_le, fc_g,
-    fz_call, fz_index, fz_3op, fz_x3,
+    fz_call, fz_index, fz_3op, fz_3gap, fz_x3,
 };
 
 int guest_main(int argc, char **argv) {
