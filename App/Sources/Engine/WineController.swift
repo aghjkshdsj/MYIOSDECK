@@ -111,6 +111,28 @@ final class WineController: ObservableObject, @unchecked Sendable {
         run(Program(id: plan.exe, title: title, detail: "", graphics: true, noJIT: noJIT), args: plan.arguments)
     }
 
+    /// A game the user added (CustomGames: a DRM-free folder in Documents/Games, C:\Games in
+    /// Wine), started in its program's folder. Not a Steam game: like a Dock session, the bridge
+    /// publishes no Steam identity for it (MADEIRA_DOCK_SESSION), so no game sees Madeira's
+    /// fixed fallback App ID.
+    func runCustomGame(_ game: CustomGame) {
+        let noJIT = !mid_jit_pool_ready()
+        CustomGames.prepare(prefix: prefixURL)                       // C:\Games -> Documents/Games
+        let machine = peMachine(windowsPath: game.windowsExe)
+        dlog("[games] start \(game.name): \(game.windowsExe) machine=0x\(String(machine, radix: 16)) noJIT=\(noJIT ? 1 : 0)")
+        if noJIT, machine == 0x14c {
+            state = .failed("This is a 32-bit game. Without JIT only 64-bit (x64) games can run: enable JIT to play it.")
+            return
+        }
+        for k in ["MADEIRA_STEAM_APPID", "MADEIRA_STEAM_APPPATH"] { unsetenv(k) }
+        setenv("MADEIRA_WORKDIR", game.windowsWorkdir, 1)
+        customActive = true
+        run(Program(id: game.windowsExe, title: game.name, detail: "", graphics: true, noJIT: noJIT), args: game.arguments)
+    }
+
+    /// Set while an added game's session runs (no Steam identity for it).
+    private(set) var customActive = false
+
     /// A Steam game started through Madeira Dock (App/Sources/Steam/MadeiraDock.swift): Wine runs
     /// dockhost.exe, which loads Valve's own steamclient64.dll, signs in with the user's token
     /// (the one-use transfer the caller wrote), asks Valve's client whether the account owns the
@@ -188,7 +210,8 @@ final class WineController: ObservableObject, @unchecked Sendable {
         // SteamAppId/SteamGameId/SteamAppPath (its Thumper fallback) for every launch, and in
         // build 105 that reached Valve's client inside the host, which then never finished
         // signing in (result 34). Valve's client gives the game it starts its own identity.
-        if dockActive { setenv("MADEIRA_DOCK_SESSION", "1", 1) } else { unsetenv("MADEIRA_DOCK_SESSION") }
+        // An added (non-Steam) game gets none either.
+        if dockActive || customActive { setenv("MADEIRA_DOCK_SESSION", "1", 1) } else { unsetenv("MADEIRA_DOCK_SESSION") }
         state = .booting(program.title)
         // Controller API for this session (Settings › Controller). Must be in the
         // environment before the wineserver starts: the HID device and the

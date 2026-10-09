@@ -46,6 +46,24 @@ struct LibraryView: View {
                 }
                 windowsCard
                 steamCard
+                if wine.linked {
+                    CustomGamesCard(prefix: wine.prefixURL, playBlocker: steamPlayBlocker, onPlay: { playCustom($0) })
+                        .alert("JIT is off", isPresented: customNoJITPresented, presenting: customNoJITGame) { game in
+                            Button("Play without JIT (experimental)") { playCustom(game, noJIT: true) }
+                            Button("Enable JIT") {
+                                jit.enableWithStikDebug(poolMB: settings.jitPoolMB) {
+                                    engine.start(settings: settings)
+                                    DispatchQueue.main.async { playCustom(game) }   // the game starts once JIT is ready
+                                }
+                            }
+                            Button("Cancel", role: .cancel) {}
+                        } message: { _ in
+                            Text("Without JIT the game's x64 code runs in MYIOSDECK's interpreter (FXI), about 10× slower than native, and only 64-bit games can run. With JIT (StikDebug) it runs through FEX at full speed, 32-bit games too.")
+                        }
+                }
+                if let customError {
+                    StatusRow(label: "Could not start the game", detail: customError, level: .bad)
+                }
                 DeckCard(title: "Road to Steam games", icon: "map.fill") {
                     ForEach(stages) { s in
                         StatusRow(label: "Stage \(s.id): \(s.title)", detail: s.detail, level: s.done ? .good : .idle)
@@ -221,6 +239,28 @@ struct LibraryView: View {
     }
     /// The with / without Steam choice of the game waiting in the JIT alert.
     @State private var steamPendingDock = false
+
+    /// An added game waiting for the JIT / no-JIT choice, and why the last start failed.
+    @State private var customNoJITGame: CustomGame?
+    private var customNoJITPresented: Binding<Bool> {
+        Binding(get: { customNoJITGame != nil }, set: { if !$0 { customNoJITGame = nil } })
+    }
+    @State private var customError: String?
+
+    /// Starts an added DRM-free game (CustomGames) on the game surface. Without JIT it asks
+    /// first: play without JIT (FXI, 64-bit only) or enable JIT.
+    private func playCustom(_ game: CustomGame, noJIT: Bool = false) {
+        customError = nil
+        guard jit.isReady || noJIT else { customNoJITGame = game; return }
+        wine.runCustomGame(game)
+        if case .failed(let why) = wine.state { customError = why; return }
+        guard case .booting = wine.state else { return }
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(600))   // let the alert finish closing
+            surfaceTitle = game.name
+            showSurface = true
+        }
+    }
 
     /// Play: with Steam (Madeira Dock) or without, as Settings › Steam says, or asked each time.
     private func chooseSteamLaunch(_ game: OwnedSteamGame) {
