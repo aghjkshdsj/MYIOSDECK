@@ -11,7 +11,7 @@ summary="${GITHUB_STEP_SUMMARY:-/dev/null}"
 fail=0
 echo "## $NAME correctness gates ($(uname -m))" >> "$summary"
 
-if "$ENG" "$G/hello.elf" > "/tmp/${NAME}_hello.txt" 2> "/tmp/${NAME}_hello_err.txt"; then
+if timeout 300 "$ENG" "$G/hello.elf" > "/tmp/${NAME}_hello.txt" 2> "/tmp/${NAME}_hello_err.txt"; then
     echo "hello: ok ($(head -1 "/tmp/${NAME}_hello.txt"))"; echo "- hello: ok" >> "$summary"
 else
     echo "hello: FAILED: $(tail -2 "/tmp/${NAME}_hello_err.txt")"; echo "- hello: **FAILED**" >> "$summary"; fail=1
@@ -19,7 +19,7 @@ fi
 
 for t in atomics x87 difftest; do
     if [ "$NAT" = run ]; then "$G/$t.elf" > "/tmp/native_$t.txt"; ref="/tmp/native_$t.txt"; else ref="$NAT/$t.txt"; fi
-    "$ENG" "$G/$t.elf" > "/tmp/${NAME}_$t.txt" 2> "/tmp/${NAME}_${t}_err.txt"
+    timeout 300 "$ENG" "$G/$t.elf" > "/tmp/${NAME}_$t.txt" 2> "/tmp/${NAME}_${t}_err.txt"
     if [ -s "$ref" ] && cmp -s "$ref" "/tmp/${NAME}_$t.txt"; then
         echo "$t: identical to native ($(wc -l < "$ref") lines)"; echo "- $t: identical to native ($(wc -l < "$ref") lines)" >> "$summary"
     else
@@ -29,7 +29,7 @@ for t in atomics x87 difftest; do
 done
 
 if ls "$PE"/*.exe > /dev/null 2>&1; then
-    "$ENG" --scan-pe "$PE"/*.exe > "/tmp/${NAME}_scan.txt" 2>&1
+    timeout 300 "$ENG" --scan-pe "$PE"/*.exe > "/tmp/${NAME}_scan.txt" 2>&1
     grep '^### ' "/tmp/${NAME}_scan.txt"
     total=$(grep -c '^### ' "/tmp/${NAME}_scan.txt"); clean=$(grep -c ' 0 not implemented' "/tmp/${NAME}_scan.txt")
     if [ "$total" -gt 0 ] && [ "$total" = "$clean" ]; then

@@ -197,11 +197,12 @@ FXI_INLINE int pcond_tab(uint64_t tab, uint64_t F0, uint64_t F1, uint64_t F2, ui
 // No conditional host branch: the successor is selected (csel) and reached by the one indirect
 // jump every handler ends with, so a taken guest branch costs no extra taken host branch. A link
 // still missing (first use) is resolved by p_miss_c (T: 1 taken, 0 fallthrough).
+// (Its locals have names no caller uses: FJ_BR(t_) once read its own uninitialised t_.)
 #define FJ_BR(TAKEN) do {                                                                  \
-        uint64_t t_ = (TAKEN) != 0;                                                        \
-        Uop *l1_ = u->ulink, *l2_ = u->ulink2, *n_ = t_ ? l1_ : l2_;                       \
-        if (FXI_UNLIKELY(!n_)) { T = t_; PTAIL(p_miss_c); }                                \
-        PGO(n_);                                                                           \
+        uint64_t fjb_t_ = (TAKEN) != 0;                                                    \
+        Uop *fjb_l1_ = u->ulink, *fjb_l2_ = u->ulink2, *fjb_n_ = fjb_t_ ? fjb_l1_ : fjb_l2_; \
+        if (FXI_UNLIKELY(!fjb_n_)) { T = fjb_t_; PTAIL(p_miss_c); }                        \
+        PGO(fjb_n_);                                                                       \
     } while (0)
 // Indirect branches (ret, jmp/call through a register or memory): a per-thread direct-mapped
 // cache of target -> first uop; a miss looks the block up (target in T) and fills the entry.

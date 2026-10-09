@@ -24,8 +24,8 @@ run_one() {   # engine elf native-driver kernel scale -> RESULT line (empty on f
     local e="$1" elf="$2" nat="$3" k="$4" s="$5"
     case $e in
         native) if [ "$nat" = elf ]; then "${PIN[@]}" "$G/$elf" "$k" "$s"; else "${PIN[@]}" "$nat" "$k" "$s"; fi ;;
-        fxr) "${PIN[@]}" "$FXR" "$G/$elf" "$k" "$s" 2>> /tmp/fxr_err.txt ;;
-        fxi) "${PIN[@]}" "$FXI" "$G/$elf" "$k" "$s" 2>> /tmp/fxi_err.txt ;;
+        fxr) timeout 600 "${PIN[@]}" "$FXR" "$G/$elf" "$k" "$s" 2>> /tmp/fxr_err.txt ;;
+        fxi) timeout 600 "${PIN[@]}" "$FXI" "$G/$elf" "$k" "$s" 2>> /tmp/fxi_err.txt ;;
     esac | grep RESULT
 }
 

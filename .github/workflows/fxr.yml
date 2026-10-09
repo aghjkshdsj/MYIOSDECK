@@ -55,6 +55,7 @@ jobs:
 
   compare:
     needs: guests
+    timeout-minutes: 45   # a guest that loops forever fails here, not at GitHub's 6-hour limit
     strategy:
       fail-fast: false
       matrix:
