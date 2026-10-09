@@ -112,15 +112,19 @@ jobs:
               "$RUNNER_TEMP/fxr/fxr" guests/bench_sse2.elf "${k%%:*}" "${k##*:}" 2>&1 | grep -vE '^\s*$' | tail -12
           done
           echo "== diagnostic: one threaded dispatch on this CPU (engine/fxr-probe/dispatch_probe.c, 200M dispatches)"
-          for b in "plain:" "spread:-DSPREAD=200000" "fat_spread:-DFAT -DSPREAD=200000"; do
+          for b in "plain:"; do
             clang-19 -O2 ${b#*:} -o "/tmp/dprobe_${b%%:*}" engine/fxr-probe/dispatch_probe.c
           done
-          for cfg in "plain ind 32 32" "plain ind 13 13" "plain ind 16 4" "plain ind 32 4" "plain chain 13 13" \
-                     "spread ind 32 32" "spread ind 13 13" "spread chain 13 13" "fat_spread ind 13 13" "fat_spread chain 13 13"; do
+          for cfg in "plain ind 32 32" "plain ind 32 16" "plain ind 32 8" "plain ind 32 4" "plain ind 32 2" "plain ind 32 1" \
+                     "plain mix 32 16" "plain mix 32 8" "plain mix 64 16" "plain mix 64 32" "plain chain 13 13"; do
             set -- $cfg
             sudo taskset -c 1 "$PERF" stat -x, -e cycles,instructions,stall_frontend,br_mis_pred "/tmp/dprobe_$1" "$2" "$3" "$4" 2>&1 >/dev/null | \
               awk -F, -v c="$cfg" 'BEGIN { printf "%-24s", c } { v[$3] = $1 } END { printf " cycles/dispatch=%.2f insns/dispatch=%.2f frontend-stall/dispatch=%.2f mispredicts/dispatch=%.4f\n", v["cycles"] / 2e8, v["instructions"] / 2e8, v["stall_frontend"] / 2e8, v["br_mis_pred"] / 2e8 }'
           done
+          echo "== diagnostic: PMU events perf lists on this runner (frontend, branches, ops)"
+          "$PERF" list --raw-dump 2>/dev/null | tr ' ' '\n' | grep -iE "stall|front|l1i|itlb|br_|btb|op_|inst_|mop|fetch|bound|slot" | sort -u | tr '\n' ' '; echo
+          sudo taskset -c 1 "$PERF" stat -x, -e cycles,stall_frontend,stall_backend,stall_slot_frontend,stall_slot_backend,op_spec,op_retired,br_retired,br_mis_pred_retired,br_indirect_spec,inst_spec \
+            "$RUNNER_TEMP/fxr/fxr" guests/bench_sse2.elf integer 3 2>&1 >/dev/null | grep -v '^\[fxi\]' | awk -F, '{ printf "  %s=%s", $3, $1 } END { print "" }'
           echo "== diagnostic: the hottest blocks uop by uop (FXR built with -DFXR_PROFILE, engine/fxr-probe/profile.py)"
           sudo apt-get install -y -qq llvm-19 > /dev/null 2>&1 || true
           EXTRA_CFLAGS=-DFXR_PROFILE CC=clang-19 bash engine/fxr/build.sh /tmp/fxrprof > /dev/null

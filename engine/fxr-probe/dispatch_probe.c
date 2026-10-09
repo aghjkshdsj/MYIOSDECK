@@ -2,7 +2,7 @@
 // Diagnostic (CI only, not part of FXR): what one threaded dispatch costs on this CPU. A ring of
 // uops, each `ldr p, [u, #80]!; br p` into one of NH distinct preserve_none handlers that do one
 // add, like FXR's handlers. Run under perf stat; the CI step divides by the dispatch count.
-//   cc -O2 [-DALIGN=n] [-DFAT] dispatch_probe.c && ./a.out <ind|chain> <ring> <handlers>
+//   cc -O2 [-DALIGN=n] [-DFAT] dispatch_probe.c && ./a.out <ind|chain|mix> <ring> <handlers>
 // ALIGN: each handler aligned to n bytes (spreads them in memory as FXR's are spread).
 // FAT: FXR's full handler signature (23 integer and 8 vector arguments).
 // SPREAD: padding between handlers (see below).
@@ -65,10 +65,13 @@ HD hwrap(PARAMS) { a ^= 1; if (__builtin_expect(!--n, 0)) DONE();
 
 int main(int argc, char **argv) {
     const char *mode = argc > 1 ? argv[1] : "ind";
-    int ring = argc > 2 ? atoi(argv[2]) : 16, nh = argc > 3 ? atoi(argv[3]) : 16, chain = !strcmp(mode, "chain");
+    int ring = argc > 2 ? atoi(argv[2]) : 16, nh = argc > 3 ? atoi(argv[3]) : 16, chain = !strcmp(mode, "chain"), mix = !strcmp(mode, "mix");
     uint64_t n = 200000000;
     U *r = calloc((size_t)ring + 1, sizeof(U));
-    for (int i = 0; i < ring; i++) { r[i].p = (chain ? hcs : hs)[i % nh]; r[i].link = &r[i + 1]; }
+    for (int i = 0; i < ring; i++) {   // mix: handlers in a scrambled order, so one handler has several successors
+        int h = mix ? (int)(((unsigned)i * 2654435761u >> 7) % (unsigned)nh) : i % nh;
+        r[i].p = (chain ? hcs : hs)[h]; r[i].link = &r[i + 1];
+    }
     r[ring].p = hwrap; r[ring].link = r;
 #ifdef FAT
     V z = { 0, 0 };
