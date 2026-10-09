@@ -99,6 +99,12 @@ mode == 2 && /^ *[0-9a-f]+:\t/ {
         # single-instruction forms worth a specialised handler
         if (mn ~ /^(add|sub|mul|div|min|max|and|andn|or|xor)(ps|pd|ss|sd)$|^p(add|sub|and|or|xor|cmp)/ && shape ~ /,m$/) { famc["  SSE op with a memory operand"]++; if (inloop) lfamc["  SSE op with a memory operand"]++ }
         if (ops ~ /\[[a-z0-9]+\+[a-z0-9]+\*[1248]/ || ops ~ /\[[a-z0-9]+\+[a-z0-9]+(\+|-|\])/) { famc["  operand with base + index"]++; if (inloop) lfamc["  operand with base + index"]++ }
+        # SSE pairs: a register copy then an op on the copy (3-operand SSE), a load then an op on it
+        if (pmn ~ /^mov(aps|apd|ups|upd|dqa|dqu|ss|sd)$/ && prev ~ / x,x$/ && rel == " [same dst]" && shape ~ / x,(x|m)$/) { famc["SSE: copy ; op on the copy (3-operand)"]++; if (inloop) lfamc["SSE: copy ; op on the copy (3-operand)"]++ }
+        if (pmn ~ /^mov(aps|apd|ups|upd|dqa|dqu|ss|sd)$/ && prev ~ / x,m$/ && rel == " [same dst]" && shape ~ / x,(x|m)$/) { famc["SSE: load ; op on the loaded register"]++; if (inloop) lfamc["SSE: load ; op on the loaded register"]++ }
+        if (fam ~ /3-operand: ALU with a register/ || (fam ~ /3-operand/ && shape !~ /,i$/)) { k3 = "  3-operand with a register: " mn; famc[k3]++; if (inloop) lfamc[k3]++ }
+        if (mn ~ /^(add|sub|and|or|xor|cmp|test|adc|sbb)$/ && ops ~ /\[[a-z0-9]+\+[a-z0-9]+\*[1248]/) { famc["  ALU with a base+index*scale operand"]++; if (inloop) lfamc["  ALU with a base+index*scale operand"]++ }
+        if (mn ~ /^(add|sub|mul|div|min|max)(ps|pd|ss|sd)$/ && ops ~ /\[[a-z0-9]+\+[a-z0-9]+\*[1248]/) { famc["  SSE op with a base+index*scale operand"]++; if (inloop) lfamc["  SSE op with a base+index*scale operand"]++ }
         # finer splits of the larger families
         sub_ = ""
         if (fam ~ /3-operand/) sub_ = (shape ~ /,i$/ || shape ~ /^(neg|not)/) ? "  3-operand: ALU/shift with an immediate" : "  3-operand: ALU with a register"
