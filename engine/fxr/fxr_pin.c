@@ -539,11 +539,59 @@ static int try_fuse(Out *o, const Uop *u, uint32_t left) {
     return 0;
 }
 
+// The general registers a register-only uop reads and writes (bit masks); 0 when it is anything
+// else: a memory operand, reads the flags, an 8-bit high register, a shift by CL.
+static int reg_rw(const Uop *u, unsigned *rd, unsigned *wr) {
+    const Desc *d = find(u->fn);
+    int D = greg(u->dst), S = greg(u->src);
+    if (!d || D < 0) return 0;
+    unsigned dm = 1u << D, sm = S >= 0 ? 1u << S : 0;
+    switch (d->fam) {
+    case FAM_ALU:
+        if (d->a == ALU_ADC || d->a == ALU_SBB) return 0;
+        if (d->b == F_RR && S >= 0) { *rd = dm | sm; *wr = (d->a == ALU_CMP || d->a == ALU_TEST) ? 0 : dm; return 1; }
+        if (d->b == F_RI) { *rd = dm; *wr = (d->a == ALU_CMP || d->a == ALU_TEST) ? 0 : dm; return 1; }
+        return 0;
+    case FAM_MOV:
+        if (d->a == F_RR && S >= 0) { *rd = sm | (d->b < 2 ? dm : 0); *wr = dm; return 1; }
+        if (d->a == F_RI) { *rd = d->b < 2 ? dm : 0; *wr = dm; return 1; }
+        return 0;
+    case FAM_SHIFT: if (d->b || u->src == 0xffff) return 0; *rd = dm; *wr = dm; return 1;
+    case FAM_UNARY: if (d->b) return 0; *rd = dm; *wr = dm; return 1;
+    case FAM_EXT: if (d->b || S < 0) return 0; *rd = sm; *wr = dm; return 1;
+    case FAM_IMUL2: if (d->a || S < 0) return 0; *rd = dm | sm; *wr = dm; return 1;
+    case FAM_IMUL3: if (d->a || S < 0) return 0; *rd = sm; *wr = dm; return 1;
+    case FAM_LEA: if (!simple_mem(u) || u->base > 15) return 0; *rd = 1u << u->base; *wr = dm; return 1;
+    }
+    return 0;
+}
+// A loop step with something between it and its compare ([a][x][c], c FXI's fused cmp+jcc on the
+// stepped register): x may run first when it is register-only, reads no flags, and neither reads
+// nor writes anything a or c use, or reads what a writes. No memory access moves, so the state at
+// a fault stays exact. Then a and c fuse.
+static int can_hoist(const Uop *a, const Uop *x, const Uop *c) {
+    const Desc *da = find(a->fn), *dc = find(c->fn);
+    if (!da || !dc || da->fam != FAM_ALU || (da->a != ALU_ADD && da->a != ALU_SUB) || dc->fam != FAM_FJCC || dc->a)
+        return 0;
+    int D = greg(a->dst), S = da->b == F_RR ? greg(a->src) : -2, cd = greg(c->dst), cs = dc->b ? -2 : greg(c->src);
+    if (D < 0 || S == -1 || cd < 0 || cs == -1 || (cd != D && cs != D)) return 0;
+    unsigned rd, wr, used = 1u << D | (S >= 0 ? 1u << S : 0) | 1u << cd | (cs >= 0 ? 1u << cs : 0);
+    return reg_rw(x, &rd, &wr) && !(wr & used) && !(rd & (1u << D));
+}
+
 Block *fxr_lower(struct Fxi *vm, Block *b) {
     (void)vm;
     pthread_once(&g_once, init_desc);
     Out o = { malloc(sizeof(Uop) * (2 * (size_t)b->n + 3)), 0, 0, { { 0, 0, 0 } } };   // + 2 flag stubs
     for (uint32_t i = 0; i < b->n; i++) {
+        if (i + 2 < b->n && can_hoist(&b->u[i], &b->u[i + 1], &b->u[i + 2])) {
+            Uop pair[2] = { b->u[i], b->u[i + 2] };
+            lower_one(&o, &b->u[i + 1]);
+            if (try_fuse(&o, pair, 2)) { i += 2; continue; }
+            lower_one(&o, &b->u[i]);   // not fused after all: a, then c in its turn (order still valid)
+            i++;
+            continue;
+        }
         if (try_fuse(&o, &b->u[i], b->n - i)) { i++; continue; }
         lower_one(&o, &b->u[i]);
     }
