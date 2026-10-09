@@ -34,6 +34,7 @@ struct SteamLaunchPlan {
     var arguments: String
     var workingFolder: String
     var appPath: String      // the install folder, for SteamAppPath
+    var launchIndex: UInt32 = 0   // Steam's config.launch key of the chosen entry (Madeira Dock)
 }
 
 /// Stage 4b: the account's owned library, from Steam's own CM connection
@@ -203,7 +204,15 @@ final class SteamLibrary: ObservableObject {
         case let f?: folder = appPath + "\\" + win(f)
         }
         dlog("[steam-play] app=\(appID) program=\(choice.program) launch=\(choice.launchIndex.map(String.init) ?? "-")")
-        return SteamLaunchPlan(exe: exe, arguments: choice.arguments, workingFolder: folder, appPath: appPath)
+        return SteamLaunchPlan(exe: exe, arguments: choice.arguments, workingFolder: folder, appPath: appPath,
+                               launchIndex: choice.launchIndex ?? 0)
+    }
+
+    /// Madeira Dock signs in as this account's Steam client; a second sign-in would replace it,
+    /// so MYIOSDECK's own connection logs off first (it reconnects on the next library refresh).
+    func endSessionForDock() async {
+        await session.disconnectGracefully()
+        dlog("[steam-library] own Steam connection closed for Madeira Dock")
     }
 
     func uninstall(_ appID: Int) {
@@ -229,11 +238,11 @@ final class SteamLibrary: ObservableObject {
     private func run(_ appID: Int) async {
         // Keep the screen awake and ask iOS for background time: a download
         // only advances while the app runs.
-        UIApplication.shared.isIdleTimerDisabled = true
+        ScreenAwake.set("steam-download", true)
         let bg = UIApplication.shared.beginBackgroundTask(withName: "steam-download")
         defer {
             UIApplication.shared.endBackgroundTask(bg)
-            UIApplication.shared.isIdleTimerDisabled = false
+            ScreenAwake.set("steam-download", false)
         }
         downloads[appID] = .active(SteamDownloadProgress())
         do {

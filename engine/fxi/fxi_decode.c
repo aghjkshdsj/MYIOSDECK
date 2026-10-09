@@ -365,7 +365,9 @@ static int decode_one_inner(Dec *d) {
         else break;
         d->p++;
     }
-    if ((b & 0xf0) == 0x40) {
+    // Only the REX prefix right before the opcode counts; an earlier one is ignored (MSVC's
+    // unwinder-friendly tail jump is "48 41 ff e2", rex.w then rex.b jmp r10: Valve's client).
+    while ((b & 0xf0) == 0x40) {
         d->rex = 1; d->rexw = (b >> 3) & 1; d->rexr = (b >> 2) & 1; d->rexx = (b >> 1) & 1; d->rexb = b & 1;
         d->p++; b = *d->p;
     }
@@ -475,6 +477,10 @@ static int decode_one_inner(Dec *d) {
     case 0x8d: {
         modrm(d);
         if (!d->is_mem) return unimplemented(d, "lea reg");
+        // 67 lea: the address is computed in 32 bits. Its low 32 bits equal the 64-bit sum, so a
+        // 32/16-bit destination is unchanged, and a 64-bit one gets the zero-extended 32-bit
+        // address, which is exactly lea_32 (Dokimon: 67 8d 04 0a, lea eax, [edx+ecx]).
+        if (d->addr32 && !d->riprel) { d->addr32_used = 0; if (bits == 64) bits = 32; }
         Uop *u = emit(d, fxi_lea_tab[si_of(bits)]); u->dst = gpr(d, d->reg, bits); set_mem(d, u);
         return 0;
     }
@@ -815,7 +821,7 @@ int fxi_insn_length(const uint8_t *p, int *op_end) {
         else break;
         if (p - s > 14) return 0;
     }
-    if ((*p & 0xf0) == 0x40) { rexw = (*p >> 3) & 1; p++; }
+    while ((*p & 0xf0) == 0x40) { rexw = (*p >> 3) & 1; p++; }   // the last REX counts
     int immz = osz16 ? 2 : 4, has_modrm = 0, imm = 0, map = 0;
     uint8_t b = *p++;
     if (b == 0xc4 || b == 0xc5 || b == 0x62) {   // VEX / EVEX

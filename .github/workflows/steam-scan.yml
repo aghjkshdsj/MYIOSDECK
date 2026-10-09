@@ -1,0 +1,73 @@
+name: Scan Valve's Steam client with FXI
+
+# Madeira Dock runs Valve's own steamclient64.dll in FXI without JIT. This job fetches the same
+# pinned client packages the app downloads (App/Sources/Steam/SteamRuntime.swift: Valve's update
+# CDN, exact sizes and SHA-256), unpacks them on the runner only, and runs `fxi --scan-pe` over
+# every 64-bit PE inside, listing the instructions FXI does not implement yet. Nothing is
+# uploaded or redistributed: the job prints the scanner's report and deletes the files.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["engine/fxi/fxi_decode.c", ".github/workflows/steam-scan.yml", "App/Sources/Steam/SteamRuntime.swift"]
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build FXI
+        run: bash engine/fxi/build.sh "$RUNNER_TEMP/fxi" > /dev/null
+      - name: Fetch Valve's pinned client packages (checked like the app does)
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/steam" && cd "$RUNNER_TEMP/steam"
+          origin=$(sed -n 's/.*static let origin = "\(https:[^"]*\)".*/\1/p' "$GITHUB_WORKSPACE/App/Sources/Steam/SteamRuntime.swift")
+          # Each Package(...) spans two lines in the Swift source: join first.
+          tr -d '\n' < "$GITHUB_WORKSPACE/App/Sources/Steam/SteamRuntime.swift" | tr -s ' ' | \
+            grep -o 'Package(file: "[^"]*", bytes: [0-9_]*, *sha256: "[0-9a-f]*"' > packages.txt
+          test -s packages.txt
+          while IFS= read -r line; do
+            file=$(sed -n 's/.*file: "\([^"]*\)".*/\1/p' <<< "$line")
+            bytes=$(sed -n 's/.*bytes: \([0-9_]*\),.*/\1/p' <<< "$line" | tr -d _)
+            sha=$(sed -n 's/.*sha256: "\([0-9a-f]*\)".*/\1/p' <<< "$line")
+            curl -fsSL -o pkg.zip "$origin$file"
+            test "$(stat -c %s pkg.zip)" = "$bytes"
+            echo "$sha  pkg.zip" | sha256sum -c - > /dev/null
+            unzip -q -o pkg.zip -d unpacked || [ $? -eq 1 ]   # 1 = warnings: Valve's names use backslashes
+            rm pkg.zip
+            echo "verified $file ($bytes bytes)"
+          done < packages.txt
+      - name: fxi --scan-pe over every 64-bit PE in the client
+        run: |
+          cd "$RUNNER_TEMP/steam/unpacked"
+          total=0
+          find . -type f \( -iname '*.dll' -o -iname '*.exe' \) | sort | while read -r f; do
+            # PE32+ only (optional header magic 0x20b): the 64-bit files FXI runs.
+            off=$(od -An -tu4 -j60 -N4 "$f" 2>/dev/null | tr -d ' ')
+            [ -n "$off" ] || continue
+            magic=$(od -An -tx2 -j$((off + 24)) -N2 "$f" 2>/dev/null | tr -d ' ')
+            [ "$magic" = 020b ] || continue
+            echo "== $f"
+            "$RUNNER_TEMP/fxi/fxi" --scan-pe "$f" 2>&1 | head -60
+          done | tee "$RUNNER_TEMP/scan.txt"
+          echo "## FXI scan of Valve's 64-bit client files" >> "$GITHUB_STEP_SUMMARY"
+          grep -E '^(###|[|])' "$RUNNER_TEMP/scan.txt" | head -300 >> "$GITHUB_STEP_SUMMARY" || true
+      - name: What Dock's DLLs still need (CPUID-gated extensions filtered out)
+        run: |
+          # FXI's CPUID reports SSE2 only, so code behind AVX/AVX2 (VEX c4/c5), SSSE3/SSE4.x and
+          # AES-NI/SHA-NI (0f 38, 0f 3a), ADX (0f 38 f6) and BMI is not taken. The rest is what
+          # Madeira Dock can actually reach in Valve's client, tier0 and vstdlib.
+          cd "$RUNNER_TEMP/steam/unpacked"
+          for f in steamclient64.dll tier0_s64.dll vstdlib_s64.dll; do
+            echo "== $f"
+            "$RUNNER_TEMP/fxi/fxi" --scan-pe "$f" 2>&1 | grep -E '^###|^[|] [0-9]' | \
+              grep -vE '`opcode \[c[45] |`two-byte opcode \[(66 |f2 |f3 )?(4[0-9a-f] )?0f 3[8a] |`0f 3[8a] \[' | head -120
+          done | tee "$RUNNER_TEMP/dock-needs.txt"
+          { echo "## Not CPUID-gated, in Dock's DLLs"; cat "$RUNNER_TEMP/dock-needs.txt"; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove the client files
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/steam"

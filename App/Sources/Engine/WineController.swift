@@ -48,7 +48,16 @@ final class WineController: ObservableObject, @unchecked Sendable {
         Program(id: "d3d12-cube-x64.exe", title: "Direct3D 12 cube (x64)", detail: "Spinning cube: D3D12 through Madeira's converter to Metal", graphics: true),
     ]
 
-    @Published private(set) var state: State = .idle
+    @Published private(set) var state: State = .idle {
+        // A game (or the long Steam sign-in without JIT) gets no touches: keep iOS from
+        // locking the screen and suspending the app while Wine runs.
+        didSet {
+            switch state {
+            case .booting, .running: ScreenAwake.set("wine", true)
+            default: ScreenAwake.set("wine", false)
+            }
+        }
+    }
     /// The Controller API this Wine session started with (its HID / DirectInput
     /// devices exist only if it started with them).
     @Published private(set) var sessionAPI = "xinput"
@@ -101,6 +110,52 @@ final class WineController: ObservableObject, @unchecked Sendable {
         setenv("MADEIRA_WORKDIR", plan.workingFolder, 1)
         run(Program(id: plan.exe, title: title, detail: "", graphics: true, noJIT: noJIT), args: plan.arguments)
     }
+
+    /// A game the user added (CustomGames: a DRM-free folder in Documents/Games, C:\Games in
+    /// Wine), started in its program's folder. Not a Steam game: like a Dock session, the bridge
+    /// publishes no Steam identity for it (MADEIRA_DOCK_SESSION), so no game sees Madeira's
+    /// fixed fallback App ID.
+    func runCustomGame(_ game: CustomGame) {
+        let noJIT = !mid_jit_pool_ready()
+        CustomGames.prepare(prefix: prefixURL)                       // C:\Games -> Documents/Games
+        let machine = peMachine(windowsPath: game.windowsExe)
+        dlog("[games] start \(game.name): \(game.windowsExe) machine=0x\(String(machine, radix: 16)) noJIT=\(noJIT ? 1 : 0)")
+        if noJIT, machine == 0x14c {
+            state = .failed("This is a 32-bit game. Without JIT only 64-bit (x64) games can run: enable JIT to play it.")
+            return
+        }
+        for k in ["MADEIRA_STEAM_APPID", "MADEIRA_STEAM_APPPATH"] { unsetenv(k) }
+        setenv("MADEIRA_WORKDIR", game.windowsWorkdir, 1)
+        customActive = true
+        run(Program(id: game.windowsExe, title: game.name, detail: "", graphics: true, noJIT: noJIT), args: game.arguments)
+    }
+
+    /// Set while an added game's session runs (no Steam identity for it).
+    private(set) var customActive = false
+
+    /// A Steam game started through Madeira Dock (App/Sources/Steam/MadeiraDock.swift): Wine runs
+    /// dockhost.exe, which loads Valve's own steamclient64.dll, signs in with the user's token
+    /// (the one-use transfer the caller wrote), asks Valve's client whether the account owns the
+    /// game and has it start the game with Valve's LaunchApp. The game then finds a running,
+    /// signed-in Steam client, as on a PC. Without JIT the host, Valve's client and the game are
+    /// x64 code in FXI; the game is the host's child process.
+    func runDockGame(_ game: DockGame, launchOption: UInt32, title: String) {
+        let noJIT = !mid_jit_pool_ready()
+        for k in ["MADEIRA_STEAM_APPID", "MADEIRA_STEAM_APPPATH", "MADEIRA_WORKDIR"] { unsetenv(k) }   // no direct start
+        MadeiraDock.configure(game, launchOption: launchOption)
+        // Without JIT Valve's client runs interpreted: in build 105 it was still in its HTTPS
+        // setup (OpenSSL in CHTTPClientThreadPool) when the host's 90 s sign-in wait ran out.
+        // Our dockhost (engine/pedylib/madeira-dock-signin-wait.patch) reads a longer wait here.
+        if noJIT { setenv("MADEIRA_DOCK_SIGNIN_MS", "480000", 1) } else { unsetenv("MADEIRA_DOCK_SIGNIN_MS") }
+        dlog("[dock-launch] app=\(game.id) launch-option=\(launchOption) noJIT=\(noJIT ? 1 : 0) signin-wait=\(noJIT ? 480 : 90)s")
+        dockActive = true
+        run(Program(id: MadeiraDock.executable, title: title, detail: "", graphics: true, noJIT: noJIT))
+    }
+
+    /// Set while a Dock session runs: watch() polls the host's report (C:\madeira-dock.txt).
+    private(set) var dockActive = false
+    /// The host's failure, in words, when its report ended with a nonzero result.
+    @Published private(set) var dockFailure: String?
 
     /// IMAGE_FILE_HEADER.Machine of a C:\ path in the prefix (0x8664 x64, 0x14c i386; 0 unreadable).
     func peMachine(windowsPath: String) -> UInt16 {
@@ -158,6 +213,12 @@ final class WineController: ObservableObject, @unchecked Sendable {
             for k in ["WINE_IOS_NOJIT", "MYIOSDECK_PE_DIR", "MYIOSDECK_NOJIT_EMULATOR", "WINEDLLOVERRIDES", "MYIOSDECK_WIN_CPU"] { unsetenv(k) }
             if program.noJIT { setenv("MADEIRA_USE_ARM64EC", "1", 1) }
         }
+        // A Dock session publishes no fixed Steam game identity: Madeira's bridge otherwise sets
+        // SteamAppId/SteamGameId/SteamAppPath (its Thumper fallback) for every launch, and in
+        // build 105 that reached Valve's client inside the host, which then never finished
+        // signing in (result 34). Valve's client gives the game it starts its own identity.
+        // An added (non-Steam) game gets none either.
+        if dockActive || customActive { setenv("MADEIRA_DOCK_SESSION", "1", 1) } else { unsetenv("MADEIRA_DOCK_SESSION") }
         state = .booting(program.title)
         // Controller API for this session (Settings › Controller). Must be in the
         // environment before the wineserver starts: the HID device and the
@@ -211,7 +272,37 @@ final class WineController: ObservableObject, @unchecked Sendable {
     /// Poll until the Windows program exits, then report how it ended.
     private func watch(_ title: String) {
         let started = Date()
-        while mid_wine_running() != 0 { usleep(250_000) }
+        var ticks = 0, clientLogsDumped = false
+        while mid_wine_running() != 0 {
+            usleep(250_000)
+            ticks += 1
+            // Madeira Dock: log the host's report fields as they change ([dock-report]), and
+            // show its progress over the (still black) game surface.
+            if dockActive, ticks % 4 == 0 {
+                let seconds = Int(Date().timeIntervalSince(started))
+                // Valve's client logs once about 4 min in too, in case the session is cut short.
+                let dumpLogs = !clientLogsDumped && seconds >= 240
+                if dumpLogs { clientLogsDumped = true }
+                Task { @MainActor in
+                    let report = MadeiraDock.pollReport()
+                    GameHostView.shared.setStatus(MadeiraDock.progressText(report, seconds: seconds))
+                    if dumpLogs { MadeiraDock.logClientLogs() }
+                }
+            }
+        }
+        if dockActive { Task { @MainActor in GameHostView.shared.setStatus(nil) } }
+        if dockActive {
+            let done = DispatchSemaphore(value: 0)
+            Task { @MainActor in
+                let report = MadeiraDock.pollReport()
+                self.dockFailure = report.failure
+                if let failure = report.failure { dlog("[dock-launch] result=\(report.result ?? -1): \(failure)") }
+                MadeiraDock.logClientLogs()
+                MadeiraDock.cleanup()
+                done.signal()
+            }
+            done.wait()
+        }
         var status: UInt32 = 0
         let crashed = wine_crash_exit_status(&status) != 0
         let secs = String(format: "%.1f s", Date().timeIntervalSince(started))
@@ -230,6 +321,19 @@ final class WineController: ObservableObject, @unchecked Sendable {
             if crashed {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { CrashReporter.shared.programCrashed(title, how: how) }
             }
+        }
+    }
+}
+
+/// Keeps the screen on while anything needs it (a running game, a Steam download): one
+/// switch for the whole app, so one holder ending does not turn it off for another.
+enum ScreenAwake {
+    @MainActor private static var holders = Set<String>()
+    /// Callable from any thread; applied on the main actor in call order.
+    static func set(_ holder: String, _ on: Bool) {
+        Task { @MainActor in
+            if on { holders.insert(holder) } else { holders.remove(holder) }
+            UIApplication.shared.isIdleTimerDisabled = !holders.isEmpty
         }
     }
 }

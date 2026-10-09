@@ -4,6 +4,7 @@
 // (engine/wine/patches/nojit_dylib.py) stores mid_fxi_win_host_table() into that DLL when it
 // maps it; the DLL's exports branch through the table to fxi_win_glue.S and to the C here.
 
+#include <dlfcn.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -386,18 +387,22 @@ static void prof_export_name(const prof_mod *m, uint64_t addr, char *out, size_t
     snprintf(out, outsz, "?");
     uint32_t lfanew, dir_rva, nnames, funcs_rva, names_rva, ords_rva;
     uint64_t b = m->base;
-    if (!vmr(b + 0x3c, &lfanew, 4) || !vmr(b + lfanew + 24 + 112, &dir_rva, 4) || !dir_rva) return;
+    // On failure the name says which step failed (?hdr, ?dir, ?tab, ?ord, ?below, ?str).
+    if (!vmr(b + 0x3c, &lfanew, 4) || !vmr(b + lfanew + 24 + 112, &dir_rva, 4)) { snprintf(out, outsz, "?hdr"); return; }
+    if (!dir_rva) { snprintf(out, outsz, "?dir"); return; }
     if (!vmr(b + dir_rva + 0x18, &nnames, 4) || !vmr(b + dir_rva + 0x1c, &funcs_rva, 4) ||
-        !vmr(b + dir_rva + 0x20, &names_rva, 4) || !vmr(b + dir_rva + 0x24, &ords_rva, 4) || nnames > 20000) return;
+        !vmr(b + dir_rva + 0x20, &names_rva, 4) || !vmr(b + dir_rva + 0x24, &ords_rva, 4) || nnames > 20000) {
+        snprintf(out, outsz, "?tab"); return;
+    }
     uint32_t rva = (uint32_t)(addr - b), best_rva = 0, best_name = 0;
     for (uint32_t i = 0; i < nnames; i++) {
         uint16_t ord; uint32_t f, nm;
-        if (!vmr(b + ords_rva + 2ull * i, &ord, 2) || !vmr(b + funcs_rva + 4ull * ord, &f, 4)) return;
+        if (!vmr(b + ords_rva + 2ull * i, &ord, 2) || !vmr(b + funcs_rva + 4ull * ord, &f, 4)) { snprintf(out, outsz, "?ord"); return; }
         if (f <= rva && f >= best_rva && vmr(b + names_rva + 4ull * i, &nm, 4)) { best_rva = f; best_name = nm; }
     }
-    if (!best_name) return;
+    if (!best_name) { snprintf(out, outsz, "?below(%u names)", nnames); return; }
     char name[64] = { 0 };
-    if (!vmr(b + best_name, name, sizeof name - 1)) return;
+    if (!vmr(b + best_name, name, sizeof name - 1)) { snprintf(out, outsz, "?str"); return; }
     name[sizeof name - 1] = 0;
     if (rva == best_rva) snprintf(out, outsz, "%s", name);
     else snprintf(out, outsz, "%s+%#x", name, rva - best_rva);
@@ -507,6 +512,11 @@ static void prof_report(uint64_t period_samples) {
         const char *mod = "?"; char fn[96] = "?";
         for (int k = 0; k < nm; k++)
             if (calls[i].rip - mods[k].base < mods[k].size) { mod = mods[k].name; prof_export_name(&mods[k], calls[i].rip, fn, sizeof fn); break; }
+        // Wine's ARM64EC DLLs are mapped from signed dylibs: when no export is at or below the
+        // target (log 54: "?below" for every ntdll/kernel32 target), the dylib's own symbols may be.
+        Dl_info di;
+        if (fn[0] == '?' && dladdr((const void *)(uintptr_t)calls[i].rip, &di) && di.dli_sname)
+            snprintf(fn, sizeof fn, "%s+%#llx [dylib]", di.dli_sname, (unsigned long long)(calls[i].rip - (uintptr_t)di.dli_saddr));
         mid_log("[fxi-prof]   native %2d: %5.1f%% %llu/s %s!%s (%#llx)", i + 1, 100.0 * calls[i].n / (double)total_calls,
                 (unsigned long long)(calls[i].n / PROF_PERIOD_S), mod, fn, (unsigned long long)calls[i].rip);
     }
