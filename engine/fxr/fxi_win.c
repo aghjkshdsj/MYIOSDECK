@@ -79,7 +79,13 @@ static Block *entry_block(FxiCpu *c, uint64_t rip) {
         if (b != fxi_stop) __atomic_store_n(slot, b, __ATOMIC_RELEASE);
         return b;
     }
-    return fxi_lookup(c, rip);
+    // FXR: its calls do not push that ring, but each thread has an indirect-branch cache (rip ->
+    // the block's first uop, fxr_pin.h IBTC): returns from native calls come back to the same rips
+    __typeof__(c->fxr_ibtc[0]) *e = &c->fxr_ibtc[(rip ^ (rip >> 10)) & 1023u];                       // FXR
+    if (c->fxr_ready && e->rip == rip && e->u) return (Block *)(void *)((char *)e->u - offsetof(Block, u));   // FXR
+    Block *b = fxi_lookup(c, rip);                                                                    // FXR
+    if (c->fxr_ready && b != fxi_stop) { e->rip = rip; e->u = b->u; }                                 // FXR
+    return b;                                                                                         // FXR
 }
 
 uint64_t fxi_win_run(FxiCpu *c) {
