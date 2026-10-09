@@ -112,11 +112,14 @@ jobs:
               "$RUNNER_TEMP/fxr/fxr" guests/bench_sse2.elf "${k%%:*}" "${k##*:}" 2>&1 | grep -vE '^\s*$' | tail -12
           done
           echo "== diagnostic: one threaded dispatch on this CPU (engine/fxr-probe/dispatch_probe.c, 200M dispatches)"
-          clang-19 -O2 -o /tmp/dprobe engine/fxr-probe/dispatch_probe.c
-          for cfg in "ind 8 8" "ind 16 16" "ind 32 32" "ind 32 4" "ind 64 32" "ind 256 32" "dir 0 0"; do
+          for b in "plain:" "a4k:-DALIGN=4096" "a64k:-DALIGN=65536" "fat:-DFAT" "fat_a64k:-DFAT -DALIGN=65536"; do
+            clang-19 -O2 ${b#*:} -o "/tmp/dprobe_${b%%:*}" engine/fxr-probe/dispatch_probe.c
+          done
+          for cfg in "plain ind 32 32" "plain ind 16 4" "plain chain 32 32" "a4k ind 32 32" "a64k ind 32 32" "a64k chain 32 32" \
+                     "fat ind 32 32" "fat chain 32 32" "fat_a64k ind 32 32" "fat_a64k chain 32 32"; do
             set -- $cfg
-            sudo taskset -c 1 "$PERF" stat -x, -e cycles,instructions,stall_frontend /tmp/dprobe "$1" "$2" "$3" 2>&1 >/dev/null | \
-              awk -F, -v c="$cfg" 'BEGIN { printf "%-12s", c } { v[$3] = $1 } END { printf " cycles/dispatch=%.2f insns/dispatch=%.2f frontend-stall/dispatch=%.2f\n", v["cycles"] / 2e8, v["instructions"] / 2e8, v["stall_frontend"] / 2e8 }'
+            sudo taskset -c 1 "$PERF" stat -x, -e cycles,instructions,stall_frontend "/tmp/dprobe_$1" "$2" "$3" "$4" 2>&1 >/dev/null | \
+              awk -F, -v c="$cfg" 'BEGIN { printf "%-24s", c } { v[$3] = $1 } END { printf " cycles/dispatch=%.2f insns/dispatch=%.2f frontend-stall/dispatch=%.2f\n", v["cycles"] / 2e8, v["instructions"] / 2e8, v["stall_frontend"] / 2e8 }'
           done
           echo "== diagnostic: where the frontend stalls (PMU events the runner exposes)"
           for k in integer:3 memory:50 branch:6 simd:150; do
