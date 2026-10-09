@@ -299,20 +299,47 @@ typedef int8_t VS16 __attribute__((vector_size(16)));
 // Exact faults (fxr_win_host_state): after a guest memory access, these keep a pinned value the
 // handler is about to overwrite (the flag words, an XMM destination) in its register until there,
 // so the compiler does not use that register as scratch before the access. They emit nothing.
-#if defined(__aarch64__)
-#define KEEP_X(X) __asm__ volatile("" : "+w"(X) :: "memory")
+// With preserve_none on ARM64 they name the very host register (fxi_internal.h, FXR_PARAMS: the
+// flag words x12 x13 x14 x9, XMM0-7 v0-v7, the guest GPRs HREG_n): a value merely kept alive
+// could sit in another register while its own register served as scratch.
+#if defined(__aarch64__) && defined(__has_attribute) && __has_attribute(preserve_none)
+#define KEEP_IN(T, V, REG, C) do { register T k_ __asm__(REG) = (V); __asm__ volatile("" : "+" C(k_) :: "memory"); (V) = k_; } while (0)
+#define KEEP_X(X, REG) __asm__ volatile("" : "+w"(X) :: "memory")   /* (the unbound form sufficed here) */
+#define KEEP_F() do {                                                                      \
+        register uint64_t f0_ __asm__("x12") = F0, f1_ __asm__("x13") = F1, f2_ __asm__("x14") = F2, f3_ __asm__("x9") = F3; \
+        __asm__ volatile("" : "+r"(f0_), "+r"(f1_), "+r"(f2_), "+r"(f3_) :: "memory");    \
+        F0 = f0_; F1 = f1_; F2 = f2_; F3 = f3_;                                            \
+    } while (0)
+#define HREG_0 "x22"
+#define HREG_1 "x23"
+#define HREG_2 "x24"
+#define HREG_3 "x28"
+#define HREG_4 "x27"
+#define HREG_5 "x0"
+#define HREG_6 "x25"
+#define HREG_7 "x26"
+#define HREG_8 "x1"
+#define HREG_9 "x2"
+#define HREG_10 "x3"
+#define HREG_11 "x4"
+#define HREG_12 "x5"
+#define HREG_13 "x6"
+#define HREG_14 "x7"
+#define HREG_15 "x20"
+#define KEEP_R(D) KEEP_IN(uint64_t, g##D, HREG_##D, "r")
 #else
-#define KEEP_X(X) __asm__ volatile("" : "+x"(X) :: "memory")
-#endif
+#define KEEP_X(X, REG) __asm__ volatile("" : "+x"(X) :: "memory")
 #define KEEP_F() __asm__ volatile("" : "+r"(F0), "+r"(F1), "+r"(F2), "+r"(F3) :: "memory")
-#define XKEEP_0 KEEP_X(x0)
-#define XKEEP_1 KEEP_X(x1)
-#define XKEEP_2 KEEP_X(x2)
-#define XKEEP_3 KEEP_X(x3)
-#define XKEEP_4 KEEP_X(x4)
-#define XKEEP_5 KEEP_X(x5)
-#define XKEEP_6 KEEP_X(x6)
-#define XKEEP_7 KEEP_X(x7)
+#define KEEP_R(D) __asm__ volatile("" : "+r"(g##D) :: "memory")
+#endif
+#define XKEEP_0 KEEP_X(x0, "v0")
+#define XKEEP_1 KEEP_X(x1, "v1")
+#define XKEEP_2 KEEP_X(x2, "v2")
+#define XKEEP_3 KEEP_X(x3, "v3")
+#define XKEEP_4 KEEP_X(x4, "v4")
+#define XKEEP_5 KEEP_X(x5, "v5")
+#define XKEEP_6 KEEP_X(x6, "v6")
+#define XKEEP_7 KEEP_X(x7, "v7")
 #define XKEEP_M ((void)0)   // XMM8-15 are in the CPU structure
 
 #define LF0(v) (((VF)(v))[0])
