@@ -90,19 +90,19 @@ const char *fx32_wow_error(Fx32Cpu *c) { return c->err ? c->err : "?"; }
 enum { CTX_CONTROL = 0x10001, CTX_INTEGER = 0x10002, CTX_SEGMENTS = 0x10004, CTX_FLOAT = 0x10008, CTX_EXTENDED = 0x10020 };
 static const int k_gpr_off[8] = { 0xb0, 0xac, 0xa8, 0xa4, 0xc4, 0xb4, 0xa0, 0x9c };   // EAX ECX EDX EBX ESP EBP ESI EDI
 
-static uint32_t rd32(const uint8_t *p, int off) { uint32_t v; memcpy(&v, p + off, 4); return v; }
-static void wr32c(uint8_t *p, int off, uint32_t v) { memcpy(p + off, &v, 4); }
+static uint32_t ctx_rd32(const uint8_t *p, int off) { uint32_t v; memcpy(&v, p + off, 4); return v; }
+static void ctx_wr32(uint8_t *p, int off, uint32_t v) { memcpy(p + off, &v, 4); }
 
 void fx32_wow_load_context(Fx32Cpu *c, const void *ctx, uint32_t teb32) {
     const uint8_t *p = ctx;
-    uint32_t flags = rd32(p, 0);
+    uint32_t flags = ctx_rd32(p, 0);
     if ((flags & CTX_INTEGER) == CTX_INTEGER)
-        for (int i = 0; i < 8; i++) if (i != R_SP && i != R_BP) c->r[i] = rd32(p, k_gpr_off[i]);
+        for (int i = 0; i < 8; i++) if (i != R_SP && i != R_BP) c->r[i] = ctx_rd32(p, k_gpr_off[i]);
     if ((flags & CTX_CONTROL) == CTX_CONTROL) {
-        c->r[R_SP] = rd32(p, 0xc4);
-        c->r[R_BP] = rd32(p, 0xb4);
-        c->rip = rd32(p, 0xb8);
-        fxi_set_rflags(c, rd32(p, 0xc0));
+        c->r[R_SP] = ctx_rd32(p, 0xc4);
+        c->r[R_BP] = ctx_rd32(p, 0xb4);
+        c->rip = ctx_rd32(p, 0xb8);
+        fxi_set_rflags(c, ctx_rd32(p, 0xc0));
         if (c->df) { c->df_rip = c->rip; c->df_how = 3; }
     }
     if ((flags & CTX_EXTENDED) == CTX_EXTENDED) fxi_x87_fxrstor(c, p + 0xcc, 1);   // x87 + XMM0-7 (fxsave layout)
@@ -113,13 +113,13 @@ void fx32_wow_load_context(Fx32Cpu *c, const void *ctx, uint32_t teb32) {
 void fx32_wow_save_context(Fx32Cpu *c, void *ctx) {
     uint8_t *p = ctx;
     memset(p, 0, 0x2cc);
-    wr32c(p, 0, CTX_CONTROL | CTX_INTEGER | CTX_SEGMENTS | CTX_FLOAT | CTX_EXTENDED);
-    for (int i = 0; i < 8; i++) wr32c(p, k_gpr_off[i], (uint32_t)c->r[i]);
-    wr32c(p, 0xb8, (uint32_t)c->rip);
-    wr32c(p, 0xc0, (uint32_t)fxi_rflags(c));
+    ctx_wr32(p, 0, CTX_CONTROL | CTX_INTEGER | CTX_SEGMENTS | CTX_FLOAT | CTX_EXTENDED);
+    for (int i = 0; i < 8; i++) ctx_wr32(p, k_gpr_off[i], (uint32_t)c->r[i]);
+    ctx_wr32(p, 0xb8, (uint32_t)c->rip);
+    ctx_wr32(p, 0xc0, (uint32_t)fxi_rflags(c));
     // WoW64's flat selectors (Wine's 32-bit context: cs 0x23, fs 0x53, the rest 0x2b)
-    wr32c(p, 0xbc, 0x23); wr32c(p, 0x90, 0x53);
-    wr32c(p, 0x8c, 0x2b); wr32c(p, 0x94, 0x2b); wr32c(p, 0x98, 0x2b); wr32c(p, 0xc8, 0x2b);
+    ctx_wr32(p, 0xbc, 0x23); ctx_wr32(p, 0x90, 0x53);
+    ctx_wr32(p, 0x8c, 0x2b); ctx_wr32(p, 0x94, 0x2b); ctx_wr32(p, 0x98, 0x2b); ctx_wr32(p, 0xc8, 0x2b);
     uint8_t *fx = p + 0xcc;
     fxi_x87_fxsave(c, fx, 1);
     // FloatSave (fnsave layout) from the fxsave image: full tag word from the abridged one
@@ -128,9 +128,9 @@ void fx32_wow_save_context(Fx32Cpu *c, void *ctx) {
     memcpy(&cw, fx, 2); memcpy(&sw, fx + 2, 2);
     uint32_t tag = 0;
     for (int i = 0; i < 8; i++) if (!((fx[4] >> i) & 1)) tag |= 3u << (2 * i);
-    wr32c(p, 0x1c, 0xffff0000u | cw);
-    wr32c(p, 0x20, 0xffff0000u | sw);
-    wr32c(p, 0x24, 0xffff0000u | tag);
+    ctx_wr32(p, 0x1c, 0xffff0000u | cw);
+    ctx_wr32(p, 0x20, 0xffff0000u | sw);
+    ctx_wr32(p, 0x24, 0xffff0000u | tag);
     for (int i = 0; i < 8; i++) memcpy(p + 0x1c + 28 + 10 * i, fx + 32 + 16 * i, 10);
 }
 
