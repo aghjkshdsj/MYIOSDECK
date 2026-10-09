@@ -56,6 +56,18 @@ jobs:
           done | tee "$RUNNER_TEMP/scan.txt"
           echo "## FXI scan of Valve's 64-bit client files" >> "$GITHUB_STEP_SUMMARY"
           grep -E '^(###|[|])' "$RUNNER_TEMP/scan.txt" | head -300 >> "$GITHUB_STEP_SUMMARY" || true
+      - name: What Dock's DLLs still need (CPUID-gated extensions filtered out)
+        run: |
+          # FXI's CPUID reports SSE2 only, so code behind AVX/AVX2 (VEX c4/c5), SSSE3/SSE4.x and
+          # AES-NI/SHA-NI (0f 38, 0f 3a), ADX (0f 38 f6) and BMI is not taken. The rest is what
+          # Madeira Dock can actually reach in Valve's client, tier0 and vstdlib.
+          cd "$RUNNER_TEMP/steam/unpacked"
+          for f in steamclient64.dll tier0_s64.dll vstdlib_s64.dll; do
+            echo "== $f"
+            "$RUNNER_TEMP/fxi/fxi" --scan-pe "$f" 2>&1 | grep -E '^###|^[|] [0-9]' | \
+              grep -vE '`opcode \[c[45] |`two-byte opcode \[(66 |f2 |f3 )?(4[0-9a-f] )?0f 3[8a] |`0f 3[8a] \[' | head -120
+          done | tee "$RUNNER_TEMP/dock-needs.txt"
+          { echo "## Not CPUID-gated, in Dock's DLLs"; cat "$RUNNER_TEMP/dock-needs.txt"; } >> "$GITHUB_STEP_SUMMARY"
       - name: Remove the client files
         if: always()
         run: rm -rf "$RUNNER_TEMP/steam"
