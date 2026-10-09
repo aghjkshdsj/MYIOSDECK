@@ -112,7 +112,11 @@ final class WineController: ObservableObject, @unchecked Sendable {
         let noJIT = !mid_jit_pool_ready()
         for k in ["MADEIRA_STEAM_APPID", "MADEIRA_STEAM_APPPATH", "MADEIRA_WORKDIR"] { unsetenv(k) }   // no direct start
         MadeiraDock.configure(game, launchOption: launchOption)
-        dlog("[dock-launch] app=\(game.id) launch-option=\(launchOption) noJIT=\(noJIT ? 1 : 0)")
+        // Without JIT Valve's client runs interpreted: in build 105 it was still in its HTTPS
+        // setup (OpenSSL in CHTTPClientThreadPool) when the host's 90 s sign-in wait ran out.
+        // Our dockhost (engine/pedylib/madeira-dock-signin-wait.patch) reads a longer wait here.
+        if noJIT { setenv("MADEIRA_DOCK_SIGNIN_MS", "480000", 1) } else { unsetenv("MADEIRA_DOCK_SIGNIN_MS") }
+        dlog("[dock-launch] app=\(game.id) launch-option=\(launchOption) noJIT=\(noJIT ? 1 : 0) signin-wait=\(noJIT ? 480 : 90)s")
         dockActive = true
         run(Program(id: MadeiraDock.executable, title: title, detail: "", graphics: true, noJIT: noJIT))
     }
@@ -171,6 +175,11 @@ final class WineController: ObservableObject, @unchecked Sendable {
             for k in ["WINE_IOS_NOJIT", "MYIOSDECK_PE_DIR", "MYIOSDECK_NOJIT_EMULATOR", "WINEDLLOVERRIDES"] { unsetenv(k) }
             if program.noJIT { setenv("MADEIRA_USE_ARM64EC", "1", 1) }
         }
+        // A Dock session publishes no fixed Steam game identity: Madeira's bridge otherwise sets
+        // SteamAppId/SteamGameId/SteamAppPath (its Thumper fallback) for every launch, and in
+        // build 105 that reached Valve's client inside the host, which then never finished
+        // signing in (result 34). Valve's client gives the game it starts its own identity.
+        if dockActive { setenv("MADEIRA_DOCK_SESSION", "1", 1) } else { unsetenv("MADEIRA_DOCK_SESSION") }
         state = .booting(program.title)
         // Controller API for this session (Settings › Controller). Must be in the
         // environment before the wineserver starts: the HID device and the

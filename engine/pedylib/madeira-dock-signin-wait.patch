@@ -1,0 +1,57 @@
+--- a/src/session.c
++++ b/src/session.c
+@@ -36,6 +36,16 @@
+     return s && !strcmp(s, "1");
+ }
+ 
++/* MYIOSDECK: how long to wait for Valve's client to sign in and confirm the licence.
++ * Madeira's 90 s stays the default; MADEIRA_DOCK_SIGNIN_MS (90000..900000) gives a
++ * client running in an interpreter, without JIT, the time its TLS and logon take there. */
++static uint64_t signin_wait_ms(void)
++{
++    const char *s = getenv("MADEIRA_DOCK_SIGNIN_MS");
++    unsigned long v = s ? strtoul(s, NULL, 10) : 0;
++    return v >= 90000 && v <= 900000 ? v : 90000;
++}
++
+ typedef int32_t (__thiscall *state_fn)(void *);
+ typedef int32_t (__thiscall *can_offline_fn)(void *);
+ typedef int32_t (__thiscall *logon_offline_fn)(void *, bool);
+@@ -235,7 +245,9 @@
+     bool was_online = false, offline_reported = false;
+     unsigned logged_callbacks = 0, online_callbacks = 0, blips = 0, lost = 0, connect_failures = 0;
+     result = 34;
+-    for (unsigned tick = 0; tick < 4500 && o->now_ms() - begin < 90000; ++tick) {
++    uint64_t signin_ms = signin_wait_ms();
++    o->event("session-signin-wait-s", (int32_t)(signin_ms / 1000));
++    for (unsigned tick = 0; tick < signin_ms / 20 && o->now_ms() - begin < signin_ms; ++tick) {
+         for (unsigned batch = 0; batch < 64; ++batch) {
+             struct sh_callback cb = {0};
+             if (!api->get_callback(pipe, &cb)) break;
+--- a/src/launch.c
++++ b/src/launch.c
+@@ -17,6 +17,15 @@
+ #define SH_CONFIG_RETRY_MS 5000
+ #define SH_SESSION_WAIT_MS (3ULL * 60 * 1000)  /* ml2015 */
+ #define SH_SESSION_RETRY_MS 15000
++/* MYIOSDECK: MADEIRA_DOCK_SIGNIN_MS (90000..900000) also lengthens the wait for the game
++ * process to start, for a client running in an interpreter without JIT. */
++#include <stdlib.h>
++static unsigned long long sh_start_wait_ms(void)
++{
++    const char *s = getenv("MADEIRA_DOCK_SIGNIN_MS");
++    unsigned long v = s ? strtoul(s, NULL, 10) : 0;
++    return v >= 90000 && v <= 900000 ? v : 90000;
++}
+ 
+ #ifdef _WIN64
+ typedef void *(__thiscall *get_manager_fn)(void *, int32_t, int32_t);
+@@ -381,7 +390,7 @@
+             result = wait_began ? 48 : 45;
+             break;
+         }
+-        if (!seen_running && o->now_ms() - begin > 90000) break;
++        if (!seen_running && o->now_ms() - begin > sh_start_wait_ms()) break;
+         o->sleep_ms(50);
+     }
+ done:

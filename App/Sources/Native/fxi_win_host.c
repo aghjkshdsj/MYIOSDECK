@@ -315,18 +315,22 @@ static void prof_export_name(const prof_mod *m, uint64_t addr, char *out, size_t
     snprintf(out, outsz, "?");
     uint32_t lfanew, dir_rva, nnames, funcs_rva, names_rva, ords_rva;
     uint64_t b = m->base;
-    if (!vmr(b + 0x3c, &lfanew, 4) || !vmr(b + lfanew + 24 + 112, &dir_rva, 4) || !dir_rva) return;
+    // On failure the name says which step failed (?hdr, ?dir, ?tab, ?ord, ?below, ?str).
+    if (!vmr(b + 0x3c, &lfanew, 4) || !vmr(b + lfanew + 24 + 112, &dir_rva, 4)) { snprintf(out, outsz, "?hdr"); return; }
+    if (!dir_rva) { snprintf(out, outsz, "?dir"); return; }
     if (!vmr(b + dir_rva + 0x18, &nnames, 4) || !vmr(b + dir_rva + 0x1c, &funcs_rva, 4) ||
-        !vmr(b + dir_rva + 0x20, &names_rva, 4) || !vmr(b + dir_rva + 0x24, &ords_rva, 4) || nnames > 20000) return;
+        !vmr(b + dir_rva + 0x20, &names_rva, 4) || !vmr(b + dir_rva + 0x24, &ords_rva, 4) || nnames > 20000) {
+        snprintf(out, outsz, "?tab"); return;
+    }
     uint32_t rva = (uint32_t)(addr - b), best_rva = 0, best_name = 0;
     for (uint32_t i = 0; i < nnames; i++) {
         uint16_t ord; uint32_t f, nm;
-        if (!vmr(b + ords_rva + 2ull * i, &ord, 2) || !vmr(b + funcs_rva + 4ull * ord, &f, 4)) return;
+        if (!vmr(b + ords_rva + 2ull * i, &ord, 2) || !vmr(b + funcs_rva + 4ull * ord, &f, 4)) { snprintf(out, outsz, "?ord"); return; }
         if (f <= rva && f >= best_rva && vmr(b + names_rva + 4ull * i, &nm, 4)) { best_rva = f; best_name = nm; }
     }
-    if (!best_name) return;
+    if (!best_name) { snprintf(out, outsz, "?below(%u names)", nnames); return; }
     char name[64] = { 0 };
-    if (!vmr(b + best_name, name, sizeof name - 1)) return;
+    if (!vmr(b + best_name, name, sizeof name - 1)) { snprintf(out, outsz, "?str"); return; }
     name[sizeof name - 1] = 0;
     if (rva == best_rva) snprintf(out, outsz, "%s", name);
     else snprintf(out, outsz, "%s+%#x", name, rva - best_rva);
