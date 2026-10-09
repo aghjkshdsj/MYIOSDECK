@@ -165,10 +165,17 @@ sideload edition (FEX, ~90% of native) stays the full-speed option, from the sam
   (`engine/fxr/fxr_rename.h`, included from its `fxi.h`; fxr.yml's iOS job fails on any global
   `fxi_*` symbol); its headers are excluded from the Xcode project (same names as FXI's, header
   map). Performance tab benchmark has an FXR column and the report `fxr%` + "FXR vs FXI";
-  Settings > Without JIT runs x86-64 Hello with FXR. **ELF only**: pinned handlers do not set
-  `c->cur` (no exact host-fault rip) and PIND writes `u->link` non-atomically, so Windows mode
-  stays on FXI until those are fixed. engine/fxr duplicates engine/fxi: port FXI fixes to both,
-  or fold FXR back into engine/fxi once it covers Windows mode.
+  Settings > Without JIT runs x86-64 Hello with FXR. engine/fxr duplicates engine/fxi: port FXI
+  fixes to both, or fold FXR back into engine/fxi once it covers Windows mode.
+- **FXR at 20% of native (2026-10-09, branch `claude/fast-interp`, docs/FXR.md)**: CI aarch64
+  standard set 20.6-21.9%, held-out set (engine/guest/heldout.c, frozen) 28.4-28.9%, FXI 7.3% /
+  13.3%: loop traces, handler replicas, no tail merging, corpus superinstructions. Windows mode:
+  `fxr_win_host_state` rebuilds the exact x64 state from the host registers at a fault (12 fault
+  sites exact in CI, engine/fxr-probe/winstate_test.c) or at a stop (exact at handler
+  boundaries, else retry); precise.py checks every handler; the app can run Windows games on FXR
+  (Settings > Without JIT > Windows games: FXR, opt-in, untested on device). Not done: Wine's
+  thread-context requests (GetThreadContext on a thread in simulation) do not ask the CPU yet
+  (FXI does not either).
 - **Build 74 result (iPhone 15 Pro Max, JIT off)**: FXR 11.6% of native vs FXI 8.7% = **1.33x**
   (integer 20.3% vs 10.9%, float 9.9/8.3, memory 10.9/9.1, branch 8.5/8.5, simd 8.4/7.0), all
   checksums match. Branch-heavy code gains nothing yet (the indirect/jcc paths go through p_slow

@@ -9,7 +9,7 @@ name: FXR interpreter
 on:
   push:
     branches: ["main", "claude/**"]
-    paths: ["engine/fxr/**", "!engine/fxr/corpus.sh", "engine/fxi/**", "engine/guest/**", ".github/workflows/fxr.yml"]
+    paths: ["engine/fxr/**", "!engine/fxr/corpus.sh", "engine/fxr-probe/**", "engine/fxi/**", "engine/guest/**", ".github/workflows/fxr.yml"]
   workflow_dispatch:
 
 permissions:
