@@ -1,0 +1,25 @@
+#!/bin/bash
+# Build the GPTA host tool: engine/gpta/build.sh <out-dir>. Needs clang 19+ for preserve_none on ARM64
+# (CC=clang-19); an older clang still builds GPTA, without the pinned-register calling convention.
+# The pinned handlers are tens of thousands of small functions in several files: compiled in
+# parallel (one job per core: each needs a few GB), without debug info (perf still has the names).
+# No tail merging: clang would merge the dispatch tails of a branch handler's two edges into one
+# indirect jump with two successors, which Neoverse N2 predicts slower (measured: memory 16% faster).
+set -euo pipefail
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OUT="${1:-$HERE/out}"
+mkdir -p "$OUT/obj"
+CC="${CC:-clang}"
+"$CC" --version | head -1
+ARCH_FLAGS=()
+if [ "$(uname -m)" = x86_64 ]; then ARCH_FLAGS=(-mcx16); fi
+CFLAGS="-O2 -std=gnu11 -Wall -Wextra -Wno-unused-parameter -Wno-unused-function -Wno-unused-variable \
+-Wno-unused-but-set-variable -Wno-sign-compare -ffp-contract=off -fno-math-errno -mllvm -enable-tail-merge=false ${ARCH_FLAGS[*]:-} ${EXTRA_CFLAGS:-}"
+SRCS="gpta_pin_x3.c gpta_pin_arj.c gpta_pin_lcj.c gpta_pin_stub.c gpta_pin_step1.c gpta_pin_step2.c gpta_pin_step3.c gpta_pin_mem.c gpta_pin_mem2.c gpta_pin_fuse.c gpta_pin_sse.c gpta_pin_alu.c gpta_pin_br.c gpta_pin.c
+      gpta_pin_alu_r1.c gpta_pin_sse_r1.c gpta_pin_mem_r1.c gpta_pin_mem2_r1.c gpta_pin_step3_r1.c gpta_pin_br_r1.c gpta_pin_step1_r1.c gpta_pin_step2_r1.c
+      fxi_core.c fxi_decode.c fxi_flags.c fxi_ops.c fxi_sse.c fxi_atomic.c fxi_x87.c fxi_win.c fxi_main.c"
+JOBS=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
+export CC CFLAGS HERE OUT
+printf '%s\n' $SRCS | xargs -P "$JOBS" -I{} sh -c '$CC $CFLAGS -c "$HERE/{}" -o "$OUT/obj/$(basename {} .c).o" || exit 255'
+"$CC" -o "$OUT/gpta" "$OUT"/obj/*.o -lm -lpthread
+ls -la "$OUT/gpta" "$OUT"/obj/gpta_pin*.o

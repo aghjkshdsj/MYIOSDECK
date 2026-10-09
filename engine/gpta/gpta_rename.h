@@ -1,0 +1,69 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// GPTA's copy of the FXI sources links into the app next to FXI itself (engine/fxi), so every
+// external fxi_* name gets an gpta_ prefix here. fxi.h includes this first, so each GPTA source
+// file sees it. CI (gpta.yml, iOS job) fails if an GPTA object still defines a global fxi_ symbol.
+#ifndef GPTA_RENAME_H
+#define GPTA_RENAME_H
+#define fxi_alu_tab gpta_alu_tab
+#define fxi_atomic_named gpta_atomic_named
+#define fxi_cmov_tab gpta_cmov_tab
+#define fxi_cond gpta_cond
+#define fxi_ext_tab gpta_ext_tab
+#define fxi_f80_load gpta_f80_load
+#define fxi_f80_store gpta_f80_store
+#define fxi_fail gpta_fail
+#define fxi_fjcc_tab gpta_fjcc_tab
+#define fxi_flag_af gpta_flag_af
+#define fxi_flag_cf gpta_flag_cf
+#define fxi_flag_of gpta_flag_of
+#define fxi_flag_pf gpta_flag_pf
+#define fxi_flag_sf gpta_flag_sf
+#define fxi_flag_zf gpta_flag_zf
+#define fxi_imul2_tab gpta_imul2_tab
+#define fxi_imul3_tab gpta_imul3_tab
+#define fxi_insn_length gpta_insn_length
+#define fxi_lea_tab gpta_lea_tab
+#define fxi_lookup gpta_lookup
+#define fxi_mov_tab gpta_mov_tab
+#define fxi_muldiv_tab gpta_muldiv_tab
+#define fxi_named gpta_named
+#define fxi_probe gpta_probe
+#define fxi_raise gpta_raise
+#define fxi_rflags gpta_rflags
+#define fxi_run_elf gpta_run_elf
+#define fxi_set_echo_fd gpta_set_echo_fd
+#define fxi_set_rflags gpta_set_rflags
+#define fxi_setcc_tab gpta_setcc_tab
+#define fxi_shift_tab gpta_shift_tab
+#define fxi_sse_named gpta_sse_named
+#define fxi_stop gpta_stop
+#define fxi_syscall gpta_syscall
+#define fxi_translate gpta_translate
+#define fxi_unary_tab gpta_unary_tab
+#define fxi_version gpta_version
+#define fxi_vm_new gpta_vm_new
+#define fxi_win_cpu_new gpta_win_cpu_new
+#define fxi_win_error gpta_win_error
+#define fxi_win_exception gpta_win_exception
+#define fxi_win_exit_block gpta_win_exit_block
+#define fxi_win_fault_rip gpta_win_fault_rip
+#define fxi_win_is_ec gpta_win_is_ec
+#define fxi_win_load_context gpta_win_load_context
+#define fxi_win_rip gpta_win_rip
+#define fxi_win_run gpta_win_run
+#define fxi_win_save_context gpta_win_save_context
+#define fxi_win_set_teb gpta_win_set_teb
+#define fxi_win_trail gpta_win_trail
+#define fxi_win_df_source gpta_win_df_source
+#define fxi_win_profile gpta_win_profile
+#define fxi_win_exit_counts gpta_win_exit_counts
+#define fxi_win_set_native gpta_win_set_native
+#define fxi_win_sample gpta_win_sample
+#define fxi_win_op_name gpta_win_op_name
+#define fxi_win_counters gpta_win_counters
+#define fxi_x87_fxrstor gpta_x87_fxrstor
+#define fxi_x87_fxsave gpta_x87_fxsave
+#define fxi_x87_init gpta_x87_init
+#define fxi_x87_named gpta_x87_named
+#define fxi_div0 gpta_div0
+#endif

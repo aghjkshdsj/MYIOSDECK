@@ -1,0 +1,157 @@
+name: GPTA interpreter
+
+# GPTA = FXI with the guest registers pinned in host registers (engine/gpta), the fast no-JIT engine.
+# Guests are built once on x86 (gcc), then on the ARM64 and x86 runners: correctness gates for GPTA
+# and FXI (hello; atomics, x87, difftest identical to native; --scan-pe of Madeira's x64 programs),
+# then speed as a share of native on the standard and held-out sets (engine/gpta/compare.sh: median
+# of 5, rotating order, checksums must match; native = the same clang 19 at -O2 -ffp-contract=off).
+# Plus an iOS compile check (the app links GPTA next to FXI, so no global fxi_* symbols).
+on:
+  push:
+    branches: ["gpt/gpta"]
+    paths: ["engine/gpta/**", "!engine/gpta/corpus.sh", "engine/gpta-probe/**", "engine/fxi/**", "engine/guest/**", ".github/workflows/gpta.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gpta-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: The held-out benchmark is frozen (commit 57ce94e)
+        run: |
+          blob=$(git rev-parse HEAD:engine/guest/heldout.c)
+          echo "engine/guest/heldout.c blob $blob"
+          test "$blob" = 1728cd7f759f26c9d063baaf72ea91501982fb12
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq xxd clang-19 > /dev/null
+      - run: bash engine/guest/build.sh "$RUNNER_TEMP/guests"
+      - name: Benchmark guests with the same clang and optimization flags as native
+        run: |
+          clang-19 --version
+          for spec in bench_sse2:bench heldout:heldout; do
+            clang-19 -O2 -ffp-contract=off -march=x86-64 -fPIE -static-pie -nostdlib \
+              -ffreestanding -fno-builtin -fno-strict-aliasing -fno-stack-protector \
+              -fno-asynchronous-unwind-tables -Wl,--no-dynamic-linker -Wl,--build-id=none \
+              -Wl,-z,norelro -Wl,-z,noexecstack -Wl,-z,max-page-size=0x4000 -Wl,-z,separate-code \
+              -o "$RUNNER_TEMP/guests/${spec%%:*}.elf" "engine/guest/${spec##*:}.c"
+          done
+      - name: Native reference outputs (for the gates on ARM64)
+        run: |
+          mkdir -p "$RUNNER_TEMP/native-out"
+          for t in atomics x87 difftest; do "$RUNNER_TEMP/guests/$t.elf" > "$RUNNER_TEMP/native-out/$t.txt"; done
+          wc -l "$RUNNER_TEMP"/native-out/*.txt
+      - name: Madeira x64 test programs (for --scan-pe)
+        run: |
+          . engine/wine/PIN
+          mkdir -p "$RUNNER_TEMP/pe"
+          for exe in hello-x64 fib-x64 clocktest-x64 heap-x64 fileio-x64 calltest-x64 fpconf-x64 child-test-x64 cube-x64 d3d12-cube-x64; do
+            curl -fsSL -o "$RUNNER_TEMP/pe/$exe.exe" \
+              "https://raw.githubusercontent.com/willfaust/Madeira/$MADEIRA_SHA/app/Madeira/arm64ec-windows/$exe.exe"
+          done
+          ls -la "$RUNNER_TEMP/pe"
+      - uses: actions/upload-artifact@v5
+        with:
+          name: gpta-guests
+          path: |
+            ${{ runner.temp }}/guests/*.elf
+            ${{ runner.temp }}/native-out/*.txt
+            ${{ runner.temp }}/pe/*.exe
+
+  compare:
+    needs: guests
+    timeout-minutes: 45   # a guest that loops forever fails here, not at GitHub's 6-hour limit
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04-arm, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
+        with:
+          name: gpta-guests
+          path: in
+      - name: clang 19 (preserve_none on ARM64)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang-19 > /dev/null || (wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh && sudo bash /tmp/llvm.sh 19 > /dev/null)
+          clang-19 --version | head -1
+          uname -a; lscpu | grep -E 'Model name|Vendor|MHz|^CPU\(s\)' || true
+      - name: Build GPTA, FXI and the native drivers (all clang 19)
+        run: |
+          mkdir -p guests; cp in/guests/*.elf guests/ 2>/dev/null || cp in/*.elf guests/
+          chmod +x guests/*.elf
+          ls in in/* | head -40
+          CC=clang-19 bash engine/gpta/build.sh "$RUNNER_TEMP/gpta"
+          CC=clang-19 bash engine/fxi/build.sh "$RUNNER_TEMP/fxi"
+          clang-19 -O2 -ffp-contract=off -o "$RUNNER_TEMP/native" engine/gpta/native.c
+          clang-19 -O2 -ffp-contract=off -DHELDOUT_HOSTED -o "$RUNNER_TEMP/native_heldout" engine/guest/heldout.c
+      - name: Correctness gates (GPTA and FXI)
+        run: |
+          NAT=$( [ "$(uname -m)" = x86_64 ] && echo run || echo "$(dirname "$(find in -name difftest.txt | head -1)")" )
+          PE=$(dirname "$(find in -name 'hello-x64.exe' | head -1)")
+          rc=0
+          bash engine/gpta/gates.sh "$PWD/guests" "$RUNNER_TEMP/gpta/gpta" gpta "$NAT" "$PE" || rc=1
+          bash engine/gpta/gates.sh "$PWD/guests" "$RUNNER_TEMP/fxi/fxi" fxi "$NAT" "$PE" || rc=1
+          exit $rc
+      - name: Windows-mode state gate (GPTA, ARM64) - the x64 state at a stop and at a fault
+        if: runner.arch == 'ARM64'
+        run: |
+          objs=$(ls "$RUNNER_TEMP"/gpta/obj/*.o | grep -v '/fxi_main\.o$')
+          clang-19 -O2 -o "$RUNNER_TEMP/winstate_test" engine/gpta-probe/winstate_test.c $objs -lm -lpthread
+          rc=0
+          export GPTA_WINLOWER=1   # lower as Windows mode does
+          "$RUNNER_TEMP/winstate_test" guests/winstate.elf loop || rc=1
+          "$RUNNER_TEMP/winstate_test" guests/winstate.elf winexit || rc=1
+          "$RUNNER_TEMP/winstate_test" guests/winstate.elf winnative || rc=1
+          for s in 0 1 2 3 4 5 6 7 8 9 10 11; do "$RUNNER_TEMP/winstate_test" guests/winstate.elf fault $s || rc=1; done
+          objdump -d --no-show-raw-insn -j gpta_h "$RUNNER_TEMP/gpta/gpta" > /tmp/gpta_h.txt
+          python3 engine/gpta-probe/precise.py /tmp/gpta_h.txt || rc=1
+          exit $rc
+      - name: Speed vs native (standard + held-out)
+        run: |
+          if [ "$(uname -m)" = x86_64 ]; then
+            # x86 executes the exact guest binaries natively, also five samples.
+            bash engine/gpta/compare.sh "$PWD/guests" "$RUNNER_TEMP/gpta/gpta" "$RUNNER_TEMP/fxi/fxi" elf elf 5
+          else
+            bash engine/gpta/compare.sh "$PWD/guests" "$RUNNER_TEMP/gpta/gpta" "$RUNNER_TEMP/fxi/fxi" "$RUNNER_TEMP/native" "$RUNNER_TEMP/native_heldout" 5
+          fi
+
+      - name: Profile dispatch, spills and register traffic (ARM64)
+        if: runner.arch == 'ARM64'
+        continue-on-error: true
+        run: bash engine/gpta/profile.sh "$RUNNER_TEMP/gpta/gpta" "$PWD/guests" "$RUNNER_TEMP/profile"
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: gpta-evidence-${{ matrix.os }}
+          path: |
+            gpta-results.json
+            ${{ runner.temp }}/profile/
+            /tmp/gpta_*.txt
+            /tmp/fxi_*.txt
+
+  ios:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v5
+      - name: Compile GPTA for iOS arm64
+        run: |
+          cd engine/gpta
+          xcrun -sdk iphoneos clang --version | head -1
+          srcs="gpta_pin_x3.c gpta_pin_arj.c gpta_pin_lcj.c gpta_pin_stub.c gpta_pin_step1.c gpta_pin_step2.c gpta_pin_step3.c gpta_pin_mem.c gpta_pin_mem2.c gpta_pin_fuse.c gpta_pin_sse.c gpta_pin_alu.c gpta_pin_br.c gpta_pin.c gpta_pin_alu_r1.c gpta_pin_sse_r1.c gpta_pin_mem_r1.c gpta_pin_mem2_r1.c gpta_pin_step3_r1.c gpta_pin_br_r1.c gpta_pin_step1_r1.c gpta_pin_step2_r1.c fxi_core.c fxi_decode.c fxi_flags.c fxi_ops.c fxi_sse.c fxi_atomic.c fxi_x87.c fxi_win.c"
+          printf '%s\n' $srcs | xargs -P "$(sysctl -n hw.ncpu)" -I{} sh -c 'xcrun -sdk iphoneos clang -arch arm64 -O2 -std=gnu11 -ffp-contract=off -mllvm -enable-tail-merge=false -miphoneos-version-min=17.0 -c "{}" -o "/tmp/$(basename {} .c).o"'
+          echo "preserve_none: $(echo '__attribute__((preserve_none)) void f(void){}' | xcrun -sdk iphoneos clang -arch arm64 -x c -c - -o /dev/null 2>&1 && echo supported || echo NOT supported)"
+          bash probe_cc.sh "xcrun -sdk iphoneos clang -arch arm64" || true
+          ls -la /tmp/gpta_pin*.o
+          # the app links GPTA next to FXI: every GPTA object must exist, and none may define fxi_* names
+          for f in $srcs; do test -s "/tmp/${f%.c}.o" || { echo "missing /tmp/${f%.c}.o"; exit 1; }; done
+          clash=$(for f in /tmp/fxi_*.o /tmp/gpta_pin*.o; do nm -g -U "$f"; done | awk '{print $NF}' | grep -E '^_fxi_' || true)
+          if [ -n "$clash" ]; then echo "GPTA defines FXI's global names (add them to engine/gpta/gpta_rename.h):"; echo "$clash"; exit 1; fi
+          echo "no global fxi_* symbols"
