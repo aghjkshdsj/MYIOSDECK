@@ -17,7 +17,9 @@ build 43 (docs/NO_JIT_WINDOWS.md).
            __DATA. Instructions using x18 are rewritten here (see rewrite_x18).
   audit    what stands between a DLL and that scheme:
              conflict pages  16 KB pages holding code AND something written at load
-             text relocs     base relocations inside code: code would need writing
+             text relocs     base relocations inside code: code would need writing (literal
+                             pools of absolute addresses, as in Wine's aarch64 syscall thunks,
+                             are made position-independent first: rewrite_code_literals)
              x18 sites       instructions using x18 (the Windows TEB register, which iOS
                              clears) in ARM64 code; convert rewrites them
              x18 unpatchable sites the rewrite cannot handle (sp-based, no free register)
@@ -79,6 +81,7 @@ class PE:
                 "exec": bool(ch & (SCN_MEM_EXECUTE | SCN_CNT_CODE)), "write": bool(ch & SCN_MEM_WRITE),
             })
         self.image = bytearray(self.size_of_image)
+        self.dead_literals = set()   # code words that are data no instruction reads any more
         self.image[:self.size_of_headers] = raw[:self.size_of_headers]
         for s in self.sections:
             n = min(s["rsize"], s["vsize"]) if s["vsize"] else s["rsize"]
@@ -213,7 +216,10 @@ def x18_role(insn):
     if (top8 & 0x3E) in (0x28, 0x2C):                   # LDP/STP
         if rn == 18:
             return ROLE_RN
-        if rt2 == 18:
+        # Rt2 is a general register only when V (bit 26) is clear: `stp q21, q18, [sp]` stores
+        # vector register 18, not x18 (Madeira's classifier takes it for x18 too; the rewrite
+        # then put a scratch GPR's number in the vector field).
+        if rt2 == 18 and not (insn >> 26) & 1:
             return ROLE_RT2
     if (top11 & 0x7FF) in (0x150, 0x550) and rm == 18:  # MOV (ORR Rd, ZR, Rm)
         return ROLE_RM
@@ -253,7 +259,7 @@ def x18_sites(pe):
         words = struct.unpack_from("<%dI" % n, pe.image, start)
         data = literal_words(words)
         for i, w in enumerate(words):
-            if i in data:
+            if i in data or start + 4 * i in pe.dead_literals:
                 continue
             role = x18_role(w)
             if role:
@@ -269,6 +275,80 @@ def b(frm, to):
     d = to - frm
     assert d % 4 == 0 and -(1 << 27) <= d < (1 << 27), "branch out of range"
     return 0x14000000 | ((d >> 2) & 0x3FFFFFF)
+
+
+# --- absolute addresses in code (Wine's aarch64 syscall thunks) -------------------------------
+def reloc_entries(pe):
+    """[(entry offset in the image, target rva, type)] of the base relocations."""
+    rva, size = pe.dir(5)
+    out, p, end = [], rva, rva + size
+    while p + 8 <= end:
+        page, block = struct.unpack_from("<II", pe.image, p)
+        if block < 8:
+            break
+        for i in range((block - 8) // 2):
+            e = struct.unpack_from("<H", pe.image, p + 8 + 2 * i)[0]
+            if e >> 12:
+                out.append((p + 8 + 2 * i, page + (e & 0xFFF), e >> 12))
+        p += block
+    return out
+
+
+def rewrite_code_literals(pe):
+    """Position-independent loads for addresses kept in code. Wine's aarch64 thunks (every
+    syscall stub in ntdll and win32u) read an absolute address from a literal pool:
+        ldr x16, 1f ; ldr x16, [x16] ; blr x16 ; ... 1: .quad &__wine_syscall_dispatcher
+    The literal needs a base relocation, i.e. a write to a signed code page, which iOS refuses.
+    Each `ldr Xt, literal` becomes `adr Xt, target` (within 1 MB), or `adrp Xt, target` with the
+    page offset folded into the `ldr Xt, [Xt]` that follows; the literal's relocation becomes
+    padding (type 0) and the literal is dead data. Returns (rewritten loads, relocations left)."""
+    code = pe.arm64_ranges()
+    in_code = lambda r: any(s <= r < e for s, e in code)  # noqa: E731
+    users = {}   # literal rva -> [rva of each `ldr Xt, literal` (64-bit) reading it]
+    for start, end in code:
+        n = (end - start) // 4
+        words = struct.unpack_from("<%dI" % n, pe.image, start)
+        for i, w in enumerate(words):
+            if w >> 24 == 0x58:
+                imm19 = (w >> 5) & 0x7FFFF
+                if imm19 & 0x40000:
+                    imm19 -= 0x80000
+                users.setdefault(start + 4 * i + 4 * imm19, []).append(start + 4 * i)
+    done, left = 0, 0
+    for at, rva, typ in reloc_entries(pe):
+        if not in_code(rva):
+            continue
+        loads = users.get(rva)
+        target = pe.u64(rva) - pe.image_base if typ == 10 else None
+        if not loads or target is None or not 0 <= target < pe.size_of_image:
+            left += 1
+            continue
+        plan = []
+        for u in loads:
+            w = pe.u32(u)
+            rt = w & 31
+            d = target - u
+            if -(1 << 20) <= d < (1 << 20):
+                plan.append((u, 0x10000000 | ((d & 3) << 29) | (((d >> 2) & 0x7FFFF) << 5) | rt, None))
+                continue
+            nxt = pe.u32(u + 4)
+            if nxt != (0xF9400000 | (rt << 5) | rt) or target % 8:
+                plan = None
+                break
+            pd = (target >> 12) - (u >> 12)
+            plan.append((u, 0x90000000 | ((pd & 3) << 29) | (((pd >> 2) & 0x7FFFF) << 5) | rt,
+                         0xF9400000 | (((target & 0xFFF) // 8) << 10) | (rt << 5) | rt))
+        if not plan:
+            left += 1
+            continue
+        for u, first, second in plan:
+            struct.pack_into("<I", pe.image, u, first)
+            if second is not None:
+                struct.pack_into("<I", pe.image, u + 4, second)
+            done += 1
+        struct.pack_into("<H", pe.image, at, 0)           # IMAGE_REL_BASED_ABSOLUTE: padding
+        pe.dead_literals.update((rva, rva + 4))
+    return done, left
 
 
 def x18_plan(insn, role):
@@ -369,6 +449,9 @@ def audit(pe):
 
 def cmd_convert(a):
     pe = PE(a.dll)
+    lit_done, lit_left = rewrite_code_literals(pe)
+    if lit_done or lit_left:
+        print("code literals: %d loads made position-independent, %d relocations in code left" % (lit_done, lit_left))
     r = audit(pe)
     print(json.dumps(r, indent=1))
     for d, n in pe.imports():
@@ -423,7 +506,9 @@ def cmd_audit(a):
     rows = []
     for p in a.dlls:
         try:
-            rows.append(audit(PE(p)))
+            pe = PE(p)
+            rewrite_code_literals(pe)   # as convert does: what is left is a real blocker
+            rows.append(audit(pe))
         except Exception as e:  # noqa: BLE001 - report and keep going
             rows.append({"dll": os.path.basename(p), "error": str(e), "ready": False, "blockers": [str(e)]})
     ok = [r for r in rows if "error" not in r]
