@@ -199,11 +199,22 @@ sideload edition (FEX, ~90% of native) stays the full-speed option, from the sam
   Madeira (native aarch64 wow64.dll/ntdll, every 32-bit process in a 4 GB guest window at host
   base B because XNU's hard 4 GB __PAGEZERO forbids low mappings), with our own CPU module in
   place of FEX's xtajit.dll and FXI's i386 build (FXI32, every guest address at B + zext32(ea)).
-  Stage 1 (bundle): `wine-i386.yml` builds the i386 farm + DXMT i386; build-ipa converts
-  Madeira's aarch64 farm (125/135 files have 64 KB sections) into `PE/wine-a64`; the map hook
-  picks the dylib folder by image machine (AMD64 -> PE/wine, ARM64 -> PE/wine-a64, i386 never)
-  and never gives a guest-window page execute permission; Library > "Windows Hello (ARM64, no
-  JIT)" runs a plain aarch64 session. Next: FXI32 in CI, then the CPU module.
+  Stage 1 (bundle): `wine-i386.yml` builds the i386 farm (718 Wine modules + DXMT i386, 185 MB,
+  0 missing imports, ~15 min on macos-26); build-ipa converts Madeira's aarch64 farm into
+  `PE/wine-a64` (129/134: ntdll and win32u needed `rewrite_code_literals`, their syscall thunks
+  load an absolute address from a literal pool); the map hook picks the dylib folder by image
+  machine (AMD64 -> PE/wine, ARM64 -> PE/wine-a64, i386 never) and never gives a guest-window
+  page execute permission. IPA 183 MB (was 84). Stage 2 (FXI32, engine/fxi32): FXI's sources
+  with FXI_I386, 163 difftest32 forms and every bench kernel match native in CI (fxi.yml job
+  fxi32), the i386 farm's system DLLs decode 100%. Stage 3: the CPU module
+  (engine/pedylib/emu/xtajit_wow.c) + App/Sources/Native/fxi_wow_host.c; Library > "Windows
+  Hello (ARM64 / x86 32-bit, no JIT)", "x86 test suite (32-bit, no JIT)"; 32-bit games start
+  without JIT (experimental). pedylib.yml converts both farms on every pe2dylib change.
+  **pe2dylib bug fixed on the way**: ldp/stp of vector registers with q18/d18/s18 second were
+  taken for x18 uses and "rewritten" (Madeira's classifier has the same flaw); a byte scan finds
+  1-2 candidate sites in several ARM64EC system DLLs (ntdll, rpcrt4, setupapi, msvcrt, ...),
+  which would have loaded or stored the wrong vector register (not confirmed against the CHPE
+  code map).
 - **Build 74 result (iPhone 15 Pro Max, JIT off)**: FXR 11.6% of native vs FXI 8.7% = **1.33x**
   (integer 20.3% vs 10.9%, float 9.9/8.3, memory 10.9/9.1, branch 8.5/8.5, simd 8.4/7.0), all
   checksums match. Branch-heavy code gains nothing yet (the indirect/jcc paths go through p_slow

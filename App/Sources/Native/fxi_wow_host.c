@@ -17,6 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <mach/mach.h>
 #include <pthread.h>
 #include <pthread/qos.h>
 
@@ -96,6 +97,12 @@ static void finish_call(wow_thread *t, uint32_t status, uint32_t pop) {
     fx32_wow_set_reg(c, FX32_ESP, esp + 4 + pop);
 }
 
+// The first calls of a run, for the log: how far a new program got.
+static int trace_call(void) {
+    static int n;
+    return __atomic_fetch_add(&n, 1, __ATOMIC_RELAXED) < 48;
+}
+
 // [esp] return address into the stub, the arguments from esp + 8 (FEX's Wow64SystemServiceEx call).
 static void system_call(wow_thread *t) {
     Fx32Cpu *c = t->cpu;
@@ -104,6 +111,8 @@ static void system_call(wow_thread *t) {
     t->syscalls++;
     if (t->proc->pending_items) call(t, t->proc->pending_items, 0, 0, 0);
     uint32_t status = (uint32_t)call(t, t->proc->system_service, num, (long long)(t->proc->base + esp + 8), 0);
+    if (trace_call())
+        mid_log("[fxi-wow] syscall %#x from %#x -> %08x", num, guest32(t, esp), status);
     finish_call(t, status, 0);
 }
 
@@ -118,6 +127,8 @@ static void unix_call(wow_thread *t) {
     t->unixcalls++;
     uint32_t status = (uint32_t)call(t, t->proc->unix_call, (long long)handle, code,
                                      args ? (long long)(t->proc->base + args) : 0);
+    if (trace_call())
+        mid_log("[fxi-wow] unix call %#llx/%u from %#x -> %08x", (unsigned long long)handle, code, guest32(t, esp), status);
     finish_call(t, status, 16);
 }
 
@@ -202,11 +213,10 @@ static long host_simulate(void *entry_ctx) {
     if (!t) fatal(NULL, "x86 code entered on a thread without a CPU (BTCpuThreadInit did not run)");
     t->entry_ctx = entry_ctx;
     reload(t);
-    static int announced;
-    if (!announced) {
-        announced = 1;
-        mid_log("[fxi-wow] first x86 code at %#x (esp %#x)", fx32_wow_eip(t->cpu), fx32_wow_reg(t->cpu, FX32_ESP));
-    }
+    static int entries;
+    if (__atomic_fetch_add(&entries, 1, __ATOMIC_RELAXED) < 16)
+        mid_log("[fxi-wow] %s x86 code at %#x (esp %#x, TEB32 %#x)", entries == 1 ? "first" : "entering",
+                fx32_wow_eip(t->cpu), fx32_wow_reg(t->cpu, FX32_ESP), t->teb32);
     for (;;) {
         t->entry_ctx = entry_ctx;   // a nested simulation (a callback) replaced it
         t->in_x86 = 1;
@@ -303,8 +313,24 @@ long NtTerminateProcess(void *handle, long status);   // Wine's unix side
 
 static void __attribute__((noreturn)) fatal(wow_thread *t, const char *what) {
     mid_log("[fxi-wow] STOP: %s", what);
-    if (t && t->cpu) mid_log("[fxi-wow]   eip %#x esp %#x eax %#x", fx32_wow_eip(t->cpu), fx32_wow_reg(t->cpu, FX32_ESP),
-                             fx32_wow_reg(t->cpu, FX32_EAX));
+    if (t && t->cpu) {
+        Fx32Cpu *c = t->cpu;
+        mid_log("[fxi-wow]   eax %08x ecx %08x edx %08x ebx %08x esp %08x ebp %08x esi %08x edi %08x eip %08x",
+                fx32_wow_reg(c, FX32_EAX), fx32_wow_reg(c, FX32_ECX), fx32_wow_reg(c, FX32_EDX), fx32_wow_reg(c, FX32_EBX),
+                fx32_wow_reg(c, FX32_ESP), fx32_wow_reg(c, FX32_EBP), fx32_wow_reg(c, FX32_ESI), fx32_wow_reg(c, FX32_EDI),
+                fx32_wow_eip(c));
+        // The code at EIP, read with vm_read_overwrite (an unmapped EIP is reported, not faulted on).
+        uint8_t code[16];
+        vm_size_t got = 0;
+        if (vm_read_overwrite(mach_task_self(), (vm_address_t)(t->proc->base + fx32_wow_eip(c)), sizeof code,
+                              (vm_address_t)code, &got) == KERN_SUCCESS) {
+            char hex[3 * sizeof code + 1];
+            for (unsigned i = 0; i < sizeof code; i++) snprintf(hex + 3 * i, 4, "%02x ", code[i]);
+            mid_log("[fxi-wow]   code at eip: %s", hex);
+        }
+        mid_log("[fxi-wow]   %llu system calls, %llu unix calls on this thread", (unsigned long long)t->syscalls,
+                (unsigned long long)t->unixcalls);
+    }
 #if MYIOSDECK_WITH_WINE
     NtTerminateProcess((void *)(intptr_t)-1, (long)0xE0F0F001);   // ends the Windows program, not the app
 #endif
