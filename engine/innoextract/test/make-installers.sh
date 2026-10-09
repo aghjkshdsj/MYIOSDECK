@@ -14,8 +14,8 @@ WORK="$(mktemp -d)"
 cd "$WORK"
 
 mkdir -p "payload/data/sub dir/deep" payload/bin lang tmpfiles addon/dlc
-head -c 1200000 /dev/urandom > payload/data/textures.pak
-head -c 900000 /dev/urandom > "payload/data/sub dir/music.ogg"
+head -c 3000000 /dev/urandom > payload/data/textures.pak
+head -c 2500000 /dev/urandom > "payload/data/sub dir/music.ogg"
 head -c 300000 /dev/urandom > payload/bin/TestGame.exe
 for i in $(seq 1 20000); do echo "line $i of a compressible game script"; done > payload/data/script.txt
 for i in $(seq 1 3000); do echo "config $i = $((i * 7))"; done > "payload/data/sub dir/deep/config.ini"
@@ -46,7 +46,7 @@ variant() {
         if [ "$span" = yes ]; then
             echo "DiskSpanning=yes"
             echo "SlicesPerDisk=$per_disk"
-            echo "DiskSliceSize=1000000"
+            echo "DiskSliceSize=2100000"
         fi
         echo "[Languages]"
         echo "Name: \"english\"; MessagesFile: \"compiler:Default.isl\""
