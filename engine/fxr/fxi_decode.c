@@ -952,8 +952,9 @@ Block *fxi_translate(struct Fxi *vm, uint64_t rip) {
 
     // Flag liveness, backward. FXR: flags at the block end are live only if a direct successor
     // reads them before writing them (FXI assumes they are live there).
-    int live = d->nxt == 0;
-    for (int k = 0; k < d->nxt && !live; k++) live = fxr_live_in(vm, d->xt[k]);
+    int live = d->nxt == 0, ldir = 0;
+    for (int k = 0; k < d->nxt; k++) if (fxr_live_in(vm, d->xt[k])) { live = 1; ldir |= 1 << k; }
+    if (d->n) d->u[d->n - 1].fdir = (uint8_t)ldir;   // FXR: per edge (jcc: target, fallthrough)
     for (int i = d->n - 1; i >= 0; i--) {
         Meta *m = &d->m[i];
         d->u[i].flive = (uint8_t)live;   // FXR: flags live after this uop

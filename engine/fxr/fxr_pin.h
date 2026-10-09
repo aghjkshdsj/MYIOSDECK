@@ -79,14 +79,12 @@ PX fxr_p_miss_t(FXR_PARAMS);
 PX fxr_p_miss_f(FXR_PARAMS);
 PX fxr_p_miss_g(FXR_PARAMS);
 PX fxr_p_miss_ind(FXR_PARAMS);
-PX fxr_p_miss_c(FXR_PARAMS);
 #define p_slow fxr_p_slow
 #define p_jcc_slow fxr_p_jcc_slow
 #define p_miss_t fxr_p_miss_t
 #define p_miss_f fxr_p_miss_f
 #define p_miss_g fxr_p_miss_g
 #define p_miss_ind fxr_p_miss_ind
-#define p_miss_c fxr_p_miss_c
 
 static const uint64_t kMask[4] = { M8, M16, M32, M64 };
 static const uint64_t kSign[4] = { 0x80ull, 0x8000ull, 0x80000000ull, 0x8000000000000000ull };
@@ -375,7 +373,7 @@ typedef struct { const char *name; PFn h[9]; } XShift;
     X(t_un, [2][2][4][16]) X(t_imul2, [2][2][16][16]) X(t_imul3, [2][2][16][16]) X(t_imul2t, [2][2][16]) \
     X(t_imul3t, [2][2][16]) X(t_cmov, [2][16][16]) X(t_cmovt, [2][16]) \
     X(t_fjc_rr, [2][16][16][16]) X(t_fjc_ri, [2][16][16]) X(t_fjt_ri, [2][16][16]) X(t_fjt_rr, [2][16][16]) \
-    X(t_fjt_rrx, [2][16][16]) X(t_fjcg_rr, [2][16][16]) X(t_fjcg_ri, [2][16]) X(t_fjtg_ri, [2][16]) \
+    X(t_fjt_rrx, [2][16][16]) \
     X(t_xl_movx, [9][17][17]) X(t_xs_movx, [9][17][17]) X(t_xl_movss, [9][17]) X(t_xl_movsd, [9][17]) \
     X(t_xs_movss, [9][17]) X(t_xs_movsd, [9][17]) X(t_xlt_movss, [9]) X(t_xlt_movsd, [9]) X(t_xlt_movlps, [9]) \
     X(t_xlt_movhps, [9]) X(t_xst_movss, [9]) X(t_xst_movsd, [9]) X(t_xst_movhps, [9]) X(t_xst_movx, [9]) \
@@ -386,7 +384,9 @@ typedef struct { const char *name; PFn h[9]; } XShift;
     X(t_fai, [5][2][16][16]) X(t_fid, [2][2][4][16]) X(t_amr, [2][16][16]) X(t_alea, [17][16]) X(t_ami, [2][16]) \
     X(t_axz, [16]) X(t_pop2, [16][16]) X(t_push2, [16][16]) X(t_popret, [16]) X(t_ltj, [2][6][17][16]) \
     X(t_sic, [2][2][10][16][16]) X(t_sicr, [2][2][10][16][16]) X(t_sii, [2][2][10][16]) X(t_sri, [2][2][10][16][16]) \
-    X(t_3op, [10][2][16][16])
+    X(t_3op, [10][2][16][16]) \
+    X(t_fs_sub, [4][16][16]) X(t_fs_and, [4][16][16]) X(t_fs_subi, [4][16]) X(t_fs_andi, [4][16]) X(t_fs_log, [4][16]) \
+    X(t_fs_addr, [4][16]) X(t_fs_subr, [4][16]) X(t_fs_comis, [2][9][9])
 #define FXR_DECL_TABLE(NAME, DIMS) extern const PFn fxr_##NAME DIMS;
 FXR_TABLES(FXR_DECL_TABLE)
 #define t_setcc fxr_t_setcc
@@ -421,9 +421,6 @@ FXR_TABLES(FXR_DECL_TABLE)
 #define t_fjt_ri fxr_t_fjt_ri
 #define t_fjt_rr fxr_t_fjt_rr
 #define t_fjt_rrx fxr_t_fjt_rrx
-#define t_fjcg_rr fxr_t_fjcg_rr
-#define t_fjcg_ri fxr_t_fjcg_ri
-#define t_fjtg_ri fxr_t_fjtg_ri
 #define t_xl_movx fxr_t_xl_movx
 #define t_xs_movx fxr_t_xs_movx
 #define t_xl_movss fxr_t_xl_movss
@@ -467,6 +464,14 @@ FXR_TABLES(FXR_DECL_TABLE)
 #define t_sii fxr_t_sii
 #define t_sri fxr_t_sri
 #define t_3op fxr_t_3op
+#define t_fs_sub fxr_t_fs_sub
+#define t_fs_and fxr_t_fs_and
+#define t_fs_subi fxr_t_fs_subi
+#define t_fs_andi fxr_t_fs_andi
+#define t_fs_log fxr_t_fs_log
+#define t_fs_addr fxr_t_fs_addr
+#define t_fs_subr fxr_t_fs_subr
+#define t_fs_comis fxr_t_fs_comis
 // The 10 conditions counted loops exit on (b ae e ne be a l ge le g), for the loop-step fusions
 #define C10(M, ...) M(2, __VA_ARGS__) M(3, __VA_ARGS__) M(4, __VA_ARGS__) M(5, __VA_ARGS__) M(6, __VA_ARGS__) \
     M(7, __VA_ARGS__) M(12, __VA_ARGS__) M(13, __VA_ARGS__) M(14, __VA_ARGS__) M(15, __VA_ARGS__)

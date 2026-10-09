@@ -31,28 +31,13 @@ const PFn t_fjc_ri[2][16][16] = { { C16(CC_FJ_X, 32, fjc_ri) }, { C16(CC_FJ_X, 6
 const PFn t_fjt_ri[2][16][16] = { { C16(CC_FJ_X, 32, fjt_ri) }, { C16(CC_FJ_X, 64, fjt_ri) } };
 const PFn t_fjt_rr[2][16][16] = { { C16(CC_FJ_X, 32, fjt_rr) }, { C16(CC_FJ_X, 64, fjt_rr) } };
 
-// ---- generic: the condition code at run time (u->cc), the flags recorded. test of two different
-// registers always comes here (it is uncommon). ----
-#define DEF_FJG(S, D, SZ)                                                                  \
-    PH p_fjcg_rr_##SZ##_##D##_##S(FXR_PARAMS) {                                            \
-        uint64_t a = g##D & M##SZ, b = g##S & M##SZ;                                       \
-        SETF(LF_SUB, SI##SZ, a, b, (a - b) & M##SZ, 0);                                    \
-        FJ_BR(cc_sub(u->cc, a, b, SI##SZ)); }                                              \
+// ---- test of two different registers (uncommon): the condition code at run time, the flags
+// recorded (so no flag stub). When another edge needs the flags, fxr_pin_stub.c recomputes them. ----
+#define DEF_FJT_RRX(S, D, SZ)                                                              \
     PH p_fjt_rrx_##SZ##_##D##_##S(FXR_PARAMS) {                                            \
         uint64_t a = g##D & M##SZ, b = g##S & M##SZ, r = a & b;                            \
         SETF(LF_LOGIC, SI##SZ, a, b, r, 0);                                                \
         FJ_BR(cc_logic(u->cc, r, SI##SZ)); }
-#define DEF_FJG_ROW(D, SZ) R16B(DEF_FJG, D, SZ)                                            \
-    PH p_fjcg_ri_##SZ##_##D(FXR_PARAMS) {                                                  \
-        uint64_t a = g##D & M##SZ, b = (uint64_t)u->disp & M##SZ;                          \
-        SETF(LF_SUB, SI##SZ, a, b, (a - b) & M##SZ, 0);                                    \
-        FJ_BR(cc_sub(u->cc, a, b, SI##SZ)); }                                              \
-    PH p_fjtg_ri_##SZ##_##D(FXR_PARAMS) {                                                  \
-        uint64_t a = g##D & M##SZ, b = (uint64_t)u->disp & M##SZ, r = a & b;               \
-        SETF(LF_LOGIC, SI##SZ, a, b, r, 0);                                                \
-        FJ_BR(cc_logic(u->cc, r, SI##SZ)); }
-R16(DEF_FJG_ROW, 32) R16(DEF_FJG_ROW, 64)
-const PFn t_fjcg_rr[2][16][16] = { { R16(ROW_RR, fjcg_rr_32) }, { R16(ROW_RR, fjcg_rr_64) } };   // [64?][D][S]
-const PFn t_fjt_rrx[2][16][16] = { { R16(ROW_RR, fjt_rrx_32) }, { R16(ROW_RR, fjt_rrx_64) } };
-const PFn t_fjcg_ri[2][16] = { { R16(E1, fjcg_ri_32) }, { R16(E1, fjcg_ri_64) } };   // [64?][D]
-const PFn t_fjtg_ri[2][16] = { { R16(E1, fjtg_ri_32) }, { R16(E1, fjtg_ri_64) } };
+#define DEF_FJT_RRX_ROW(D, SZ) R16B(DEF_FJT_RRX, D, SZ)
+R16(DEF_FJT_RRX_ROW, 32) R16(DEF_FJT_RRX_ROW, 64)
+const PFn t_fjt_rrx[2][16][16] = { { R16(ROW_RR, fjt_rrx_32) }, { R16(ROW_RR, fjt_rrx_64) } };   // [64?][D][S]

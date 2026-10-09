@@ -32,11 +32,6 @@ static uint16_t k_cctab[16];   // cmov truth tables per condition code (pcond_ta
 DEF_MISS(p_miss_t, u->ulink, u->imm)     // jump, call or taken branch: the target in imm
 DEF_MISS(p_miss_f, u->ulink2, u->aux)    // a conditional branch's fallthrough (aux)
 DEF_MISS(p_miss_g, u->ulink, u->aux)     // goto (a block split) and syscall: the next instruction
-PX p_miss_c(FXR_PARAMS) {                // a conditional branch (FJ_BR): T says which way it went
-    Block *b = fxi_lookup(c, T ? u->imm : u->aux);
-    if (b != fxi_stop) __atomic_store_n(T ? &u->ulink : &u->ulink2, b->u, __ATOMIC_RELEASE);
-    PGO(b->u);
-}
 PX p_miss_ind(FXR_PARAMS) {
     Block *b = fxi_lookup(c, T);
     if (b != fxi_stop) { __typeof__(c->fxr_ibtc[0]) *e = IBTC(T); e->u = b->u; e->rip = T; }
@@ -202,8 +197,24 @@ static int greg(unsigned off) { return (off & 7) == 0 && off < 128 ? (int)(off >
 static int simple_mem(const Uop *u) { return u->index == R_ZERO && u->base <= R_ZERO; }        // [base + disp]
 static int ea_ok(const Uop *u) { return u->base <= R_ZERO && u->index <= R_ZERO; }
 
-typedef struct { Uop *out; int n; } Out;
+typedef struct { int at, edge, stub; } Patch;   // after the copy: out[at].ulink (edge 0) / ulink2 = &out[stub]
+typedef struct { Uop *out; int n, np; Patch patch[2]; } Out;
 static Uop *put_uop(Out *o, const Uop *src, PFn p) { Uop *x = &o->out[o->n++]; *x = *src; x->p = p; return x; }
+// The fused branch just emitted records no flags; for each edge whose successor reads them
+// (fdir: bit 0 taken, bit 1 fallthrough), a stub uop (fs, fxr_pin_stub.c) appended to the block
+// recomputes them from the registers and chains on to that successor.
+static void edge_stubs(Out *o, unsigned fdir, PFn fs) {
+    int at = o->n - 1;
+    for (int e = 0; e < 2; e++) {
+        if (!(fdir & (1u << e))) continue;
+        Uop *s = &o->out[o->n++];
+        *s = o->out[at];
+        s->p = fs;
+        s->imm = e ? o->out[at].aux : o->out[at].imm;   // where p_miss_t chains to
+        s->ulink = 0; s->ulink2 = 0;
+        o->patch[o->np++] = (Patch){ at, e, o->n - 1 };
+    }
+}
 // T = EA of src, then the op itself
 static Uop *with_ea(Out *o, const Uop *src, PFn p) {
     put_uop(o, src, t_ea[src->base][src->index]);
@@ -310,13 +321,14 @@ static void lower_one(Out *o, const Uop *u) {
         int t = d->a, ri = d->b, s64 = d->c2, cc = d->d;
         if (D < 0 || (!ri && S < 0)) { fprintf(stderr, "fxr: fused branch without register operands\n"); abort(); }
         Uop *x;
-        if (fl) {   // something reads the flags after the branch: generic forms that record them
-            if (ri) x = put_uop(o, u, t ? t_fjtg_ri[s64][D] : t_fjcg_ri[s64][D]);
-            else x = put_uop(o, u, t ? t_fjt_rrx[s64][D][S] : t_fjcg_rr[s64][D][S]);
-        } else if (ri) x = put_uop(o, u, t ? t_fjt_ri[s64][cc][D] : t_fjc_ri[s64][cc][D]);
-        else if (!t) x = put_uop(o, u, t_fjc_rr[s64][cc][D][S]);
-        else x = put_uop(o, u, D == S ? t_fjt_rr[s64][cc][D] : t_fjt_rrx[s64][D][S]);
+        PFn fs = 0;   // the flag stub for an edge that reads them (test of two registers records them itself)
+        int si = s64 ? 3 : 2;
+        if (ri) { x = put_uop(o, u, t ? t_fjt_ri[s64][cc][D] : t_fjc_ri[s64][cc][D]); fs = t ? t_fs_andi[si][D] : t_fs_subi[si][D]; }
+        else if (!t) { x = put_uop(o, u, t_fjc_rr[s64][cc][D][S]); fs = t_fs_sub[si][D][S]; }
+        else if (D == S) { x = put_uop(o, u, t_fjt_rr[s64][cc][D]); fs = t_fs_log[si][D]; }
+        else x = put_uop(o, u, t_fjt_rrx[s64][D][S]);
         x->cc = (uint8_t)cc;
+        if (fs && u->fdir) edge_stubs(o, u->fdir, fs);
         return;
     }
     case FAM_NAMED:
@@ -395,24 +407,27 @@ static int try_fuse(Out *o, const Uop *u, uint32_t left) {
     if (!a || !b) return 0;
     int D = greg(u->dst), S = greg(u->src);
     Uop *x = 0;
-    // The fused handlers never record flags: pairs that write them fuse only when nothing reads
-    // them after the pair (v->flive).
-    if (is_named(b, N_JCC) && !v->flive) {   // compare-and-branch forms FXI does not fuse, ALU + jcc
+    // Fused handlers never record flags. A pair ending in a branch whose successor reads them
+    // (v->fdir) fuses only when a stub can recompute them from registers on that edge (fs); other
+    // pairs fuse only when nothing reads the flags after them.
+    unsigned fd = v->fdir & 3;
+    PFn fs = 0;
+    if (is_named(b, N_JCC)) {   // compare-and-branch forms FXI does not fuse, ALU + jcc
         unsigned cc = v->cc & 15;
         if (a->fam == FAM_ALU && (a->a == ALU_CMP || a->a == ALU_TEST)) {
             int t = a->a == ALU_TEST, fm = a->b, si = a->c2;
-            if (fm == F_MI && ea_ok(u)) {
+            if (fm == F_MI && ea_ok(u) && !fd) {   // memory operand: no stub (another thread may change it)
                 if (simple_mem(u)) { x = put_uop(o, v, t_fmi[t][si][cc][u->base]); x->disp = u->disp; }
                 else { put_uop(o, u, t_ea[u->base][u->index]); x = put_uop(o, v, t_fmit[t][si][cc]); }
                 x->fimm = (int32_t)u->imm;
                 return 2;
             }
-            if (fm == F_MR && S >= 0 && ea_ok(u)) {   // cmp/test [mem], reg
+            if (fm == F_MR && S >= 0 && ea_ok(u) && !fd) {   // cmp/test [mem], reg
                 put_uop(o, u, t_ea[u->base][u->index]);
                 put_uop(o, v, t_fmr[t ? 2 : 0][si][cc][S]);
                 return 2;
             }
-            if (fm == F_RM && !t && D >= 0 && ea_ok(u)) {   // cmp reg, [mem]
+            if (fm == F_RM && !t && D >= 0 && ea_ok(u) && !fd) {   // cmp reg, [mem]
                 put_uop(o, u, t_ea[u->base][u->index]);
                 put_uop(o, v, t_fmr[1][si][cc][D]);
                 return 2;
@@ -420,21 +435,26 @@ static int try_fuse(Out *o, const Uop *u, uint32_t left) {
             if (fm == F_RI && si < 2 && D >= 0) {   // 8/16-bit register
                 x = put_uop(o, v, t_fjs_ri[t][si][cc][D]);
                 x->disp = (int64_t)u->imm;
-                return 2;
-            }
-            if (fm == F_RR && si < 2 && D >= 0 && S >= 0) {
+                fs = t ? t_fs_andi[si][D] : t_fs_subi[si][D];
+            } else if (fm == F_RR && si < 2 && D >= 0 && S >= 0) {
                 x = put_uop(o, v, t && D == S ? t_fjs_rr[0][si][cc][D] : t_fjs_rrx[t][si][D][S]);
                 x->dst = u->dst; x->src = u->src;
-                return 2;
-            }
-            return 0;
+                fs = !t ? t_fs_sub[si][D][S] : D == S ? t_fs_log[si][D] : t_fs_and[si][D][S];
+            } else return 0;
+            if (fd) edge_stubs(o, fd, fs);
+            return 2;
         }
         if (a->fam == FAM_X && a->d) {   // (u)comiss / (u)comisd
             int dbl = !strcmp(fxr_xops[a->a].name, "comisd");
-            if (!a->b) x = put_uop(o, v, t_fcj[dbl][cc][xcls(u->dst)][xcls(u->src)]);
-            else if (ea_ok(u)) { put_uop(o, u, t_ea[u->base][u->index]); x = put_uop(o, v, t_fcjt[dbl][cc][xcls(u->dst)]); }
-            else return 0;
+            if (!a->b) {
+                fs = t_fs_comis[dbl][xcls(u->dst)][xcls(u->src)];
+                x = put_uop(o, v, t_fcj[dbl][cc][xcls(u->dst)][xcls(u->src)]);
+            } else if (ea_ok(u) && !fd) {
+                put_uop(o, u, t_ea[u->base][u->index]);
+                x = put_uop(o, v, t_fcjt[dbl][cc][xcls(u->dst)]);
+            } else return 0;
             x->dst = u->dst; x->src = u->src;
+            if (fd) edge_stubs(o, fd, fs);
             return 2;
         }
         if (a->fam == FAM_ALU && a->b == F_RI && a->c2 >= 2 && D >= 0) {   // add/sub/and/or/xor reg, imm
@@ -442,10 +462,11 @@ static int try_fuse(Out *o, const Uop *u, uint32_t left) {
             if (k < 0) return 0;
             x = put_uop(o, v, t_fai[k][a->c2 - 2][cc][D]);
             x->disp = (int64_t)u->imm; x->dst = u->dst;
+            if (fd) edge_stubs(o, fd, k == 0 ? t_fs_addr[a->c2][D] : k == 1 ? t_fs_subr[a->c2][D] : t_fs_log[a->c2][D]);
             return 2;
         }
-        if (a->fam == FAM_UNARY && !a->b && a->c2 >= 2 && D >= 0 && (a->a == U_INC || a->a == U_DEC) && !v->flive) {
-            int ci = cc == 4 ? 0 : cc == 5 ? 1 : cc == 8 ? 2 : cc == 9 ? 3 : -1;
+        if (a->fam == FAM_UNARY && !a->b && a->c2 >= 2 && D >= 0 && (a->a == U_INC || a->a == U_DEC) && !fd) {
+            int ci = cc == 4 ? 0 : cc == 5 ? 1 : cc == 8 ? 2 : cc == 9 ? 3 : -1;   // inc/dec keep CF: no stub
             if (ci < 0) return 0;
             x = put_uop(o, v, t_fid[a->a == U_INC][a->c2 - 2][ci][D]);
             x->dst = u->dst;
@@ -454,30 +475,32 @@ static int try_fuse(Out *o, const Uop *u, uint32_t left) {
         return 0;
     }
     // mov D, [base + disp] + FXI's fused test D, D / jcc
-    if (a->fam == FAM_MOV && a->a == F_RM && a->b >= 2 && D >= 0 && simple_mem(u) && b->fam == FAM_FJCC && !v->flive &&
+    if (a->fam == FAM_MOV && a->a == F_RM && a->b >= 2 && D >= 0 && simple_mem(u) && b->fam == FAM_FJCC &&
         b->a == 1 && !b->b && b->c2 == (a->b == 3) && greg(v->dst) == D && greg(v->src) == D) {
         unsigned cc = b->d;
         int ci = cc == 4 ? 0 : cc == 5 ? 1 : cc == 8 ? 2 : cc == 9 ? 3 : cc == 14 ? 4 : cc == 15 ? 5 : -1;
         if (ci < 0) return 0;
         x = put_uop(o, v, t_ltj[a->b == 3][ci][u->base][D]);
         x->disp = u->disp;
+        if (fd) edge_stubs(o, fd, t_fs_log[a->b][D]);
         return 2;
     }
     // loop step: add/sub D, imm|reg + FXI's fused cmp (D, S | S, D | D, imm) / jcc
-    if (a->fam == FAM_ALU && (a->a == ALU_ADD || a->a == ALU_SUB) && a->c2 >= 2 && D >= 0 && !v->flive &&
+    if (a->fam == FAM_ALU && (a->a == ALU_ADD || a->a == ALU_SUB) && a->c2 >= 2 && D >= 0 &&
         b->fam == FAM_FJCC && b->a == 0 && b->c2 == (a->c2 == 3) && cc10(b->d) >= 0) {
-        int op = a->a == ALU_SUB, s64 = a->c2 == 3, ci = cc10(b->d), cd = greg(v->dst), cs = greg(v->src);
+        int op = a->a == ALU_SUB, s64 = a->c2 == 3, si = a->c2, ci = cc10(b->d), cd = greg(v->dst), cs = greg(v->src);
         if (a->b == F_RI) {
-            if (b->b && cd == D) x = put_uop(o, v, t_sii[op][s64][ci][D]);
-            else if (!b->b && cd == D && cs >= 0) x = put_uop(o, v, t_sic[op][s64][ci][D][cs]);
-            else if (!b->b && cs == D && cd >= 0) x = put_uop(o, v, t_sicr[op][s64][ci][D][cd]);
-            if (x) { x->fimm = (int32_t)u->imm; return 2; }
+            if (b->b && cd == D) { x = put_uop(o, v, t_sii[op][s64][ci][D]); fs = t_fs_subi[si][D]; }
+            else if (!b->b && cd == D && cs >= 0) { x = put_uop(o, v, t_sic[op][s64][ci][D][cs]); fs = t_fs_sub[si][D][cs]; }
+            else if (!b->b && cs == D && cd >= 0) { x = put_uop(o, v, t_sicr[op][s64][ci][D][cd]); fs = t_fs_sub[si][cd][D]; }
+            if (x) x->fimm = (int32_t)u->imm;
         } else if (a->b == F_RR && S >= 0 && b->b && cd == D) {
-            put_uop(o, v, t_sri[op][s64][ci][D][S]);
-            return 2;
+            x = put_uop(o, v, t_sri[op][s64][ci][D][S]);
+            fs = t_fs_subi[si][D];
         }
+        if (x) { if (fd) edge_stubs(o, fd, fs); return 2; }
     }
-    // mov D, S ; op D, imm -> D = S op imm (the op no wider than the move)
+    // mov D, S ; op D, imm -> D = S op imm (the op no wider than the move; its flags dead)
     if (a->fam == FAM_MOV && a->a == F_RR && a->b >= 2 && D >= 0 && S >= 0 && D != S && greg(v->dst) == D && !v->flive) {
         if (b->fam == FAM_ALU && b->b == F_RI && b->c2 >= 2 && b->c2 <= a->b) {
             int k = b->a == ALU_ADD ? 0 : b->a == ALU_SUB ? 1 : b->a == ALU_AND ? 2 : b->a == ALU_OR ? 3 : b->a == ALU_XOR ? 4 : -1;
@@ -519,7 +542,7 @@ static int try_fuse(Out *o, const Uop *u, uint32_t left) {
 Block *fxr_lower(struct Fxi *vm, Block *b) {
     (void)vm;
     pthread_once(&g_once, init_desc);
-    Out o = { malloc(sizeof(Uop) * (2 * (size_t)b->n + 1)), 0 };
+    Out o = { malloc(sizeof(Uop) * (2 * (size_t)b->n + 3)), 0, 0, { { 0, 0, 0 } } };   // + 2 flag stubs
     for (uint32_t i = 0; i < b->n; i++) {
         if (try_fuse(&o, &b->u[i], b->n - i)) { i++; continue; }
         lower_one(&o, &b->u[i]);
@@ -528,6 +551,10 @@ Block *fxr_lower(struct Fxi *vm, Block *b) {
     nb->rip = b->rip;
     nb->n = (uint32_t)o.n;
     memcpy(nb->u, o.out, sizeof(Uop) * (size_t)o.n);
+    for (int k = 0; k < o.np; k++) {   // point the branch's edges at their flag stubs
+        Uop *br = &nb->u[o.patch[k].at], *st = &nb->u[o.patch[k].stub];
+        if (o.patch[k].edge) br->ulink2 = st; else br->ulink = st;
+    }
     free(o.out);
     free(b);
     return nb;
