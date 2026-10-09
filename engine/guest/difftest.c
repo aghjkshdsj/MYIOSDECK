@@ -520,6 +520,34 @@ static void fz_3gap(void) {
     }
     out("fz_3gap", h);
 }
+// add/sub D, src ; x ; cmp D, ... ; jcc: FXR runs x first when the step is register-only (and fuses
+// the step with the compare). With a memory source x must stay after it: build 118 (Crab Game) ran
+// mov rbx, -1 before add rcx, [rbx] and read [-1]. x writes the base or the index here.
+static void fz_hoist(void) {
+    u64 h = 14695981039346656037ull;
+    for (int i = 0; i < N; i++) {
+        u64 a = val(), fi = flags_in(), j, f, r, s, k = 1, *p = g_m;
+        g_m[0] = val(); g_m[1] = val(); g_m[2] = val();
+        u64 b = (i & 1) ? a + g_m[0] : val();
+        r = a; p = g_m;
+        __asm__ volatile("addq (%[p]), %[r]\n\tmovq $-1, %[p]\n\tcmpq %[b], %[r]" JN(e)
+                         : [r] "+r"(r), [p] "+r"(p), [j] "=&r"(j) : [b] "r"(b) : "cc", "memory");
+        h = mix(mix(mix(h, r), j), (u64)p);
+        r = a; p = g_m;
+        __asm__ volatile(PRE "addq (%[p]), %[r]\n\tmovq $-1, %[p]\n\tcmpq %[b], %[r]" JX(ne)
+                         : [r] "+r"(r), [p] "+r"(p), [j] "=&r"(j), [f] "=&r"(f) : [b] "r"(b), [fi] "r"(fi) : "cc", "memory");
+        h = mix(mix(mix(mix(h, r), j), (u64)p), f & ARITH);
+        r = a; p = g_m; k = 1;
+        __asm__ volatile("subl (%[p],%[k],8), %k[r]\n\txorl %k[k], %k[k]\n\tcmpl %k[b], %k[r]" JN(l)
+                         : [r] "+r"(r), [k] "+r"(k), [j] "=&r"(j) : [p] "r"(p), [b] "r"(b) : "cc", "memory");
+        h = mix(mix(mix(h, r), j), k);
+        r = a; s = b;   /* a register-only step: x may run first */
+        __asm__ volatile("addq $5, %[r]\n\tmovq %[a], %[s]\n\tcmpq %[b], %[r]" JX(l)
+                         : [r] "+r"(r), [s] "+r"(s), [j] "=&r"(j), [f] "=&r"(f) : [a] "r"(a), [b] "r"(b) : "cc", "memory");
+        h = mix(mix(mix(mix(h, r), s), j), f & ARITH);
+    }
+    out("fz_hoist", h);
+}
 // movaps D, S ; op D, X (3-operand SSE pairs), including X == D (the op reads the copy)
 static void fz_x3(void) {
     u64 h = 14695981039346656037ull;
@@ -610,7 +638,7 @@ static const test_fn kTests[] = {
     x_movsd_rr, x_movss_rr, x_movhlps, x_movlhps, x_movq_rr, x_unpcklps, x_pinsrw, x_togpr,
     fz_o, fz_no, fz_b, fz_ae, fz_e, fz_ne, fz_be, fz_a, fz_s, fz_ns, fz_p, fz_np, fz_l, fz_ge, fz_le, fz_g,
     fc_o, fc_no, fc_b, fc_ae, fc_e, fc_ne, fc_be, fc_a, fc_s, fc_ns, fc_p, fc_np, fc_l, fc_ge, fc_le, fc_g,
-    fz_call, fz_index, fz_xindex, fz_3op, fz_3gap, fz_x3,
+    fz_call, fz_index, fz_xindex, fz_3op, fz_3gap, fz_x3, fz_hoist,
 };
 
 int guest_main(int argc, char **argv) {

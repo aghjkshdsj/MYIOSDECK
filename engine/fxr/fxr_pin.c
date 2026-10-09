@@ -694,10 +694,13 @@ static int reg_rw(const Uop *u, unsigned *rd, unsigned *wr) {
 // A loop step with something between it and its compare ([a][x][c], c FXI's fused cmp+jcc on the
 // stepped register): x may run first when it is register-only, reads no flags, and neither reads
 // nor writes anything a or c use, or reads what a writes. No memory access moves, so the state at
-// a fault stays exact. Then a and c fuse.
+// a fault stays exact. Then a and c fuse. a must be register-only too (add/sub D, reg|imm): with a
+// memory source, x could write its base or index first (build 118, Crab Game: add rcx, [rbx] ;
+// mov rbx, -1 ; cmp rcx, rdx ; je read [-1]), and a's access would move after x.
 static int can_hoist(const Uop *a, const Uop *x, const Uop *c) {
     const Desc *da = find(a->fn), *dc = find(c->fn);
-    if (!da || !dc || da->fam != FAM_ALU || (da->a != ALU_ADD && da->a != ALU_SUB) || dc->fam != FAM_FJCC || dc->a)
+    if (!da || !dc || da->fam != FAM_ALU || (da->a != ALU_ADD && da->a != ALU_SUB) || (da->b != F_RR && da->b != F_RI) ||
+        dc->fam != FAM_FJCC || dc->a)
         return 0;
     int D = greg(a->dst), S = da->b == F_RR ? greg(a->src) : -2, cd = greg(c->dst), cs = dc->b ? -2 : greg(c->src);
     if (D < 0 || S == -1 || cd < 0 || cs == -1 || (cd != D && cs != D)) return 0;
