@@ -284,6 +284,7 @@ extern "C" char * mid_inno_extract(const char * setup_exe, const char * out_dir,
 
 	extract_options o;
 	o.quiet = true;              // no "Extracting ..." banner on stdout
+	o.silent = true;             // nor collision notes: nothing goes to stdout
 	o.extract = true;
 	o.extract_unknown = true;
 	o.extract_temp = false;      // -m

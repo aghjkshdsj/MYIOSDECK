@@ -245,7 +245,7 @@ struct InstallerCleanup: Identifiable {
         var name = info.defaultDirName?.split(whereSeparator: { $0 == "\\" || $0 == "/" }).last.map(String.init) ?? ""
         if name.isEmpty || name.contains("{") { name = info.appName ?? "" }
         let bad = CharacterSet(charactersIn: "/\\:*?\"<>|").union(.controlCharacters)
-        name = String(name.unicodeScalars.filter { !bad.contains($0) })
+        name = String(String.UnicodeScalarView(name.unicodeScalars.filter { !bad.contains($0) }))
         name = name.trimmingCharacters(in: CharacterSet.whitespaces.union(CharacterSet(charactersIn: ".")))
         return name.isEmpty ? fallback : name
     }
