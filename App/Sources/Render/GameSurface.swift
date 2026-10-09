@@ -31,6 +31,15 @@ final class GameHostView: UIView {
         menuButton.frame = CGRect(x: 6, y: 6, width: 44, height: 44)
         menuButton.addAction(UIAction { _ in GameHostView.onMenu?() }, for: .touchUpInside)
         addSubview(menuButton)
+        statusLabel.font = .preferredFont(forTextStyle: .subheadline)
+        statusLabel.textColor = UIColor.white.withAlphaComponent(0.8)
+        statusLabel.backgroundColor = UIColor.black.withAlphaComponent(0.55)
+        statusLabel.textAlignment = .center
+        statusLabel.numberOfLines = 2
+        statusLabel.layer.cornerRadius = 10
+        statusLabel.layer.masksToBounds = true
+        statusLabel.isHidden = true
+        addSubview(statusLabel)
         backgroundColor = .black
         contentScaleFactor = UIScreen.main.scale
         metalLayer.device = MTLCreateSystemDefaultDevice()
@@ -45,6 +54,24 @@ final class GameHostView: UIView {
         metalLayer.drawableSize = CGSize(width: 800, height: 600)
     }
     required init?(coder: NSCoder) { fatalError() }
+
+    /// A line of progress over the game (Madeira Dock while Valve's client signs in and starts
+    /// the game, which takes minutes without JIT and shows no window); nil hides it.
+    private let statusLabel = UILabel()
+    func setStatus(_ text: String?) {
+        guard statusLabel.text != text else { return }
+        statusLabel.text = text.map { "  \($0)  " }
+        statusLabel.isHidden = text == nil
+        setNeedsLayout()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        guard !statusLabel.isHidden else { return }
+        let size = statusLabel.sizeThatFits(CGSize(width: bounds.width - 40, height: 80))
+        statusLabel.frame = CGRect(x: (bounds.width - min(size.width, bounds.width - 40)) / 2, y: bounds.height - size.height - 24,
+                                   width: min(size.width, bounds.width - 40), height: size.height + 8)
+    }
 
     /// Only the menu button takes touches; the rest fall through to the views below.
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {

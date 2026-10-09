@@ -43,9 +43,10 @@ final class Settings: ObservableObject {
     /// Without JIT, start Windows games with no audio device (Wine's mmdevapi disabled), so the
     /// game's audio engine does not decode and mix in the interpreter. Read at launch.
     @Published var noJITMuteAudio: Bool { didSet { d.set(noJITMuteAudio, forKey: "noJITMuteAudio") } }
-    /// Start Steam games through Madeira Dock (Valve's own Steam client signs in and starts the
-    /// game, so games that need Steam running work). Off: the game's program starts on its own.
-    @Published var steamViaDock: Bool { didSet { d.set(steamViaDock, forKey: "steamViaDock") } }
+    /// How Steam games start: "ask" (a choice at every Play), "dock" (Madeira Dock: Valve's own
+    /// Steam client signs in and starts the game, for games that need Steam running) or "direct"
+    /// (the game's program starts on its own: faster, DRM-free games).
+    @Published var steamLaunchMode: String { didSet { d.set(steamLaunchMode, forKey: "steamLaunchMode") } }
     /// How Windows games see the controller: "xinput", "dinput" (XInput plus a
     /// DirectInput joystick) or "hid" (player 1 as a HID gamepad). Read at launch.
     @Published var controllerAPI: String { didSet { d.set(controllerAPI, forKey: "controllerAPI") } }
@@ -54,7 +55,7 @@ final class Settings: ObservableObject {
         // Wine copies every loaded DLL's code into the pool: give it room by default.
         d.register(defaults: ["jitPoolMB": mid_wine_linked() ? 1024 : 512, "fexPreset": FEXPreset.fast.rawValue, "multiblock": true,
                               "maxInst": 5000, "showHUD": true, "frameCap": 120, "verboseFEXLog": false,
-                              "benchInterpreter": true, "useFXR": false, "noJITMuteAudio": false, "steamViaDock": true, "controllerAPI": "xinput"])
+                              "benchInterpreter": true, "useFXR": false, "noJITMuteAudio": false, "steamLaunchMode": "ask", "controllerAPI": "xinput"])
         jitPoolMB = d.integer(forKey: "jitPoolMB")
         fexPreset = FEXPreset(rawValue: d.integer(forKey: "fexPreset")) ?? .fast
         multiblock = d.bool(forKey: "multiblock")
@@ -65,7 +66,7 @@ final class Settings: ObservableObject {
         benchInterpreter = d.bool(forKey: "benchInterpreter")
         useFXR = d.bool(forKey: "useFXR")
         noJITMuteAudio = d.bool(forKey: "noJITMuteAudio")
-        steamViaDock = d.bool(forKey: "steamViaDock")
+        steamLaunchMode = d.string(forKey: "steamLaunchMode") ?? "ask"
         controllerAPI = d.string(forKey: "controllerAPI") ?? "xinput"
     }
 }

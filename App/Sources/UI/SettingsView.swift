@@ -35,8 +35,13 @@ struct SettingsView: View {
                 }
 
                 DeckCard(title: "Steam", icon: "gamecontroller.fill") {
-                    Toggle("Start games through Steam (Madeira Dock)", isOn: $settings.steamViaDock).tint(Deck.accent)
-                    Text("On: Valve's own Steam client (downloaded once from Valve, about 72 MB) signs in with your account, checks the licence and starts the game, so games that need Steam running work. Off: the game's program starts on its own (for DRM-free games).")
+                    Picker("Start Steam games", selection: $settings.steamLaunchMode) {
+                        Text("Ask each time").tag("ask")
+                        Text("With Steam").tag("dock")
+                        Text("Without Steam").tag("direct")
+                    }
+                    .pickerStyle(.segmented)
+                    Text("With Steam: Valve's own Steam client (downloaded once from Valve, about 72 MB) signs in with your account, checks the licence and starts the game, so games that need Steam running work. Without JIT its sign-in takes several minutes. Without Steam: the game's program starts on its own, faster (for DRM-free games).")
                         .font(.footnote).foregroundStyle(Deck.dim)
                 }
 

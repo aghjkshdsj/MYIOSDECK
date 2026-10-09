@@ -146,7 +146,7 @@ struct LibraryView: View {
                         .frame(width: 110)
                 }
                 Divider().overlay(Deck.panelHi)
-                SteamGamesGrid(library: steamLibrary, playBlocker: steamPlayBlocker, onPlay: { playSteam($0) })
+                SteamGamesGrid(library: steamLibrary, playBlocker: steamPlayBlocker, onPlay: { chooseSteamLaunch($0) })
                 if let dockProgress {
                     HStack { ProgressView(); Text(dockProgress).font(.subheadline).foregroundStyle(Deck.dim) }
                 }
@@ -165,12 +165,21 @@ struct LibraryView: View {
         }
         .sheet(isPresented: $showSteamSignIn) { SteamSignInView() }
         .onAppear { steamLibrary.start() }
+        .confirmationDialog(steamChoiceGame.map { "Start \($0.name)" } ?? "", isPresented: steamChoicePresented,
+                            titleVisibility: .visible, presenting: steamChoiceGame) { game in
+            Button("With Steam") { playSteam(game, viaDock: true) }
+            Button("Without Steam") { playSteam(game, viaDock: false) }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("With Steam: Valve's Steam client signs in and starts the game, for games that need Steam running (without JIT the sign-in takes several minutes). Without Steam: the game starts on its own, faster. Settings › Steam can make either the default.")
+        }
         .alert("JIT is off", isPresented: steamNoJITPresented, presenting: steamNoJITGame) { game in
-            Button("Play without JIT (experimental)") { playSteam(game, noJIT: true) }
+            Button("Play without JIT (experimental)") { playSteam(game, noJIT: true, viaDock: steamPendingDock) }
             Button("Enable JIT") {
+                let viaDock = steamPendingDock
                 jit.enableWithStikDebug(poolMB: settings.jitPoolMB) {
                     engine.start(settings: settings)
-                    DispatchQueue.main.async { playSteam(game) }   // the game starts once JIT is ready
+                    DispatchQueue.main.async { playSteam(game, viaDock: viaDock) }   // the game starts once JIT is ready
                 }
             }
             Button("Cancel", role: .cancel) {}
@@ -205,19 +214,40 @@ struct LibraryView: View {
         }
     }
 
-    /// Stage 4d: direct start of an installed Steam game on the game surface. Without JIT it
-    /// asks first: play without JIT (FXI) or enable JIT.
-    private func playSteam(_ game: OwnedSteamGame, noJIT: Bool = false) {
+    /// A Steam game waiting for the with / without Steam choice.
+    @State private var steamChoiceGame: OwnedSteamGame?
+    private var steamChoicePresented: Binding<Bool> {
+        Binding(get: { steamChoiceGame != nil }, set: { if !$0 { steamChoiceGame = nil } })
+    }
+    /// The with / without Steam choice of the game waiting in the JIT alert.
+    @State private var steamPendingDock = false
+
+    /// Play: with Steam (Madeira Dock) or without, as Settings › Steam says, or asked each time.
+    private func chooseSteamLaunch(_ game: OwnedSteamGame) {
+        guard MadeiraDock.bundled else { playSteam(game, viaDock: false); return }
+        switch settings.steamLaunchMode {
+        case "dock": playSteam(game, viaDock: true)
+        case "direct": playSteam(game, viaDock: false)
+        default:
+            // Let the game sheet close before the dialog is presented.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { steamChoiceGame = game }
+        }
+    }
+
+    /// Stage 4d: start of an installed Steam game on the game surface, through Valve's Steam
+    /// client (viaDock) or directly. Without JIT it asks first: play without JIT (FXI) or enable JIT.
+    private func playSteam(_ game: OwnedSteamGame, noJIT: Bool = false, viaDock: Bool) {
         playError = nil
         guard jit.isReady || noJIT else {
-            // Let the game sheet close before the alert is presented.
+            steamPendingDock = viaDock
+            // Let the game sheet (or the choice dialog) close before the alert is presented.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { steamNoJITGame = game }
             return
         }
         Task { @MainActor in
             do {
                 let plan = try await steamLibrary.launchPlan(game.id)
-                if MadeiraDock.bundled && settings.steamViaDock {
+                if MadeiraDock.bundled && viaDock {
                     try await startThroughDock(game, plan: plan)
                 } else {
                     wine.runSteamGame(appID: game.id, title: game.name, plan: plan)

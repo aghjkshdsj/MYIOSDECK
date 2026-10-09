@@ -237,9 +237,17 @@ final class WineController: ObservableObject, @unchecked Sendable {
         while mid_wine_running() != 0 {
             usleep(250_000)
             ticks += 1
-            // Madeira Dock: log the host's report fields as they change ([dock-report]).
-            if dockActive, ticks % 8 == 0 { Task { @MainActor in _ = MadeiraDock.pollReport() } }
+            // Madeira Dock: log the host's report fields as they change ([dock-report]), and
+            // show its progress over the (still black) game surface.
+            if dockActive, ticks % 4 == 0 {
+                let seconds = Int(Date().timeIntervalSince(started))
+                Task { @MainActor in
+                    let report = MadeiraDock.pollReport()
+                    GameHostView.shared.setStatus(MadeiraDock.progressText(report, seconds: seconds))
+                }
+            }
         }
+        if dockActive { Task { @MainActor in GameHostView.shared.setStatus(nil) } }
         if dockActive {
             let done = DispatchSemaphore(value: 0)
             Task { @MainActor in

@@ -291,6 +291,7 @@ enum MadeiraDock {
         "session-offline-entitled", "session-offline-listed", "session-offline-timeout-state",
         "session-offline-fallback", "session-offline-ready", "session-signin-wait-s",
         "launch-client-error", "launch-option-index", "launch-option-invalid", "launch-option-missing",
+        "launch-request-submitted", "launch-game-running", "launch-game-ended",
         "launch-update-wait", "launch-update-retry", "launch-update-ready",
         "launch-config-wait", "launch-config-gave-up", "launch-session-wait", "launch-session-gave-up",
         "ceg-request", "ceg-request-result", "ceg-request-busy", "ceg-server-result", "ceg-job-result",
@@ -329,6 +330,21 @@ enum MadeiraDock {
     }
 
     @MainActor private static var lastReport = Report()
+
+    /// What the host is doing, for the game surface (nil once the game runs or the host ended).
+    static func progressText(_ report: Report, seconds: Int) -> String? {
+        let f = report.fields
+        if f["probe-result"] != nil || f["launch-game-running"] == "1" { return nil }
+        let t = String(format: "%d:%02d", seconds / 60, seconds % 60)
+        if f["launch-request-submitted"] != nil || f["session-requested-app-entitled"] != nil {
+            return "Steam is starting the game… \(t)"
+        }
+        if f["session-authenticated-online"] == "1" { return "Signed in to Steam, checking the licence… \(t)" }
+        if f["session-native-token-submitted"] == "1" {
+            return "Steam is signing in… \(t)\nWithout JIT this takes several minutes. Keep MYIOSDECK open."
+        }
+        return "Starting Steam… \(t)"
+    }
 
     /// Reads C:\madeira-dock.txt and logs fields that changed ([dock-report]).
     @MainActor static func pollReport() -> Report {
