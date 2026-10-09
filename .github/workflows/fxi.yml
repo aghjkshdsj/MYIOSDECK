@@ -59,6 +59,12 @@ jobs:
         run: bash engine/fxi32/build.sh "$RUNNER_TEMP/fxi32"
       - name: Native vs FXI32
         run: bash engine/fxi32/ci-test.sh "$RUNNER_TEMP/guests32" "$RUNNER_TEMP/fxi32/fxi32"
+      # The WoW64 API the app's host drives: BOP stops, the call stack layouts, fs:, exceptions,
+      # an exact faulting EIP, the context round trip (docs/NO_JIT_WOW64.md, stage 3).
+      - name: FXI32 WoW64 API (wow_test)
+        run: |
+          set -o pipefail
+          "$RUNNER_TEMP/fxi32/wow_test" | tee -a "$GITHUB_STEP_SUMMARY"
       # The to-do list for 32-bit Windows code: Wine's i386 system DLLs and DXMT's i386 D3D DLLs
       # (the newest wine-i386.yml farm for this branch, else main's), every reachable function.
       - name: Scan the i386 Windows farm

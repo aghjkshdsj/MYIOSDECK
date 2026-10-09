@@ -19,4 +19,7 @@ if nm -g --defined-only "$OUT"/obj32/*.o | grep -E ' [TDBR] _?fxi_'; then
     exit 1
 fi
 "$CC" -o "$OUT/fxi32" "$OUT"/obj32/*.o -lm -lpthread
-ls -la "$OUT/fxi32"
+# wow_test: the WoW64 API the app's host drives (docs/NO_JIT_WOW64.md, stage 3).
+"$CC" -O2 -std=gnu11 -g -Wall -Wextra -Wno-unused-parameter "${ARCH_FLAGS[@]}" -I"$HERE" -o "$OUT/wow_test" "$HERE/wow_test.c" \
+    $(ls "$OUT"/obj32/*.o | grep -v fx32_main.o) -lm -lpthread
+ls -la "$OUT/fxi32" "$OUT/wow_test"

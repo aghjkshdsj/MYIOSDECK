@@ -49,7 +49,7 @@ targets:
       # FXI32, FXI built for i386 guests (the x86 CPU of 32-bit games, docs/NO_JIT_WOW64.md); its
       # names are fx32_* (engine/fxi/fxi_i386.h).
       - path: engine/fxi32
-        excludes: ["fx32_main.c", "*.sh"]
+        excludes: ["fx32_main.c", "wow_test.c", "*.sh"]
         compilerFlags: ["-O2", "-ffp-contract=off"]
       # FXR, FXI with the guest registers pinned in host registers (experimental, Linux guests
       # only). Its copy of the FXI sources is renamed to fxr_* (engine/fxr/fxr_rename.h).
