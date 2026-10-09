@@ -40,4 +40,8 @@ for prog in atomics x87 difftest; do
     strip "$OUT/$prog.elf"
     "$OUT/$prog.elf" | tail -1
 done
+# winstate: FXR's state at a stop or a fault (engine/fxr-probe/winstate_test.c runs it)
+gcc "${CFLAGS[@]}" -march=x86-64 -mno-red-zone -o "$OUT/winstate.elf" "$HERE/winstate.c"
+strip "$OUT/winstate.elf"
+"$OUT/winstate.elf" loop 1000
 ls -la "$OUT"

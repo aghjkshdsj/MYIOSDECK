@@ -6,7 +6,8 @@
 # register, a lazy-flag word, XMM0-7 or the CPU structure already changed, or another guest store
 # already done. Handlers with no such path fault with the x64 state exactly as before the
 # instruction (fxi_win_host_state, fxr_pin.c).
-#   precise.py <objdump -d --no-show-raw-insn -j fxr_h output>   (exit 0; prints a summary)
+#   precise.py <objdump -d --no-show-raw-insn -j fxr_h output>   (exit 1 if a handler Windows mode
+#   uses has such a path; prints a summary)
 # Model: guest addresses come from the pinned guest registers and T (taint, through ALU ops and
 # loads from guest memory); x20 (CPU), x21 (uop) and sp are FXR's own. Conservative: every path
 # through the handler's own code (branches inside it followed both ways).
@@ -67,25 +68,27 @@ def analyse(insns):
         if mn in ('b', 'br', 'ret', 'blr') or (mn == 'b' and tgt is None): return out
         if i + 1 < len(insns): out.append(i + 1)
         return out
-    # state: (written frozenset of tags, tainted frozenset of reg names)
+    # state: (written tags, tainted registers (guest-derived), own registers (FXR pointers: the CPU,
+    # the uop, sp, and those plus any offset, e.g. the indirect-branch cache entry))
     init_taint = frozenset({'r%d' % r for r in PINNED_GPR} | {'r%d' % T_REG})
-    state_in = {0: (frozenset(), init_taint)}
+    init_own = frozenset({"r20", "r21", "sp"})
+    state_in = {0: (frozenset(), init_taint, init_own)}
     work = [0]
     viol = {}
     guest = 0
     seen_guest = set()
     while work:
         i = work.pop()
-        written, taint = state_in[i]
+        written, taint, own = state_in[i]
         a, mn, ops = insns[i]
         o = split_ops(ops)
-        w, t = set(written), set(taint)
+        w, t, ow_ = set(written), set(taint), set(own)
         mem = next((x for x in o if x.startswith('[')), None)
         if mem is not None:
             inner = mem[1:mem.index(']')]
             parts = [p.strip() for p in inner.split(',')]
             base = reg(parts[0])
-            is_guest = base is not None and base not in ('r20', 'r21', 'sp') and base in t
+            is_guest = base is not None and base not in ow_ and base in t
             is_store = mn.startswith('st') or mn.startswith('cas') or mn.startswith('swp') or mn.startswith('ldadd') \
                 or mn.startswith('ldset') or mn.startswith('ldclr') or mn.startswith('ldeor')
             if is_guest:
@@ -101,6 +104,7 @@ def analyse(insns):
                 dests = [reg(o[1]) if mn.startswith('swp') or mn.startswith('ld') else reg(o[0])]
             for d in dests:
                 if d is None: continue
+                ow_.discard(d)
                 if is_guest: t.add(d)
                 else: t.discard(d)
             if ']!' in ops or re.search(r'\],\s*#', ops):   # writeback: the base changes
@@ -119,18 +123,23 @@ def analyse(insns):
             srcs = [reg(x) for x in o[1:]]
             if d is not None and d != 'sp':
                 n = int(d[1:])
-                if any(s in t for s in srcs if s): t.add(d)
-                elif not (d[0] == 'r' and n in PINNED_GPR): t.discard(d)
-                if d[0] == 'r' and (n in PINNED_GPR or n in FLAGS): w.add(d)
+                if mn in ('add', 'sub', 'mov', 'adds', 'subs') and any(s in ow_ for s in srcs if s):
+                    ow_.add(d); t.discard(d)   # an FXR pointer plus an offset stays FXR's memory
+                elif any(s in t for s in srcs if s): t.add(d); ow_.discard(d)
+                else:
+                    ow_.discard(d)
+                    if not (d[0] == 'r' and n in PINNED_GPR): t.discard(d)
+                if d[0] == 'r' and (n in PINNED_GPR or n in FLAGS): w.add(d); t.add(d); ow_.discard(d)
                 if d[0] == 'v' and n < 8: w.add(d)
             # instructions writing two registers (umull etc. write one); ldp handled above
-        out_state = (frozenset(w), frozenset(t))
+        out_state = (frozenset(w), frozenset(t), frozenset(ow_))
         for s in succ(i):
             if s in state_in:
-                ow, ot = state_in[s]
-                nw, nt = ow | out_state[0], ot | out_state[1]
-                if (nw, nt) == (ow, ot): continue
-                state_in[s] = (nw, nt)
+                pw, pt, po = state_in[s]
+                # merge: written and tainted unite; a register is FXR's own only if it is on both paths
+                nw, nt, no = pw | out_state[0], pt | out_state[1], po & out_state[2]
+                if (nw, nt, no) == (pw, pt, po): continue
+                state_in[s] = (nw, nt, no)
             else:
                 state_in[s] = out_state
             work.append(s)
@@ -140,10 +149,15 @@ def family(name):
     name = re.sub(r'_(\d+|[ZM]|N|F|IN|I|64N|32N|64F|32F|64|32|16|8)(?=_|$)', '_#', name)
     return re.sub(r'(_#)+', '_#', name)
 
+# Pair fusions Windows mode does not use (fxr_pin.c, try_fuse: g_win): their second instruction
+# touches memory after the first wrote a register, so they may report a violation.
+WIN_EXCLUDED = ('p_amr_', 'p_alea_', 'p_ami_', 'p_axz_', 'p_pop2_', 'p_push2_', 'p_popret_')
+
 def main():
     funcs = parse(open(sys.argv[1], errors='replace').read())
     total = with_guest = bad = 0
     fam = collections.Counter(); famall = collections.Counter(); examples = {}
+    gate = []
     for name, insns in funcs.items():
         total += 1
         v, g = analyse(insns)
@@ -154,10 +168,14 @@ def main():
             bad += 1
             fam[f] += 1
             examples.setdefault(f, (name, v[0]))
-    print('precise: %d pinned handlers, %d touch guest memory, %d may fault after a side effect' % (total, with_guest, bad))
+            if not name.startswith(WIN_EXCLUDED): gate.append(name)
+    print('precise: %d pinned handlers, %d touch guest memory, %d may fault after a side effect, '
+          '%d of them used in Windows mode' % (total, with_guest, bad, len(gate)))
     for f, n in fam.most_common(60):
         name, (a, mn, why) = examples[f]
-        print('  %6d / %-6d %-28s e.g. %s at +%#x (%s) after %s' % (n, famall[f], f, name, a - funcs[name][0][0], mn, why))
+        print('  %6d / %-6d %-28s e.g. %s at +%#x (%s) after %s%s' % (n, famall[f], f, name, a - funcs[name][0][0], mn, why,
+              '' if name.startswith(WIN_EXCLUDED) else '   <- used in Windows mode'))
+    sys.exit(1 if gate else 0)
 
 if __name__ == '__main__':
     main()

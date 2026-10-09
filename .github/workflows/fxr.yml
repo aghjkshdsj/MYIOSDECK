@@ -90,6 +90,18 @@ jobs:
           bash engine/fxr/gates.sh "$PWD/guests" "$RUNNER_TEMP/fxr/fxr" fxr "$NAT" "$PE" || rc=1
           bash engine/fxr/gates.sh "$PWD/guests" "$RUNNER_TEMP/fxi/fxi" fxi "$NAT" "$PE" || rc=1
           exit $rc
+      - name: Windows-mode state (FXR, ARM64) - the x64 state at a stop and at a fault
+        if: runner.arch == 'ARM64'
+        continue-on-error: true   # diagnostic until it passes everywhere, then a gate
+        run: |
+          objs=$(ls "$RUNNER_TEMP"/fxr/obj/*.o | grep -v '/fxi_main\.o$')
+          clang-19 -O2 -o "$RUNNER_TEMP/winstate_test" engine/fxr-probe/winstate_test.c $objs -lm -lpthread
+          rc=0
+          "$RUNNER_TEMP/winstate_test" guests/winstate.elf loop || rc=1
+          for s in 0 1 2 3 4 5 6 7 8 9 10 11; do "$RUNNER_TEMP/winstate_test" guests/winstate.elf fault $s || rc=1; done
+          objdump -d --no-show-raw-insn -j fxr_h "$RUNNER_TEMP/fxr/fxr" > /tmp/fxr_h.txt
+          python3 engine/fxr-probe/precise.py /tmp/fxr_h.txt || rc=1
+          exit $rc
       - name: Speed vs native (standard + held-out)
         run: |
           if [ "$(uname -m)" = x86_64 ]; then
@@ -111,9 +123,6 @@ jobs:
             sudo "$PERF" stat -e cycles,instructions,branches,branch-misses,L1-icache-load-misses,L1-dcache-load-misses \
               "$RUNNER_TEMP/fxr/fxr" guests/bench_sse2.elf "${k%%:*}" "${k##*:}" 2>&1 | grep -vE '^\s*$' | tail -12
           done
-          echo "== exact faults: pinned handlers that could fault after a side effect (engine/fxr-probe/precise.py)"
-          objdump -d --no-show-raw-insn -j fxr_h "$RUNNER_TEMP/fxr/fxr" > /tmp/fxr_h.txt
-          python3 engine/fxr-probe/precise.py /tmp/fxr_h.txt
           echo "== diagnostic: A/B of FXR's knobs (fxr_pin.c; the defaults ship), kernel ns, median of 5, configurations interleaved"
           cfgs=(default FXR_REPLICAS=0 FXR_TRACES=0)
           for k in integer:3 float:16 memory:50 branch:6 simd:150; do
