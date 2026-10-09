@@ -49,6 +49,7 @@ Block *fxi_win_exit_block(uint64_t rip) {
     b->n = 1;
     b->u[0].fn = fxi_named("ec_exit");
     b->u[0].imm = rip;
+    fxr_init_slow(b);   // FXR: its handlers run uops through u->p (here: FXI's handler, the state spilled)
     return b;
 }
 

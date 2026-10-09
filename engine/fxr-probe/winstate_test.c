@@ -186,6 +186,22 @@ int main(int argc, char **argv) {
         printf("\n  guest: ok=%d %.*s", ok, (int)r.output_len, r.output);
         return !ok || g_bad || g_checked < 1000;
     }
+    if (!strcmp(argv[2], "winexit")) {
+        // Windows mode: a jump into native ARM64EC code is a one-uop exit block built outside the
+        // lowering (fxi_win.c); FXR runs it through u->p, which must be set (build 117 jumped to
+        // address 0 at the first call into a Windows DLL). It stops with the target as rip and
+        // the registers spilled to the CPU structure for the transition glue.
+        FxiCpu *c = fxi_win_cpu_new();
+        Block *b = fxi_win_exit_block(0x7ffe12345678ull);
+        c->r[RAX] = 0x1111; c->r[R15] = 0xf0f0;
+        int ok = b->u[0].p != NULL;
+        if (ok) {
+            fxr_enter(c, b);
+            ok = c->stop == FXI_STOP_EC && c->rip == 0x7ffe12345678ull && c->r[RAX] == 0x1111 && c->r[R15] == 0xf0f0;
+        }
+        printf("winexit: exit block %s\n", ok ? "stops at its native target, registers spilled" : "FAILED (no handler, or wrong stop)");
+        return !ok;
+    }
     if (!strcmp(argv[2], "fault") && argc > 3) {
         g_site = atoi(argv[3]);
         sa.sa_sigaction = on_fault;

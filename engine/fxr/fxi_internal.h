@@ -219,6 +219,7 @@ void fxr_enter(FxiCpu *c, Block *b);            // FXR: run the pinned chain fro
 void fxr_profile_dump(struct Fxi *vm);          // FXR diagnostic build: the hottest blocks, uop by uop
 #endif
 void fxr_init_stop(Block *b);                   // FXR: the stop block's pinned handler
+void fxr_init_slow(Block *b);                   // FXR: every uop of a block built outside the lowering runs FXI's handler (p_slow)
 #define FXI_GOTO_BLOCK(c, b) do { Block *fxi_gb_ = (b); __attribute__((musttail)) return fxi_gb_->u[0].fn((c), fxi_gb_->u); } while (0)
 
 extern Block *fxi_stop;                         // one "stop" uop: leaves the dispatch chain

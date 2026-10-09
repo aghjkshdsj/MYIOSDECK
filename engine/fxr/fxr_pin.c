@@ -888,6 +888,9 @@ Block *fxr_lower(struct Fxi *vm, Block *b) {
 }
 
 void fxr_init_stop(Block *b) { b->u[0].p = p_stop; }
+// Windows mode's exit blocks (a jump into native ARM64EC code, fxi_win.c) are built outside the
+// lowering: FXI's handler sets the stop and the target, with the state in the CPU structure.
+void fxr_init_slow(Block *b) { for (uint32_t i = 0; i < b->n; i++) b->u[i].p = p_slow; }
 
 #ifdef FXR_PROFILE
 // Diagnostic build (-DFXR_PROFILE): every dispatch counts its uop. At exit, the total and the
