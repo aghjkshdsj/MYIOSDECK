@@ -95,9 +95,9 @@ DEF_MOV(8) DEF_MOV(16) DEF_MOV(32) DEF_MOV(64)
 #define TAB_MOV(F) { mov_##F##_8, mov_##F##_16, mov_##F##_32, mov_##F##_64 }
 const OpFn fxi_mov_tab[F_COUNT][4] = { TAB_MOV(RR), TAB_MOV(RI), TAB_MOV(RM), TAB_MOV(MR), TAB_MOV(MI) };
 
-static void lea_16(FxiCpu *c, Uop *u) { wr16(c, u->dst, fxi_ea(c, u)); FXI_NEXT(c, u); }
-static void lea_32(FxiCpu *c, Uop *u) { wr32(c, u->dst, fxi_ea(c, u)); FXI_NEXT(c, u); }
-static void lea_64(FxiCpu *c, Uop *u) { wr64(c, u->dst, fxi_ea(c, u)); FXI_NEXT(c, u); }
+static void lea_16(FxiCpu *c, Uop *u) { wr16(c, u->dst, fxi_lea_ea(c, u)); FXI_NEXT(c, u); }
+static void lea_32(FxiCpu *c, Uop *u) { wr32(c, u->dst, fxi_lea_ea(c, u)); FXI_NEXT(c, u); }
+static void lea_64(FxiCpu *c, Uop *u) { wr64(c, u->dst, fxi_lea_ea(c, u)); FXI_NEXT(c, u); }
 const OpFn fxi_lea_tab[4] = { 0, lea_16, lea_32, lea_64 };
 
 // ---------------------------------------------------------------------------
@@ -392,8 +392,9 @@ static void op_jcc(FxiCpu *c, Uop *u) {
     CHAIN(c, u->link2, u->aux);
 }
 // Stack accesses record the uop (FXI_TOUCH) and change RSP only after the access, so a
-// fault (a stack overflow) leaves the instruction's state exact.
-#define PUSH64(c, u, v) do { uint64_t sp_ = (c)->r[R_SP] - 8; FXI_TOUCH(c, u); st64(sp_, (v)); (c)->r[R_SP] = sp_; } while (0)
+// fault (a stack overflow) leaves the instruction's state exact. FXI32: 4-byte slots, ESP wraps.
+#define PUSH64(c, u, v) do { uint64_t sp_ = ((c)->r[R_SP] - FXI_WORD) & FXI_PTRMASK; FXI_TOUCH(c, u); stw(GPTR(c, sp_), (v)); (c)->r[R_SP] = sp_; } while (0)
+#define POPW(c) ((c)->r[R_SP] = ((c)->r[R_SP] + FXI_WORD) & FXI_PTRMASK)
 // Return-address prediction (build 88: a profiled game's audio thread did 2.3M block lookups/s,
 // mostly returns to many call sites through ret's one-entry cache). A call pushes its return rip
 // and its own link2 slot (calls have no fallthrough link); ret pops: when the rip matches, the
@@ -412,7 +413,7 @@ static void op_call_R(FxiCpu *c, Uop *u) {
     INDIRECT(c, u, t);
 }
 static void op_call_M(FxiCpu *c, Uop *u) {
-    uint64_t t = ld64(fxi_ea(c, u));
+    uint64_t t = ldw(fxi_ea(c, u));
     PUSH64(c, u, u->aux);
     RAS_PUSH(c, u);
     INDIRECT(c, u, t);
@@ -434,11 +435,11 @@ static void op_call_M(FxiCpu *c, Uop *u) {
         FXI_GOTO_BLOCK((c), b_);                                                           \
     } while (0)
 static void op_jmp_R(FxiCpu *c, Uop *u) { INDIRECT2(c, u, c->r[u->src >> 3]); }
-static void op_jmp_M(FxiCpu *c, Uop *u) { INDIRECT2(c, u, ld64(fxi_ea(c, u))); }
+static void op_jmp_M(FxiCpu *c, Uop *u) { INDIRECT2(c, u, ldw(fxi_ea(c, u))); }
 static void op_ret(FxiCpu *c, Uop *u) {
     FXI_TOUCH(c, u);
-    uint64_t t = ld64(c->r[R_SP]);
-    c->r[R_SP] += 8 + u->aux;   // aux: ret imm16
+    uint64_t t = ldw(GPTR(c, c->r[R_SP]));
+    c->r[R_SP] = (c->r[R_SP] + FXI_WORD + u->aux) & FXI_PTRMASK;   // aux: ret imm16
     // Pop on a match; one level deeper also counts (a native call returned through the glue
     // and left its entry); otherwise leave the ring alone (a callback's ret never pushed).
     uint32_t top = (c->ras_top - 1) & 31, below = (c->ras_top - 2) & 31, hit = 0;
@@ -490,6 +491,38 @@ static void op_syscall(FxiCpu *c, Uop *u) {
     c->r[11] = fxi_rflags(c);
     CHAIN(c, u->link, u->aux);
 }
+
+#if FXI_I386
+// int 0x80: a Linux i386 system call (the CI test guests; never in Windows mode). Only EAX changes.
+static void op_int80(FxiCpu *c, Uop *u) {
+    c->rip = u->aux;
+    long r = fxi_syscall(c);
+    if (c->stop) return;
+    wr32(c, R_AX * 8, (uint64_t)r);
+    CHAIN(c, u->link, u->aux);
+}
+// pushad: EAX ECX EDX EBX (ESP as it was) EBP ESI EDI, EAX at the highest address.
+static void op_pushad(FxiCpu *c, Uop *u) {
+    uint64_t sp = c->r[R_SP];
+    FXI_TOUCH(c, u);
+    for (int i = 0; i < 8; i++) st32(GPTR(c, sp - 4u * (unsigned)(i + 1)), c->r[i]);
+    c->r[R_SP] = (sp - 32) & FXI_PTRMASK;
+    FXI_NEXT(c, u);
+}
+// popad: the reverse; the saved ESP is skipped.
+static void op_popad(FxiCpu *c, Uop *u) {
+    uint64_t sp = c->r[R_SP], v[8];
+    FXI_TOUCH(c, u);
+    for (int i = 0; i < 8; i++) v[i] = ld32(GPTR(c, sp + 4u * (unsigned)(7 - i)));
+    for (int i = 0; i < 8; i++) if (i != R_SP) c->r[i] = v[i];
+    c->r[R_SP] = (sp + 32) & FXI_PTRMASK;
+    FXI_NEXT(c, u);
+}
+// pop es/ss/ds: segments are flat; the slot is read (a fault stays exact) and dropped.
+static void op_pop_skip(FxiCpu *c, Uop *u) { FXI_TOUCH(c, u); (void)ld32(GPTR(c, c->r[R_SP])); POPW(c); FXI_NEXT(c, u); }
+// WoW64: control reached the system-call (imm) or unix-call (imm + 2) entry; the host takes over.
+static void op_bop_exit(FxiCpu *c, Uop *u) { c->rip = u->imm; c->stop = FXI_STOP_BOP; }
+#endif
 
 // Fused cmp/test + jcc: [cmp/test][RR/RI][32/64][cc]. Flags are still recorded
 // lazily because a successor block may read them.
@@ -543,22 +576,28 @@ const OpFn fxi_fjcc_tab[2][2][2][16] = { TAB_FJ(cmp), TAB_FJ(test) };
 // ---------------------------------------------------------------------------
 static void op_push_R(FxiCpu *c, Uop *u) { uint64_t v = c->r[u->src >> 3]; PUSH64(c, u, v); FXI_NEXT(c, u); }
 static void op_push_I(FxiCpu *c, Uop *u) { PUSH64(c, u, u->imm); FXI_NEXT(c, u); }
-static void op_push_M(FxiCpu *c, Uop *u) { uint64_t v = ld64(fxi_ea(c, u)); PUSH64(c, u, v); FXI_NEXT(c, u); }
-static void op_pop_R(FxiCpu *c, Uop *u) { FXI_TOUCH(c, u); uint64_t v = ld64(c->r[R_SP]); c->r[R_SP] += 8; c->r[u->dst >> 3] = v; FXI_NEXT(c, u); }
+static void op_push_M(FxiCpu *c, Uop *u) { uint64_t v = ldw(fxi_ea(c, u)); PUSH64(c, u, v); FXI_NEXT(c, u); }
+static void op_pop_R(FxiCpu *c, Uop *u) { FXI_TOUCH(c, u); uint64_t v = ldw(GPTR(c, c->r[R_SP])); POPW(c); c->r[u->dst >> 3] = v; FXI_NEXT(c, u); }
 static void op_pop_M(FxiCpu *c, Uop *u) {
     FXI_TOUCH(c, u);
-    uint64_t v = ld64(c->r[R_SP]);
-    st64(fxi_ea(c, u) + 8 * (u->base == R_SP), v);   // an rsp-based destination sees the popped rsp
-    c->r[R_SP] += 8;
+    uint64_t v = ldw(GPTR(c, c->r[R_SP]));
+    stw(fxi_ea(c, u) + FXI_WORD * (u->base == R_SP), v);   // an rsp-based destination sees the popped rsp
+    POPW(c);
     FXI_NEXT(c, u);
 }
-static void op_leave(FxiCpu *c, Uop *u) { FXI_TOUCH(c, u); uint64_t bp = ld64(c->r[R_BP]); c->r[R_SP] = c->r[R_BP] + 8; c->r[R_BP] = bp; FXI_NEXT(c, u); }
+static void op_leave(FxiCpu *c, Uop *u) {
+    FXI_TOUCH(c, u);
+    uint64_t bp = ldw(GPTR(c, c->r[R_BP]));
+    c->r[R_SP] = (c->r[R_BP] + FXI_WORD) & FXI_PTRMASK;
+    c->r[R_BP] = bp;
+    FXI_NEXT(c, u);
+}
 static void op_pushf(FxiCpu *c, Uop *u) { PUSH64(c, u, fxi_rflags(c)); FXI_NEXT(c, u); }
 static void op_popf(FxiCpu *c, Uop *u) {
     FXI_TOUCH(c, u);
-    fxi_set_rflags(c, ld64(c->r[R_SP]));
+    fxi_set_rflags(c, ldw(GPTR(c, c->r[R_SP])));
     if (c->df) { c->df_rip = u->rip; c->df_how = 2; }
-    c->r[R_SP] += 8;
+    POPW(c);
     FXI_NEXT(c, u);
 }
 static void op_nop(FxiCpu *c, Uop *u) { FXI_NEXT(c, u); }
@@ -643,9 +682,9 @@ static void op_stos(FxiCpu *c, Uop *u) {
     unsigned sz = 1u << u->scale;
     uint64_t n = u->cc ? c->r[R_CX] : 1, v = c->r[R_AX], di = c->r[R_DI];
     int64_t step = c->df ? -(int64_t)sz : (int64_t)sz;
-    if (sz == 1 && !c->df && u->cc) { memset((void *)(uintptr_t)di, (int)(uint8_t)v, n); di += n; }
-    else for (uint64_t i = 0; i < n; i++, di += (uint64_t)step) memcpy((void *)(uintptr_t)di, &v, sz);
-    c->r[R_DI] = di;
+    if (sz == 1 && !c->df && u->cc) { memset((void *)(uintptr_t)GPTR(c, di), (int)(uint8_t)v, n); di += n; }
+    else for (uint64_t i = 0; i < n; i++, di += (uint64_t)step) memcpy((void *)(uintptr_t)GPTR(c, di), &v, sz);
+    c->r[R_DI] = di & FXI_PTRMASK;
     if (u->cc) c->r[R_CX] = 0;
     FXI_NEXT(c, u);
 }
@@ -655,12 +694,12 @@ static void op_movs(FxiCpu *c, Uop *u) {
     uint64_t n = u->cc ? c->r[R_CX] : 1, si = c->r[R_SI], di = c->r[R_DI];
     int64_t step = c->df ? -(int64_t)sz : (int64_t)sz;
     if (!c->df && u->cc && (di >= si + n * sz || si >= di + n * sz)) {
-        memcpy((void *)(uintptr_t)di, (const void *)(uintptr_t)si, n * sz); si += n * sz; di += n * sz;
+        memcpy((void *)(uintptr_t)GPTR(c, di), (const void *)(uintptr_t)GPTR(c, si), n * sz); si += n * sz; di += n * sz;
     } else {
         for (uint64_t i = 0; i < n; i++, si += (uint64_t)step, di += (uint64_t)step)
-            memmove((void *)(uintptr_t)di, (const void *)(uintptr_t)si, sz);
+            memmove((void *)(uintptr_t)GPTR(c, di), (const void *)(uintptr_t)GPTR(c, si), sz);
     }
-    c->r[R_SI] = si; c->r[R_DI] = di;
+    c->r[R_SI] = si & FXI_PTRMASK; c->r[R_DI] = di & FXI_PTRMASK;
     if (u->cc) c->r[R_CX] = 0;
     FXI_NEXT(c, u);
 }
@@ -678,12 +717,12 @@ static void str_cmp(FxiCpu *c, Uop *u, int is_cmps) {
     int64_t step = c->df ? -(int64_t)(1u << s) : (int64_t)(1u << s);
     uint64_t acc = c->r[R_AX] & m;
     do {
-        a = is_cmps ? ld_sz(si, s) : acc;
-        b = ld_sz(di, s);
+        a = is_cmps ? ld_sz(GPTR(c, si), s) : acc;
+        b = ld_sz(GPTR(c, di), s);
         si += (uint64_t)step; di += (uint64_t)step; n--;
     } while (u->cc && n && ((a == b) == (u->cc == 1)));
-    if (is_cmps) c->r[R_SI] = si;
-    c->r[R_DI] = di;
+    if (is_cmps) c->r[R_SI] = si & FXI_PTRMASK;
+    c->r[R_DI] = di & FXI_PTRMASK;
     if (u->cc) c->r[R_CX] = n;
     c->lf_op = LF(LF_SUB, s); c->lf_a = a; c->lf_b = b; c->lf_res = (a - b) & m; c->lf_cin = 0;
 }
@@ -696,10 +735,10 @@ static void op_lods(FxiCpu *c, Uop *u) {
     uint64_t n = u->cc ? c->r[R_CX] : 1, si = c->r[R_SI];
     int64_t step = c->df ? -(int64_t)(1u << s) : (int64_t)(1u << s);
     if (n) {
-        uint64_t v = ld_sz(si + (uint64_t)step * (n - 1), s);
+        uint64_t v = ld_sz(GPTR(c, si + (uint64_t)step * (n - 1)), s);
         si += (uint64_t)step * n;
         if (s == 0) wr8(c, R_AX * 8, v); else if (s == 1) wr16(c, R_AX * 8, v); else if (s == 2) wr32(c, R_AX * 8, v); else wr64(c, R_AX * 8, v);
-        c->r[R_SI] = si;
+        c->r[R_SI] = si & FXI_PTRMASK;
         if (u->cc) c->r[R_CX] = 0;
     }
     FXI_NEXT(c, u);
@@ -723,6 +762,10 @@ static const struct { const char *name; OpFn fn; } kNamed[] = {
     { "cld", op_cld }, { "std", op_std }, { "clc", op_clc }, { "stc", op_stc }, { "cmc", op_cmc },
     { "lahf", op_lahf }, { "sahf", op_sahf }, { "cpuid", op_cpuid }, { "rdtsc", op_rdtsc },
     { "stos", op_stos }, { "movs", op_movs }, { "scas", op_scas }, { "cmps", op_cmps }, { "lods", op_lods },
+#if FXI_I386
+    { "int80", op_int80 }, { "pushad", op_pushad }, { "popad", op_popad }, { "pop_skip", op_pop_skip },
+    { "bop_exit", op_bop_exit },
+#endif
 };
 
 OpFn fxi_sse_named(const char *name);      // fxi_sse.c

@@ -6,22 +6,37 @@
 #ifndef MYIOSDECK_GUEST_RT_H
 #define MYIOSDECK_GUEST_RT_H
 
-#if !defined(__x86_64__)
-#error guest programs are built for x86-64 only
+#if !defined(__x86_64__) && !defined(__i386__)
+#error guest programs are built for x86-64 (and i386: FXI32, docs/NO_JIT_WOW64.md) only
 #endif
 
 typedef unsigned long g_ulong;
 
+#ifdef __i386__
+// i386 Linux: int 0x80, number in EAX, arguments in EBX ECX EDX (fxi32 runs these, stage 2).
+static inline long g_syscall3(long n, long a, long b, long c) {
+    long r;
+    __asm__ volatile("int $0x80" : "=a"(r) : "a"(n), "b"(a), "c"(b), "d"(c) : "memory");
+    return r;
+}
+#define G_SYS_WRITE 4
+#define G_SYS_EXIT_GROUP 252
+#define G_SYS_CLOCK_GETTIME 265
+#else
 static inline long g_syscall3(long n, long a, long b, long c) {
     long r;
     __asm__ volatile("syscall" : "=a"(r) : "a"(n), "D"(a), "S"(b), "d"(c) : "rcx", "r11", "memory");
     return r;
 }
+#define G_SYS_WRITE 1
+#define G_SYS_EXIT_GROUP 231
+#define G_SYS_CLOCK_GETTIME 228
+#endif
 
-static inline long g_write(int fd, const void *buf, g_ulong len) { return g_syscall3(1, fd, (long)buf, (long)len); }
+static inline long g_write(int fd, const void *buf, g_ulong len) { return g_syscall3(G_SYS_WRITE, fd, (long)buf, (long)len); }
 
 __attribute__((noreturn)) static inline void g_exit(int code) {
-    g_syscall3(231, code, 0, 0);
+    g_syscall3(G_SYS_EXIT_GROUP, code, 0, 0);
     for (;;) __asm__ volatile("hlt");
 }
 
@@ -29,7 +44,7 @@ struct g_timespec { long tv_sec, tv_nsec; };
 
 static inline unsigned long long g_now_ns(void) {
     struct g_timespec ts;
-    g_syscall3(228, 1 /* CLOCK_MONOTONIC */, (long)&ts, 0);
+    g_syscall3(G_SYS_CLOCK_GETTIME, 1 /* CLOCK_MONOTONIC */, (long)&ts, 0);
     return (unsigned long long)ts.tv_sec * 1000000000ull + (unsigned long long)ts.tv_nsec;
 }
 
@@ -79,6 +94,26 @@ void *memset(void *d, int c, g_ulong n) {
 
 int guest_main(int argc, char **argv);
 
+#ifdef __i386__
+/* i386 guests are plain static executables at their link address: fxi32 maps them inside a
+ * 4 GB guest window, where guest addresses below 4 GB exist. */
+__attribute__((used)) static void g_start_c(long *sp) {
+    int argc = (int)sp[0];
+    char **argv = (char **)(sp + 1);
+    g_exit(guest_main(argc, argv));
+}
+
+__asm__(".text\n"
+        ".global _start\n"
+        "_start:\n"
+        "  xor %ebp, %ebp\n"
+        "  mov %esp, %eax\n"
+        "  and $-16, %esp\n"
+        "  sub $12, %esp\n"
+        "  push %eax\n"
+        "  call g_start_c\n"
+        "  hlt\n");
+#else
 /* The programs are static-PIE: iOS reserves the low 4 GB (__PAGEZERO), so the
  * host cannot place a guest at the classic 0x400000 and loads it wherever
  * mmap answers. Apply our own R_X86_64_RELATIVE relocations before anything
@@ -116,5 +151,6 @@ __asm__(".text\n"
         "  and $-16, %rsp\n"
         "  call g_start_c\n"
         "  hlt\n");
+#endif
 
 #endif

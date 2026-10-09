@@ -22,7 +22,9 @@ typedef struct {
 
 typedef struct {
     const uint8_t *p, *start;
-    uint64_t rip;              // start of the current instruction
+    uint64_t rip;              // start of the current instruction (a guest address)
+    uint64_t gbase;            // FXI32: host address of guest 0 (p - gbase = guest address); 0 for x86-64
+    int windows;               // Windows mode (FXI32: int 0x80 is a Linux system call only outside it)
     int rex, rexw, rexr, rexx, rexb, opsize16, rep, repne, seg, addr32, seg_bad, lock;
     int addr32_used;           // a 67 prefix on a memory operand (unsupported); on registers it is a no-op
     // ModRM
@@ -80,7 +82,11 @@ static void modrm(Dec *d) {
         if (bs == 5 && d->mod == 0) { d->base = R_ZERO; d->disp = rd_s32(d); }
         else d->base = (uint8_t)(bs | (d->rexb << 3));
     } else if (rm == 5 && d->mod == 0) {
+#if FXI_I386
+        d->disp = rd_s32(d);   // i386: [disp32], an absolute address (no RIP-relative mode)
+#else
         d->riprel = 1; d->disp = rd_s32(d);
+#endif
     } else {
         d->base = (uint8_t)(rm | (d->rexb << 3));
     }
@@ -103,6 +109,8 @@ static void set_mem(Dec *d, Uop *u) {
     u->disp = d->disp + (d->riprel ? (int64_t)(d->rip + (uint64_t)(d->p - d->start)) : 0);
 }
 static uint64_t next_rip(Dec *d) { return d->rip + (uint64_t)(d->p - d->start); }
+// A branch target: i386 addresses wrap at 4 GB.
+static uint64_t br_target(uint64_t a) { return a & FXI_PTRMASK; }
 
 // Byte offset of a general register in the register file for an operand size.
 static uint16_t gpr(Dec *d, int r, int bits) {
@@ -365,16 +373,19 @@ static int decode_one_inner(Dec *d) {
         else break;
         d->p++;
     }
+#if !FXI_I386   // i386 has no REX: 40-4F are inc/dec (below)
     // Only the REX prefix right before the opcode counts; an earlier one is ignored (MSVC's
     // unwinder-friendly tail jump is "48 41 ff e2", rex.w then rex.b jmp r10: Valve's client).
     while ((b & 0xf0) == 0x40) {
         d->rex = 1; d->rexw = (b >> 3) & 1; d->rexr = (b >> 2) & 1; d->rexx = (b >> 1) & 1; d->rexb = b & 1;
         d->p++; b = *d->p;
     }
+#endif
     d->p++;
     // 67 only changes memory addressing (and the string/loop/xlat registers): padding elsewhere.
+    // (i386: 67 selects 16-bit addressing, equally unsupported.)
     if (d->addr32 && ((b >= 0xa0 && b <= 0xa7) || (b >= 0xaa && b <= 0xaf) || (b >= 0xe0 && b <= 0xe3) || b == 0xd7))
-        return unimplemented(d, "32-bit addressing");
+        return unimplemented(d, FXI_WORD == 4 ? "16-bit addressing" : "32-bit addressing");
     int bits = vsize(d);
     int prev_fuse = d->fuse_at;
     d->fuse_at = -1;
@@ -401,16 +412,59 @@ static int decode_one_inner(Dec *d) {
 
     switch (b) {
     case 0x0f: break;   // two-byte, below
+#if FXI_I386
+    // i386-only encodings (docs/NO_JIT_WOW64.md 2.8). Segment selectors are WoW64's: cs 0x23,
+    // fs 0x53 (base: the TEB32), the rest 0x2b (base 0).
+    case 0x40: case 0x41: case 0x42: case 0x43: case 0x44: case 0x45: case 0x46: case 0x47:
+    case 0x48: case 0x49: case 0x4a: case 0x4b: case 0x4c: case 0x4d: case 0x4e: case 0x4f: {   // inc/dec r
+        Uop *u = emit(d, fxi_unary_tab[b < 0x48 ? U_INC : U_DEC][0][si_of(bits)]);
+        u->dst = gpr(d, b & 7, bits);
+        meta(d)->cc_live = 1;
+        return 0;
+    }
+    case 0x06: case 0x0e: case 0x16: case 0x1e: {                     // push es/cs/ss/ds
+        Uop *u = emit(d, named("push_I")); u->imm = b == 0x0e ? 0x23 : 0x2b; return 0; }
+    case 0x07: case 0x17: case 0x1f:                                  // pop es/ss/ds: flat, nothing to load
+        emit(d, named("pop_skip")); return 0;
+    case 0x60: case 0x61:                                             // pushad / popad
+        if (d->opsize16) return unimplemented(d, "pushaw/popaw");
+        emit(d, named(b == 0x60 ? "pushad" : "popad")); return 0;
+    case 0x63: return unimplemented(d, "arpl");
+    case 0xa0: case 0xa1: case 0xa2: case 0xa3: {                     // mov al/eax <-> [moffs32]
+        int sz = (b & 1) ? bits : 8;
+        d->base = R_ZERO; d->index = R_ZERO; d->scale = 0; d->riprel = 0;
+        d->disp = (int64_t)(uint32_t)rd_s32(d);
+        if (d->seg) d->base = d->seg == 0x64 ? R_FS : R_GS;           // mov eax, fs:[0x18]: the TEB32
+        if (b < 0xa2) emit_mov(d, F_RM, sz, gpr(d, R_AX, sz), 0, 0);
+        else emit_mov(d, F_MR, sz, 0, gpr(d, R_AX, sz), 0);
+        return 0;
+    }
+    case 0x8c: {                                                      // mov r/m16, Sreg
+        modrm(d);
+        static const uint16_t sel[8] = { 0x2b, 0x23, 0x2b, 0x2b, 0x53, 0x2b, 0, 0 };
+        if ((d->reg & 7) > 5) return unimplemented(d, "mov from Sreg 6/7");
+        if (d->is_mem) emit_mov(d, F_MI, 16, 0, 0, sel[d->reg & 7]);
+        else emit_mov(d, F_RI, bits, gpr(d, d->rm, bits), 0, sel[d->reg & 7]);   // a register gets it zero-extended
+        return 0;
+    }
+    case 0x8e:                                                        // mov Sreg, r/m16: flat segments, ignored
+        modrm(d);
+        if ((d->reg & 7) == 1 || (d->reg & 7) > 5) return unimplemented(d, "mov to cs");
+        emit(d, named("nop"));
+        return 0;
+#endif
     case 0x50: case 0x51: case 0x52: case 0x53: case 0x54: case 0x55: case 0x56: case 0x57: {
         Uop *u = emit(d, named("push_R")); u->src = (uint16_t)(((b & 7) | (d->rexb << 3)) * 8); return 0; }
     case 0x58: case 0x59: case 0x5a: case 0x5b: case 0x5c: case 0x5d: case 0x5e: case 0x5f: {
         Uop *u = emit(d, named("pop_R")); u->dst = (uint16_t)(((b & 7) | (d->rexb << 3)) * 8); return 0; }
+#if !FXI_I386
     case 0x63:
         modrm(d);
         if (d->rexw) { Uop *u = emit(d, fxi_ext_tab[1][d->is_mem][2][3]); u->dst = gpr(d, d->reg, 64); u->src = gpr(d, d->rm, 32); if (d->is_mem) set_mem(d, u); }
         else if (d->is_mem) emit_mov(d, F_RM, 32, gpr(d, d->reg, 32), 0, 0);
         else emit_mov(d, F_RR, 32, gpr(d, d->reg, 32), gpr(d, d->rm, 32), 0);
         return 0;
+#endif
     case 0x68: { Uop *u = emit(d, named("push_I")); u->imm = (uint64_t)rd_s32(d); return 0; }
     case 0x6a: { Uop *u = emit(d, named("push_I")); u->imm = (uint64_t)rd_s8(d); return 0; }
     case 0x69: case 0x6b: {
@@ -426,7 +480,7 @@ static int decode_one_inner(Dec *d) {
     case 0x78: case 0x79: case 0x7a: case 0x7b: case 0x7c: case 0x7d: case 0x7e: case 0x7f: {
         int64_t rel = rd_s8(d);
         d->fuse_at = prev_fuse;
-        emit_jcc(d, b & 15, next_rip(d) + (uint64_t)rel);
+        emit_jcc(d, b & 15, br_target(next_rip(d) + (uint64_t)rel));
         d->fuse_at = -1;
         return 1;
     }
@@ -480,7 +534,9 @@ static int decode_one_inner(Dec *d) {
         // 67 lea: the address is computed in 32 bits. Its low 32 bits equal the 64-bit sum, so a
         // 32/16-bit destination is unchanged, and a 64-bit one gets the zero-extended 32-bit
         // address, which is exactly lea_32 (Dokimon: 67 8d 04 0a, lea eax, [edx+ecx]).
+#if !FXI_I386   // i386: 67 lea is a 16-bit address, left to the 67 check (unsupported)
         if (d->addr32 && !d->riprel) { d->addr32_used = 0; if (bits == 64) bits = 32; }
+#endif
         Uop *u = emit(d, fxi_lea_tab[si_of(bits)]); u->dst = gpr(d, d->reg, bits); set_mem(d, u);
         return 0;
     }
@@ -576,16 +632,24 @@ static int decode_one_inner(Dec *d) {
     }
     // CPU exceptions (fxi_ops.c op_trap): u->imm = interrupt vector, 0x100 = hlt, 0x106 = ud2
     case 0xcc: emit(d, named("trap"))->imm = 3; return 1;
-    case 0xcd: { uint64_t n = rd_u8(d); emit(d, named("trap"))->imm = n; return 1; }
+    case 0xcd: {
+        uint64_t n = rd_u8(d);
+#if FXI_I386
+        // The Linux test guests' system calls (engine/guest, i386 builds): not in Windows mode.
+        if (n == 0x80 && !d->windows) { Uop *u = emit(d, named("int80")); u->aux = next_rip(d); return 1; }
+#endif
+        emit(d, named("trap"))->imm = n;
+        return 1;
+    }
     case 0xf4: emit(d, named("trap"))->imm = 0x100; return 1;
     case 0xe8: {
         int64_t rel = rd_s32(d);
-        Uop *u = emit(d, named("call")); u->aux = next_rip(d); u->imm = next_rip(d) + (uint64_t)rel;
+        Uop *u = emit(d, named("call")); u->aux = next_rip(d); u->imm = br_target(next_rip(d) + (uint64_t)rel);
         return 1;
     }
     case 0xe9: case 0xeb: {
         int64_t rel = b == 0xe9 ? rd_s32(d) : rd_s8(d);
-        Uop *u = emit(d, named("jmp")); u->imm = next_rip(d) + (uint64_t)rel;
+        Uop *u = emit(d, named("jmp")); u->imm = br_target(next_rip(d) + (uint64_t)rel);
         return 1;
     }
     case 0xf5: emit(d, named("cmc")); meta(d)->reads = 1; return 0;
@@ -651,7 +715,7 @@ static int decode_one_inner(Dec *d) {
     if (op >= 0x80 && op <= 0x8f) {
         int64_t rel = rd_s32(d);
         d->fuse_at = prev_fuse;
-        emit_jcc(d, op & 15, next_rip(d) + (uint64_t)rel);
+        emit_jcc(d, op & 15, br_target(next_rip(d) + (uint64_t)rel));
         d->fuse_at = -1;
         return 1;
     }
@@ -821,9 +885,37 @@ int fxi_insn_length(const uint8_t *p, int *op_end) {
         else break;
         if (p - s > 14) return 0;
     }
+#if !FXI_I386   // i386: 40-4F are inc/dec
     while ((*p & 0xf0) == 0x40) { rexw = (*p >> 3) & 1; p++; }   // the last REX counts
+#endif
     int immz = osz16 ? 2 : 4, has_modrm = 0, imm = 0, map = 0;
     uint8_t b = *p++;
+#if FXI_I386
+    // i386-only encodings: push/pop of segment registers, BCD adjusts, pushad/popad, bound,
+    // moffs32, far pointers, les/lds (c4/c5 with a memory operand; a register form is VEX).
+    if (b < 0x40 && (b & 7) >= 6 && b != 0x0f && b != 0x26 && b != 0x2e && b != 0x36 && b != 0x3e) {
+        if (op_end) *op_end = (int)(p - s);
+        return (int)(p - s);
+    }
+    if (b == 0x60 || b == 0x61 || b == 0xce || b == 0xd6 || (b >= 0xa0 && b <= 0xa3) || b == 0x9a || b == 0xea ||
+        b == 0x62 || b == 0x82 || b == 0xd4 || b == 0xd5 || ((b == 0xc4 || b == 0xc5) && (*p >> 6) != 3)) {
+        if (op_end) *op_end = (int)(p - s);
+        if (b >= 0xa0 && b <= 0xa3) imm = 4;
+        else if (b == 0x9a || b == 0xea) imm = osz16 ? 4 : 6;
+        else if (b == 0xd4 || b == 0xd5) imm = 1;
+        else if (b == 0x62 || b == 0x82 || b == 0xc4 || b == 0xc5) has_modrm = 1, imm = b == 0x82;
+        if (has_modrm) {
+            uint8_t m = *p++;
+            int mod = m >> 6, rm = m & 7;
+            if (mod != 3) {
+                if (rm == 4) { uint8_t sib = *p++; if (mod == 0 && (sib & 7) == 5) p += 4; }
+                else if (mod == 0 && rm == 5) p += 4;
+                if (mod == 1) p += 1; else if (mod == 2) p += 4;
+            }
+        }
+        return (int)(p - s) + imm;
+    }
+#endif
     if (b == 0xc4 || b == 0xc5 || b == 0x62) {   // VEX / EVEX
         if (b == 0xc5) { map = 1; p += 1; }
         else if (b == 0xc4) { map = p[0] & 0x1f; p += 2; }
@@ -895,6 +987,7 @@ int fxi_insn_length(const uint8_t *p, int *op_end) {
 int fxi_probe(const uint8_t *p, uint64_t rip, char *why, size_t why_len) {
     Dec *d = malloc(sizeof *d);
     d->p = p; d->rip = rip; d->n = 0; d->fuse_at = -1;
+    d->gbase = (uint64_t)(uintptr_t)p - rip; d->windows = 1;
     decode_one(d);
     OpFn ud = named("fail_ud");
     int ok = 1;
@@ -912,15 +1005,21 @@ int fxi_probe(const uint8_t *p, uint64_t rip, char *why, size_t why_len) {
 
 Block *fxi_translate(struct Fxi *vm, uint64_t rip) {
     Dec *d = malloc(sizeof *d);
-    d->p = (const uint8_t *)(uintptr_t)rip;
+#if FXI_I386
+    d->gbase = vm->gbase;   // the guest's code is read through its window
+#else
+    d->gbase = 0;
+#endif
+    d->windows = vm->windows;
+    d->p = (const uint8_t *)(uintptr_t)(d->gbase + rip);
     d->n = 0;
     d->fuse_at = -1;
     int ended = 0;
     for (int insns = 0; insns < MAX_INSNS && !ended; insns++) {
-        d->rip = (uint64_t)(uintptr_t)d->p;
+        d->rip = (uint64_t)(uintptr_t)d->p - d->gbase;
         ended = decode_one(d);
     }
-    if (!ended) { Uop *u = emit(d, named("goto")); u->aux = (uint64_t)(uintptr_t)d->p; }
+    if (!ended) { Uop *u = emit(d, named("goto")); u->aux = (uint64_t)(uintptr_t)d->p - d->gbase; }
 
     // Flag liveness, backward. Flags are assumed live at the block end.
     int live = 1;

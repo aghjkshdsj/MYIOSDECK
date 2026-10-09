@@ -79,6 +79,9 @@ struct FxiCpu {
     long long exit_code;
     char *err;               // fxi_result.error
     struct Fxi *vm;
+#if FXI_I386
+    uint64_t gbase;          // FXI32: host address of guest address 0 (the process's window)
+#endif
 };
 
 // One decoded instruction (or fused pair). 64 bytes.
@@ -101,7 +104,8 @@ struct Block {
 };
 
 // c->stop values: why the dispatch chain was left.
-enum { FXI_STOP_ERROR = 1, FXI_STOP_EXIT = 2, FXI_STOP_EC = 3, FXI_STOP_EXCEPTION = 4 };
+enum { FXI_STOP_ERROR = 1, FXI_STOP_EXIT = 2, FXI_STOP_EC = 3, FXI_STOP_EXCEPTION = 4,
+       FXI_STOP_BOP = 5 };   // FXI32 (WoW64): reached the system-call or unix-call entry (c->rip)
 
 // Open-addressed rip -> Block. Replaced (never freed) when it grows, so readers on other
 // threads can keep using the table they loaded.
@@ -122,6 +126,11 @@ struct Fxi {
     uint8_t *image; size_t image_size;
     uint8_t *stack; size_t stack_size;
     uint64_t brk;
+#if FXI_I386
+    uint64_t gbase;          // FXI32: the guest window [gbase, gbase + 4 GB)
+    uint64_t bop;            // FXI32 Windows mode: guest address of the system-call entry (+2: unix calls)
+    uint8_t *window; size_t window_size;   // ELF mode: the reservation
+#endif
 };
 
 // ---- Register file access (byte offsets) ----
@@ -145,13 +154,40 @@ FXI_INLINE void st16(uint64_t a, uint64_t v) { uint16_t x = (uint16_t)v; memcpy(
 FXI_INLINE void st32(uint64_t a, uint64_t v) { uint32_t x = (uint32_t)v; memcpy((void *)(uintptr_t)a, &x, 4); }
 FXI_INLINE void st64(uint64_t a, uint64_t v) { memcpy((void *)(uintptr_t)a, &v, 8); }
 
+// ---- Guest addresses ----
+// x86-64 (FXI): a guest address is a host address. i386 (FXI32: engine/fxi32 compiles these
+// sources with FXI_I386): the guest lives in a 4 GB window, guest address a at host
+// gbase + zext32(a) (docs/NO_JIT_WOW64.md). GPTR turns a guest address into the host address
+// to load or store; stack slots and code pointers are FXI_WORD bytes (ldw/stw).
+#if FXI_I386
+#define GPTR(c, a) ((c)->gbase + (uint32_t)(a))
+#define FXI_WORD 4
+#define FXI_PTRMASK 0xffffffffull
+#define ldw ld32
+#define stw st32
+#else
+#define GPTR(c, a) ((uint64_t)(a))
+#define FXI_WORD 8
+#define FXI_PTRMASK (~0ull)
+#define ldw ld64
+#define stw st64
+#endif
+
 // Branchless effective address: base/index are register slots (16 = zero). Every guest memory
 // operand goes through here, so it also records the uop: a host fault on the access that
 // follows is reported at that instruction (Windows mode, docs/NO_JIT_WINDOWS.md).
 FXI_INLINE uint64_t fxi_ea(FxiCpu *c, const Uop *u) {
     c->cur = (Uop *)u;
+    return GPTR(c, c->r[u->base] + (c->r[u->index] << u->scale) + (uint64_t)u->disp);
+}
+// The address itself, for lea (FXI32: the guest address, without the window base).
+#if FXI_I386
+FXI_INLINE uint64_t fxi_lea_ea(FxiCpu *c, const Uop *u) {
     return c->r[u->base] + (c->r[u->index] << u->scale) + (uint64_t)u->disp;
 }
+#else
+#define fxi_lea_ea fxi_ea
+#endif
 #define FXI_TOUCH(c, u) ((c)->cur = (u))   // implicit memory operands (stack, strings)
 
 // ---- Lazy flags ----
@@ -189,6 +225,10 @@ struct Fxi *fxi_vm_new(void);                   // empty block cache, stop block
 // Windows mode (fxi_win.c): nonzero when rip is native ARM64EC code (PEB->EcCodeBitMap).
 int fxi_win_is_ec(FxiCpu *c, uint64_t rip);
 Block *fxi_win_exit_block(uint64_t rip);        // one uop: c->rip = rip, stop = FXI_STOP_EC
+#if FXI_I386
+// WoW64 mode (fxi_wow.c): the block for a system-call / unix-call entry, NULL for other code.
+Block *fxi_wow_bop_block(struct Fxi *vm, uint64_t rip);
+#endif
 
 // Handler tables the decoder picks from (fxi_ops.c).
 enum { F_RR, F_RI, F_RM, F_MR, F_MI, F_COUNT };           // operand forms

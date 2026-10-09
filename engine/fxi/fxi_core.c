@@ -105,18 +105,24 @@ Block *fxi_lookup(FxiCpu *c, uint64_t rip) {
     // Touch it before taking the translation lock, which a fault would leave held.
     c->cur = NULL;
     c->rip = rip;
-    if (vm->windows) (void)*(volatile const uint8_t *)(uintptr_t)rip;
+    if (vm->windows) (void)*(volatile const uint8_t *)(uintptr_t)GPTR(c, rip);
     if (!vm->windows &&
-        (rip < (uint64_t)(uintptr_t)vm->image || rip >= (uint64_t)(uintptr_t)vm->image + vm->image_size)) {
+        (GPTR(c, rip) < (uint64_t)(uintptr_t)vm->image || GPTR(c, rip) >= (uint64_t)(uintptr_t)vm->image + vm->image_size)) {
         c->rip = rip;
         fxi_fail(c, "jump outside the guest image to %#llx", (unsigned long long)rip);
         return fxi_stop;
     }
     pthread_mutex_lock(&g_translate_lock);
     if (!(b = table_find(vm->table, rip))) {
+#if FXI_I386
+        // WoW64: the system-call and unix-call entries (the BOP page, fxi_wow.c) end the run.
+        b = vm->windows ? fxi_wow_bop_block(vm, rip) : NULL;
+        if (!b) b = fxi_translate(vm, rip);
+#else
         // Windows: a jump into native ARM64EC code (an import, a return into an exit thunk)
         // becomes a cached one-uop block that leaves the run for the transition glue.
         b = (vm->windows && fxi_win_is_ec(c, rip)) ? fxi_win_exit_block(rip) : fxi_translate(vm, rip);
+#endif
         table_insert(vm, b);
     }
     pthread_mutex_unlock(&g_translate_lock);
@@ -134,6 +140,34 @@ static void capture(struct Fxi *vm, const void *buf, size_t len) {
     if (g_echo_fd >= 0) { ssize_t w = write(g_echo_fd, buf, len); (void)w; }
 }
 
+#if FXI_I386
+// i386 (int 0x80): number in EAX, arguments in EBX ECX EDX; pointers are guest addresses.
+long fxi_syscall(FxiCpu *c) {
+    struct Fxi *vm = c->vm;
+    vm->syscalls++;
+    uint32_t nr = (uint32_t)c->r[R_AX], a0 = (uint32_t)c->r[R_BX], a1 = (uint32_t)c->r[R_CX], a2 = (uint32_t)c->r[R_DX];
+    switch (nr) {
+    case 4:   // write
+        if (a0 == 1 || a0 == 2) { capture(vm, (const void *)(uintptr_t)GPTR(c, a1), a2); return (long)a2; }
+        return -EBADF;
+    case 1: case 252:   // exit, exit_group
+        c->exit_code = (long long)(int)a0;
+        c->stop = FXI_STOP_EXIT;
+        return 0;
+    case 265: case 403: {   // clock_gettime (32-bit timespec), clock_gettime64
+        struct timespec ts;
+        clock_gettime((a0 == 0) ? CLOCK_REALTIME : CLOCK_MONOTONIC, &ts);
+        if (nr == 403) { int64_t v[2] = { ts.tv_sec, ts.tv_nsec }; memcpy((void *)(uintptr_t)GPTR(c, a1), v, sizeof v); }
+        else { int32_t v[2] = { (int32_t)ts.tv_sec, (int32_t)ts.tv_nsec }; memcpy((void *)(uintptr_t)GPTR(c, a1), v, sizeof v); }
+        return 0;
+    }
+    case 45: return (long)vm->brk;   // brk: report, never grow
+    default:
+        fxi_fail(c, "unimplemented i386 syscall %u", nr);
+        return -ENOSYS;
+    }
+}
+#else
 long fxi_syscall(FxiCpu *c) {
     struct Fxi *vm = c->vm;
     vm->syscalls++;
@@ -164,7 +198,76 @@ long fxi_syscall(FxiCpu *c) {
         return -ENOSYS;
     }
 }
+#endif
 
+#if FXI_I386
+// ---- FXI32: a static i386 ELF inside a 4 GB guest window ----
+// The window is reserved PROT_NONE at a 4 GB-aligned host address, as Wine's guest windows are,
+// so an access that misses the window base (or wraps wrongly) faults instead of passing.
+typedef struct { unsigned char ident[16]; uint16_t type, machine; uint32_t version, entry, phoff, shoff, flags;
+                 uint16_t ehsize, phentsize, phnum, shentsize, shnum, shstrndx; } Ehdr;
+typedef struct { uint32_t type, offset, vaddr, paddr, filesz, memsz, flags, align; } Phdr;
+
+static int load_elf(struct Fxi *vm, const uint8_t *elf, size_t len, uint64_t *entry, char *err) {
+    if (len < sizeof(Ehdr) || memcmp(elf, "\x7f" "ELF", 4) || elf[4] != 1) { snprintf(err, 256, "not a 32-bit ELF"); return 0; }
+    Ehdr eh; memcpy(&eh, elf, sizeof eh);
+    if (eh.machine != 3) { snprintf(err, 256, "not i386 (machine %u)", eh.machine); return 0; }
+    size_t res = 3ull << 32;   // a 4 GB-aligned 4 GB window and a guard above it
+    uint8_t *r = mmap(0, res, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+    if (r == MAP_FAILED) { snprintf(err, 256, "cannot reserve the 4 GB guest window"); return 0; }
+    vm->window = r; vm->window_size = res;
+    vm->gbase = ((uint64_t)(uintptr_t)r + 0xffffffffull) & ~0xffffffffull;
+    uint64_t lo = ~0ull, hi = 0;
+    for (unsigned i = 0; i < eh.phnum; i++) {
+        Phdr ph; memcpy(&ph, elf + eh.phoff + (size_t)i * eh.phentsize, sizeof ph);
+        if (ph.type != 1) continue;
+        if (ph.vaddr < lo) lo = ph.vaddr;
+        if ((uint64_t)ph.vaddr + ph.memsz > hi) hi = (uint64_t)ph.vaddr + ph.memsz;
+    }
+    if (lo == ~0ull) { snprintf(err, 256, "no loadable segments"); return 0; }
+    lo &= ~0x3fffull;
+    size_t span = (size_t)((hi - lo + 0x3fff) & ~0x3fffull);
+    // Plain read/write memory: FXI never executes guest code natively.
+    uint8_t *img = (uint8_t *)(uintptr_t)(vm->gbase + lo);
+    if (mprotect(img, span, PROT_READ | PROT_WRITE)) { snprintf(err, 256, "map image failed"); return 0; }
+    for (unsigned i = 0; i < eh.phnum; i++) {
+        Phdr ph; memcpy(&ph, elf + eh.phoff + (size_t)i * eh.phentsize, sizeof ph);
+        if (ph.type != 1) continue;
+        if ((uint64_t)ph.offset + ph.filesz > len) { snprintf(err, 256, "truncated ELF"); return 0; }
+        memcpy(img + (ph.vaddr - lo), elf + ph.offset, ph.filesz);
+    }
+    vm->image = img;
+    vm->image_size = span;
+    vm->brk = lo + span;   // a guest address
+    *entry = eh.entry;
+    return 1;
+}
+
+// The stack below guest 0xf0000000: argc, argv[], NULL, envp NULL, AT_NULL (4-byte words).
+static uint64_t setup_stack(struct Fxi *vm, int argc, const char *const *argv) {
+    const uint64_t top_g = 0xf0000000ull;
+    vm->stack_size = 8u << 20;
+    vm->stack = (uint8_t *)(uintptr_t)(vm->gbase + top_g - vm->stack_size);
+    mprotect(vm->stack, vm->stack_size, PROT_READ | PROT_WRITE);
+    uint8_t *top = vm->stack + vm->stack_size;
+    uint32_t ptrs[64];
+    int n = argc < 60 ? argc : 60;
+    for (int i = n - 1; i >= 0; i--) {
+        size_t l = strlen(argv[i]) + 1;
+        top -= l; memcpy(top, argv[i], l);
+        ptrs[i] = (uint32_t)((uint64_t)(uintptr_t)top - vm->gbase);
+    }
+    uint32_t *sp = (uint32_t *)((uintptr_t)top & ~(uintptr_t)15);
+    size_t words = 1 + (size_t)n + 1 + 1 + 2;
+    sp -= words;
+    sp = (uint32_t *)((uintptr_t)sp & ~(uintptr_t)15);   // esp 16-aligned at entry
+    size_t k = 0;
+    sp[k++] = (uint32_t)n;
+    for (int i = 0; i < n; i++) sp[k++] = ptrs[i];
+    sp[k++] = 0; sp[k++] = 0; sp[k++] = 0; sp[k++] = 0;
+    return (uint64_t)(uintptr_t)sp - vm->gbase;
+}
+#else
 // ---- static-PIE ELF loader ----
 typedef struct { unsigned char ident[16]; uint16_t type, machine; uint32_t version; uint64_t entry, phoff, shoff;
                  uint32_t flags; uint16_t ehsize, phentsize, phnum, shentsize, shnum, shstrndx; } Ehdr;
@@ -223,6 +326,7 @@ static uint64_t setup_stack(struct Fxi *vm, int argc, const char *const *argv) {
     sp[k++] = 0; sp[k++] = 0;   // AT_NULL
     return (uint64_t)(uintptr_t)sp;
 }
+#endif
 
 static double now_s(void) {
     struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -240,6 +344,9 @@ int fxi_run_elf(const uint8_t *elf, size_t len, int argc, const char *const *arg
     FxiCpu *c = &vm->cpu;
     c->vm = vm;
     c->err = out->error;
+#if FXI_I386
+    c->gbase = vm->gbase;
+#endif
     c->r[R_SP] = setup_stack(vm, argc, argv);
     c->rip = entry;
     c->mxcsr = 0x1f80;
@@ -257,7 +364,11 @@ int fxi_run_elf(const uint8_t *elf, size_t len, int argc, const char *const *arg
     out->blocks = vm->blocks;
     // Blocks and the image are kept until the next run: a guest is short-lived
     // and freeing every block costs more than it saves here.
+#if FXI_I386
+    munmap(vm->window, vm->window_size);   // image and stack live in the window
+#else
     munmap(vm->stack, vm->stack_size);
+#endif
     pthread_mutex_unlock(&g_run_lock);
     return out->ok;
 }

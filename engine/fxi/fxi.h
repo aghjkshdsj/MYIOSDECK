@@ -6,6 +6,10 @@
 #ifndef FXI_H
 #define FXI_H
 
+#if FXI_I386
+#include "fxi_i386.h"   // FXI32: fxi_* -> fx32_* (links next to FXI)
+#endif
+
 #include <stddef.h>
 #include <stdint.h>
 

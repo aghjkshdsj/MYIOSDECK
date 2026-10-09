@@ -50,14 +50,27 @@ static int scan_pe(const char *path) {
     const unsigned char *pe = f + u32at(f + 0x3c);
     uint32_t machine = u16at(pe + 4), nsec = u16at(pe + 6), optsz = u16at(pe + 20);
     const unsigned char *opt = pe + 24, *sec = opt + optsz;
+#if FXI_I386
+    // PE32 (i386): no .pdata; the roots are the entry point and every exported function.
+    if (u16at(opt) != 0x10b) { fprintf(stderr, "%s: not a PE32 image\n", path); return 2; }
+    uint64_t base = u32at(opt + 28);
+    const unsigned char *dirs = opt + 96;
+#else
     if (u16at(opt) != 0x20b) { fprintf(stderr, "%s: not a PE32+ image\n", path); return 2; }
     uint64_t base = (uint64_t)u32at(opt + 24) | (uint64_t)u32at(opt + 28) << 32;
-    uint32_t exc_rva = u32at(opt + 112 + 3 * 8), exc_size = u32at(opt + 112 + 3 * 8 + 4);
+    const unsigned char *dirs = opt + 112;
+#endif
+    uint32_t exc_rva = u32at(dirs + 3 * 8), exc_size = u32at(dirs + 3 * 8 + 4);
 
 #define RVA(r) rva_ptr(f, len, sec, nsec, (r))
     const unsigned char *pdata = RVA(exc_rva);
+#if FXI_I386
+    unsigned nfunc = 0;
+    (void)pdata; (void)exc_size;
+#else
     if (!pdata || !exc_size) { fprintf(stderr, "%s: no .pdata\n", path); return 2; }
     unsigned nfunc = exc_size / 12;
+#endif
 
     // Functions: every .pdata entry, then (leaf functions have no .pdata) the entry point and
     // every direct call/jmp target found on the way, swept up to the first ret/jmp/int3.
@@ -66,7 +79,18 @@ static int scan_pe(const char *path) {
     enum { MAX_WORK = 1 << 16 };
     static uint32_t work[MAX_WORK];
     unsigned nwork = 0;
-    work[nwork++] = u32at(opt + 16);                 // AddressOfEntryPoint
+    if (u32at(opt + 16)) work[nwork++] = u32at(opt + 16);   // AddressOfEntryPoint
+#if FXI_I386
+    {   // exported functions (a forwarder's RVA points into the export directory: skipped)
+        uint32_t exp_rva = u32at(dirs), exp_size = u32at(dirs + 4);
+        const unsigned char *exp = exp_size ? RVA(exp_rva) : NULL;
+        const unsigned char *fn = exp ? RVA(u32at(exp + 28)) : NULL;
+        for (uint32_t i = 0; fn && i < u32at(exp + 20) && nwork < MAX_WORK; i++) {
+            uint32_t r = u32at(fn + 4 * i);
+            if (r && (r < exp_rva || r >= exp_rva + exp_size)) work[nwork++] = r;
+        }
+    }
+#endif
     static Miss miss[512];
     unsigned nmiss = 0;
     unsigned long long insns = 0, bad = 0, invalid = 0, funcs = 0, leafs = 0;
@@ -146,7 +170,7 @@ int main(int argc, char **argv) {
         for (int i = 2; i < argc; i++) rc |= scan_pe(argv[i]);
         return rc;
     }
-    if (argc < 2) { fprintf(stderr, "usage: fxi <guest.elf> [args...] | fxi --scan-pe <pe>...\n"); return 2; }
+    if (argc < 2) { fprintf(stderr, "usage: fxi%s <guest.elf> [args...] | --scan-pe <pe>...\n", FXI_WORD == 4 ? "32" : ""); return 2; }
     long len;
     unsigned char *buf = read_file(argv[1], &len);
     if (!buf) return 2;
@@ -155,7 +179,7 @@ int main(int argc, char **argv) {
     fxi_set_echo_fd(1);
     int ok = fxi_run_elf(buf, (size_t)len, argc - 1, (const char *const *)(argv + 1), &r);
     fflush(stdout);
-    fprintf(stderr, "[fxi] %s ok=%d exit=%lld %.3f s, %llu blocks, %llu syscalls%s%s\n", fxi_version(), ok,
+    fprintf(stderr, "[fxi%s] %s ok=%d exit=%lld %.3f s, %llu blocks, %llu syscalls%s%s\n", FXI_WORD == 4 ? "32" : "", fxi_version(), ok,
             r.exit_code, r.seconds, r.blocks, r.syscalls, r.error[0] ? " error: " : "", r.error);
     return ok ? (int)r.exit_code : 99;
 }

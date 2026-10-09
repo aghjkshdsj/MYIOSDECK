@@ -42,3 +42,35 @@ jobs:
           done
           { echo "## FXI static scan of Windows x64 programs"; echo; } >> "$GITHUB_STEP_SUMMARY"
           "$RUNNER_TEMP/fxi/fxi" --scan-pe "$RUNNER_TEMP"/pe/*.exe | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # FXI32: FXI's sources built for i386 guests (docs/NO_JIT_WOW64.md, stage 2). i686 static guests
+  # run natively on the x86-64 runner and under fxi32 inside a 4 GB guest window: output must match.
+  fxi32:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Toolchain
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq clang gcc-multilib > /dev/null
+          clang --version | head -1
+      - name: i386 guest programs
+        run: bash engine/guest/build32.sh "$RUNNER_TEMP/guests32"
+      - name: Build FXI32 (and check its symbols are renamed)
+        run: bash engine/fxi32/build.sh "$RUNNER_TEMP/fxi32"
+      - name: Native vs FXI32
+        run: bash engine/fxi32/ci-test.sh "$RUNNER_TEMP/guests32" "$RUNNER_TEMP/fxi32/fxi32"
+      # The to-do list for 32-bit Windows code: Wine's i386 system DLLs and DXMT's i386 D3D DLLs
+      # (the newest wine-i386.yml farm for this branch, else main's), every reachable function.
+      - name: Scan the i386 Windows farm
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RUN=$(bash tools/latest-run.sh wine-i386.yml || true)
+          [ -n "$RUN" ] || { echo "no i386 farm yet"; exit 0; }
+          gh run download "$RUN" -R "$GITHUB_REPOSITORY" -n wine-i386-farm -D "$RUNNER_TEMP/farm32"
+          { echo "## FXI32 static scan of the i386 Windows farm (run $RUN)"; echo; } >> "$GITHUB_STEP_SUMMARY"
+          cd "$RUNNER_TEMP/farm32"
+          "$RUNNER_TEMP/fxi32/fxi32" --scan-pe ntdll.dll kernelbase.dll kernel32.dll user32.dll gdi32.dll msvcrt.dll \
+            ucrtbase.dll d3d11.dll dxgi.dll winemetal.dll hello-x86.exe | tee -a "$GITHUB_STEP_SUMMARY"
