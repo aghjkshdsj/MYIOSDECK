@@ -57,12 +57,23 @@
     PNEXT();
 #define MKEEP_F KEEP_F()   // flags live: written after the access
 #define MKEEP_N ((void)0)  // flags dead: not written at all
+// adc/sbb with a memory source: enough register pressure (reading CF) that the compiler used the
+// destination as scratch before the load; the others read it and leave it alone (precise.py)
+#define RKEEP_adc(D) KEEP_R(D)
+#define RKEEP_sbb(D) KEEP_R(D)
+#define RKEEP_add(D) ((void)0)
+#define RKEEP_or(D) ((void)0)
+#define RKEEP_and(D) ((void)0)
+#define RKEEP_sub(D) ((void)0)
+#define RKEEP_xor(D) ((void)0)
+#define RKEEP_cmp(D) ((void)0)
+#define RKEEP_test(D) ((void)0)
 
 #define DEF_ALU_RR(S, D, OPN, SZ, FL) PH p_alu_rr_##OPN##_##SZ##FL##_##D##_##S(FXR_PARAMS) { ALU_BODY(OPN, SZ, g##D, g##S, g##D = r, FL, (void)0, (void)0) }
 #define DEF_ALU_RR_ROW(D, OPN, SZ, FL) R16B(DEF_ALU_RR, D, OPN, SZ, FL)
 #define DEF_ALU_R(D, OPN, SZ, FL)                                                          \
     PH p_alu_ri_##OPN##_##SZ##FL##_##D(FXR_PARAMS) { ALU_BODY(OPN, SZ, g##D, u->imm, g##D = r, FL, (void)0, (void)0) } \
-    PH p_alu_rt_##OPN##_##SZ##FL##_##D(FXR_PARAMS) { ALU_BODY(OPN, SZ, g##D, ld##SZ(T), g##D = r, FL, MKEEP_##FL; KEEP_R(D), (void)0) }
+    PH p_alu_rt_##OPN##_##SZ##FL##_##D(FXR_PARAMS) { ALU_BODY(OPN, SZ, g##D, ld##SZ(T), g##D = r, FL, MKEEP_##FL; RKEEP_##OPN(D), (void)0) }
 #define DEF_ALU_T(S, OPN, SZ, FL) PH p_alu_tr_##OPN##_##SZ##FL##_##S(FXR_PARAMS) { ALU_BODY(OPN, SZ, ld##SZ(T), g##S, st##SZ(T, r), FL, (void)0, MKEEP_##FL) }
 #define DEF_ALU_SZ(OPN, SZ, FL) R16(DEF_ALU_RR_ROW, OPN, SZ, FL) R16(DEF_ALU_R, OPN, SZ, FL)
 #define DEF_ALU_TSZ(OPN, SZ, FL) R16(DEF_ALU_T, OPN, SZ, FL) \

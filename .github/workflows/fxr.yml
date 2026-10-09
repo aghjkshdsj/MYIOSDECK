@@ -90,9 +90,8 @@ jobs:
           bash engine/fxr/gates.sh "$PWD/guests" "$RUNNER_TEMP/fxr/fxr" fxr "$NAT" "$PE" || rc=1
           bash engine/fxr/gates.sh "$PWD/guests" "$RUNNER_TEMP/fxi/fxi" fxi "$NAT" "$PE" || rc=1
           exit $rc
-      - name: Windows-mode state (FXR, ARM64) - the x64 state at a stop and at a fault
+      - name: Windows-mode state gate (FXR, ARM64) - the x64 state at a stop and at a fault
         if: runner.arch == 'ARM64'
-        continue-on-error: true   # diagnostic until it passes everywhere, then a gate
         run: |
           objs=$(ls "$RUNNER_TEMP"/fxr/obj/*.o | grep -v '/fxi_main\.o$')
           clang-19 -O2 -o "$RUNNER_TEMP/winstate_test" engine/fxr-probe/winstate_test.c $objs -lm -lpthread
