@@ -41,25 +41,29 @@
 #define C_cmp 0
 #define C_test 0
 // adc/sbb read CF first; a flag kind the pinned code cannot read sends the instruction to p_slow
-// before anything changed.
-#define ALU_BODY(OPN, SZ, A, B, STORE, FL)                                                 \
+// before anything changed. KEEP follows the memory access of the memory forms (exact faults:
+// the flag words keep their old values until the access is done, fxr_pin.h KEEP_F).
+#define ALU_BODY(OPN, SZ, A, B, STORE, FL, KEEP)                                           \
     uint64_t ci = 0;                                                                       \
     if (C_##OPN) { int s_ = 0; ci = pcf(F0, F1, F2, F3, &s_); if (FXI_UNLIKELY(s_)) PTAIL(p_slow); } \
     uint64_t a = (A) & M##SZ, b = (B) & M##SZ, r = X_##OPN(a, b, ci) & M##SZ;              \
     (void)ci;                                                                              \
     if (W_##OPN) { STORE; }                                                                \
+    KEEP;                                                                                  \
     if (FLV_##FL) SETF(K_##OPN, SI##SZ, a, b, r, ci);                                      \
     PNEXT();
+#define MKEEP_F KEEP_F()   // flags live: written after the access
+#define MKEEP_N ((void)0)  // flags dead: not written at all
 
-#define DEF_ALU_RR(S, D, OPN, SZ, FL) PH p_alu_rr_##OPN##_##SZ##FL##_##D##_##S(FXR_PARAMS) { ALU_BODY(OPN, SZ, g##D, g##S, g##D = r, FL) }
+#define DEF_ALU_RR(S, D, OPN, SZ, FL) PH p_alu_rr_##OPN##_##SZ##FL##_##D##_##S(FXR_PARAMS) { ALU_BODY(OPN, SZ, g##D, g##S, g##D = r, FL, (void)0) }
 #define DEF_ALU_RR_ROW(D, OPN, SZ, FL) R16B(DEF_ALU_RR, D, OPN, SZ, FL)
 #define DEF_ALU_R(D, OPN, SZ, FL)                                                          \
-    PH p_alu_ri_##OPN##_##SZ##FL##_##D(FXR_PARAMS) { ALU_BODY(OPN, SZ, g##D, u->imm, g##D = r, FL) } \
-    PH p_alu_rt_##OPN##_##SZ##FL##_##D(FXR_PARAMS) { ALU_BODY(OPN, SZ, g##D, ld##SZ(T), g##D = r, FL) }
-#define DEF_ALU_T(S, OPN, SZ, FL) PH p_alu_tr_##OPN##_##SZ##FL##_##S(FXR_PARAMS) { ALU_BODY(OPN, SZ, ld##SZ(T), g##S, st##SZ(T, r), FL) }
+    PH p_alu_ri_##OPN##_##SZ##FL##_##D(FXR_PARAMS) { ALU_BODY(OPN, SZ, g##D, u->imm, g##D = r, FL, (void)0) } \
+    PH p_alu_rt_##OPN##_##SZ##FL##_##D(FXR_PARAMS) { ALU_BODY(OPN, SZ, g##D, ld##SZ(T), g##D = r, FL, MKEEP_##FL) }
+#define DEF_ALU_T(S, OPN, SZ, FL) PH p_alu_tr_##OPN##_##SZ##FL##_##S(FXR_PARAMS) { ALU_BODY(OPN, SZ, ld##SZ(T), g##S, st##SZ(T, r), FL, MKEEP_##FL) }
 #define DEF_ALU_SZ(OPN, SZ, FL) R16(DEF_ALU_RR_ROW, OPN, SZ, FL) R16(DEF_ALU_R, OPN, SZ, FL)
 #define DEF_ALU_TSZ(OPN, SZ, FL) R16(DEF_ALU_T, OPN, SZ, FL) \
-    PH p_alu_ti_##OPN##_##SZ##FL(FXR_PARAMS) { ALU_BODY(OPN, SZ, ld##SZ(T), u->imm, st##SZ(T, r), FL) }
+    PH p_alu_ti_##OPN##_##SZ##FL(FXR_PARAMS) { ALU_BODY(OPN, SZ, ld##SZ(T), u->imm, st##SZ(T, r), FL, MKEEP_##FL) }
 #define DEF_ALU_FL(OPN, FL) DEF_ALU_SZ(OPN, 32, FL) DEF_ALU_SZ(OPN, 64, FL) \
     DEF_ALU_TSZ(OPN, 8, FL) DEF_ALU_TSZ(OPN, 16, FL) DEF_ALU_TSZ(OPN, 32, FL) DEF_ALU_TSZ(OPN, 64, FL)
 #define DEF_ALU(OPN) DEF_ALU_FL(OPN, F) DEF_ALU_FL(OPN, N)

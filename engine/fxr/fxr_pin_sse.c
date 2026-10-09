@@ -114,7 +114,7 @@
 
 #define DEF_XRR(S, D, OP) PH xr_##OP##_##D##_##S(FXR_PARAMS) { FxrV d_ = XD_##D, s_ = XS_##S; (void)d_; XW_##D(XO_##OP(d_, s_)); PNEXT(); }
 #define DEF_XRR_ROW(D, OP) X9B(DEF_XRR, D, OP)
-#define DEF_XRT(D, OP, W) PH xt_##OP##_##D(FXR_PARAMS) { FxrV d_ = XD_##D, s_ = xldn(T, W); (void)d_; XW_##D(XO_##OP(d_, s_)); PNEXT(); }
+#define DEF_XRT(D, OP, W) PH xt_##OP##_##D(FXR_PARAMS) { FxrV s_ = xldn(T, W); XKEEP_##D; FxrV d_ = XD_##D; (void)d_; XW_##D(XO_##OP(d_, s_)); PNEXT(); }
 #define DEF_XOP(OP, W) X9(DEF_XRR_ROW, OP) X9(DEF_XRT, OP, W)
 XLIST(DEF_XOP)
 #define DEF_XRONLY(OP) X9(DEF_XRR_ROW, OP)
@@ -127,8 +127,8 @@ XRLIST(DEF_XRONLY)
     PH xr_comiss_##D##_##S(FXR_PARAMS) { XCOMIS(F0, LF0(XD_##D), LF0(XS_##S)); PNEXT(); }  \
     PH xr_comisd_##D##_##S(FXR_PARAMS) { XCOMIS(F0, LD0(XD_##D), LD0(XS_##S)); PNEXT(); }
 #define DEF_XCOM_ROW(D, _) X9B(DEF_XCOM, D)                                                \
-    PH xt_comiss_##D(FXR_PARAMS) { XCOMIS(F0, LF0(XD_##D), LF0(xldn(T, 4))); PNEXT(); }    \
-    PH xt_comisd_##D(FXR_PARAMS) { XCOMIS(F0, LD0(XD_##D), LD0(xldn(T, 8))); PNEXT(); }
+    PH xt_comiss_##D(FXR_PARAMS) { FxrV s_ = xldn(T, 4); KEEP_F(); XCOMIS(F0, LF0(XD_##D), LF0(s_)); PNEXT(); } \
+    PH xt_comisd_##D(FXR_PARAMS) { FxrV s_ = xldn(T, 8); KEEP_F(); XCOMIS(F0, LD0(XD_##D), LD0(s_)); PNEXT(); }
 X9(DEF_XCOM_ROW, _)
 
 #define E_XRR(S, D, OP) xr_##OP##_##D##_##S,

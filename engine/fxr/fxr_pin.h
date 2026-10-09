@@ -296,6 +296,24 @@ typedef int8_t VS16 __attribute__((vector_size(16)));
 #define XW_6(v) (x6 = (v))
 #define XW_7(v) (x7 = (v))
 #define XW_M(v) xst(&c->xmm[u->dst], (v))
+// Exact faults (fxr_win_host_state): after a guest memory access, these keep a pinned value the
+// handler is about to overwrite (the flag words, an XMM destination) in its register until there,
+// so the compiler does not use that register as scratch before the access. They emit nothing.
+#if defined(__aarch64__)
+#define KEEP_X(X) __asm__ volatile("" : "+w"(X) :: "memory")
+#else
+#define KEEP_X(X) __asm__ volatile("" : "+x"(X) :: "memory")
+#endif
+#define KEEP_F() __asm__ volatile("" : "+r"(F0), "+r"(F1), "+r"(F2), "+r"(F3) :: "memory")
+#define XKEEP_0 KEEP_X(x0)
+#define XKEEP_1 KEEP_X(x1)
+#define XKEEP_2 KEEP_X(x2)
+#define XKEEP_3 KEEP_X(x3)
+#define XKEEP_4 KEEP_X(x4)
+#define XKEEP_5 KEEP_X(x5)
+#define XKEEP_6 KEEP_X(x6)
+#define XKEEP_7 KEEP_X(x7)
+#define XKEEP_M ((void)0)   // XMM8-15 are in the CPU structure
 
 #define LF0(v) (((VF)(v))[0])
 #define LD0(v) (((VD)(v))[0])
