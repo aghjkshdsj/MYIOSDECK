@@ -7,6 +7,7 @@
 # (one and several slices per disk) or inside the .exe, per-language files, {tmp} and
 # {commonappdata} files that must not land in the game folder, and an add-on installer.
 set -euo pipefail
+export MSYS2_ARG_CONV_EXCL="*"   # Git Bash must not turn ISCC's /Q into a path
 ISCC="${1:?ISCC.exe}"
 OUT="$(mkdir -p "${2:?out dir}" && cd "$2" && pwd)"
 WORK="$(mktemp -d)"

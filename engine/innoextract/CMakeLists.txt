@@ -69,6 +69,7 @@ file(GLOB IX_SOURCES
 list(REMOVE_ITEM IX_SOURCES
 	${IX_SRC}/src/cli/main.cpp      # the command line (Boost.ProgramOptions)
 	${IX_SRC}/src/cli/debug.cpp     # DEBUG builds only
+	${IX_SRC}/src/util/test.cpp     # innoextract's unit test runner
 	${IX_SRC}/src/util/windows.cpp) # Windows only
 file(GLOB BOOST_FS_SOURCES ${BOOST_SRC}/libs/filesystem/src/*.cpp)
 set(BOOST_IO_SOURCES
@@ -90,7 +91,7 @@ if(LZMA_INCLUDE)
 	target_include_directories(myiosdeck_inno SYSTEM PRIVATE ${LZMA_INCLUDE})
 endif()
 target_compile_definitions(myiosdeck_inno PRIVATE
-	NDEBUG BOOST_ALL_NO_LIB BOOST_SYSTEM_DISABLE_THREADS
+	NDEBUG MYIOSDECK_NO_PROCESSES BOOST_ALL_NO_LIB BOOST_SYSTEM_DISABLE_THREADS
 	BOOST_FILESYSTEM_STATIC_LINK=1 BOOST_IOSTREAMS_STATIC_LINK=1
 	MYIOSDECK_INNO_SHA="${INNO_SHA}")
 target_compile_options(myiosdeck_inno PRIVATE -O2 -g0 -Wno-deprecated-declarations)

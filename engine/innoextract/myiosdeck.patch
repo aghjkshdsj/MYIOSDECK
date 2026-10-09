@@ -90,3 +90,17 @@ index 37b113d..fc372cc 100644
  	
  	/*!
  	 * Construct a log line output stream.
+diff --git a/src/util/process.cpp b/src/util/process.cpp
+index 4ce48ec..90477e6 100644
+--- a/src/util/process.cpp
++++ b/src/util/process.cpp
+@@ -180,6 +180,9 @@ int run(const char * const args[]) {
+ 	
+ 	return 0;
+ 	
++#elif defined(MYIOSDECK_NO_PROCESSES)
++	(void)args;
++	return -1; // MYIOSDECK: an iOS app cannot start other programs
+ #else
+ 	return std::system(format_command_line(args).c_str());
+ #endif
