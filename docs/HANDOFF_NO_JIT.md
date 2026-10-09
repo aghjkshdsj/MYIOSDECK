@@ -195,12 +195,15 @@ sideload edition (FEX, ~90% of native) stays the full-speed option, from the sam
   brings back the busiest and any at 35%+ (fxi_win_host.c qos_update/qos_apply; the thread sets its
   own class on its next entry to x64; MYIOSDECK_ECORES=0 off); the profiler thread itself runs at
   utility. iOS offers only QoS hints, no core pinning; native-only threads keep their class.
-- **32-bit games without JIT**: not possible yet. Madeira runs them with JIT through WoW64
-  (docs/WOW64.md in Madeira: native aarch64 wow64.dll, FEX's xtajit.dll, every 32-bit process in a
-  4 GB guest window at host base B because XNU's hard 4 GB __PAGEZERO forbids low mappings). Our
-  IPA ships neither the i386 farm nor the aarch64 WoW64 side. Needed: those bundles (signed dylibs
-  for the aarch64 DLLs), a BTCpu* module in place of xtajit.dll, and an i386 mode in the
-  interpreter with every guest address at B + zext32(ea).
+- **32-bit games without JIT (branch `claude/wow64-nojit`, docs/NO_JIT_WOW64.md)**: WoW64 as in
+  Madeira (native aarch64 wow64.dll/ntdll, every 32-bit process in a 4 GB guest window at host
+  base B because XNU's hard 4 GB __PAGEZERO forbids low mappings), with our own CPU module in
+  place of FEX's xtajit.dll and FXI's i386 build (FXI32, every guest address at B + zext32(ea)).
+  Stage 1 (bundle): `wine-i386.yml` builds the i386 farm + DXMT i386; build-ipa converts
+  Madeira's aarch64 farm (125/135 files have 64 KB sections) into `PE/wine-a64`; the map hook
+  picks the dylib folder by image machine (AMD64 -> PE/wine, ARM64 -> PE/wine-a64, i386 never)
+  and never gives a guest-window page execute permission; Library > "Windows Hello (ARM64, no
+  JIT)" runs a plain aarch64 session. Next: FXI32 in CI, then the CPU module.
 - **Build 74 result (iPhone 15 Pro Max, JIT off)**: FXR 11.6% of native vs FXI 8.7% = **1.33x**
   (integer 20.3% vs 10.9%, float 9.9/8.3, memory 10.9/9.1, branch 8.5/8.5, simd 8.4/7.0), all
   checksums match. Branch-heavy code gains nothing yet (the indirect/jcc paths go through p_slow

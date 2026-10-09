@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // No-JIT step B test program: a Windows console program built as ARM64EC (llvm-mingw, normal
 // CRT), so Wine can run it with no x64 CPU. Everything it does goes through Wine's own DLLs
-// (kernel32, kernelbase, ucrtbase, ntdll) running from signed dylibs.
+// (kernel32, kernelbase, ucrtbase, ntdll) running from signed dylibs. Also built as plain ARM64
+// (hello-aarch64.exe): an aarch64 Wine session, the 64-bit half of a WoW64 process
+// (docs/NO_JIT_WOW64.md, stage 1).
 //
 // Its report goes to the console AND to C:\myiosdeck-output.txt, which the app copies into
 // its log after the program exits (WineController.watch), and it exits with 42 when main
@@ -22,8 +24,14 @@ static void say(const char *fmt, ...) {
     if (n > 0) report_len += (size_t)n < sizeof report - report_len ? (size_t)n : sizeof report - report_len - 1;
 }
 
+#ifdef _M_ARM64EC
+#define HELLO_ARCH "ARM64EC"
+#else
+#define HELLO_ARCH "ARM64"
+#endif
+
 int main(void) {
-    say("Hello from Windows (ARM64EC) on iPhone, without JIT!\r\n");
+    say("Hello from Windows (" HELLO_ARCH ") on iPhone, without JIT!\r\n");
     SYSTEM_INFO si;
     GetNativeSystemInfo(&si);
     say("processors: %lu, page size: %lu\r\n", si.dwNumberOfProcessors, si.dwPageSize);

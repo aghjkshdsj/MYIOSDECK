@@ -18,6 +18,9 @@ final class WineController: ObservableObject, @unchecked Sendable {
         /// The program file when it differs from id (one exe, two list entries).
         var exeName: String? = nil
         var exe: String { exeName ?? id }
+        /// A plain ARM64 program: an aarch64 Wine session (the aarch64 DLL farm), as the 64-bit
+        /// half of a 32-bit (WoW64) process runs (docs/NO_JIT_WOW64.md).
+        var aarch64 = false
     }
 
     /// The signed Wine dylibs (engine/pedylib), present when CI converted the DLL farm.
@@ -25,11 +28,16 @@ final class WineController: ObservableObject, @unchecked Sendable {
     static var noJITWineAvailable: Bool {
         FileManager.default.fileExists(atPath: peWineDir + "/libntdll.dll.dylib")
     }
+    /// The aarch64 farm as signed dylibs: Wine maps aarch64 images from here (nojit_dylib.py).
+    static let peWineA64Dir = Bundle.main.bundlePath + "/PE/wine-a64"
 
     /// Madeira's test programs, shipped in the ARM64EC DLL farm.
     static let programs = [
         Program(id: "hello-arm64ec.exe", title: "Windows Hello (ARM64EC, no JIT)",
                 detail: "Wine from signed dylibs, no JIT needed: native Windows ARM code only", noJIT: true),
+        Program(id: "hello-aarch64.exe", title: "Windows Hello (ARM64, no JIT)",
+                detail: "An aarch64 Wine session from signed dylibs: the 64-bit half of 32-bit games", noJIT: true,
+                aarch64: true),
         Program(id: "hello-x64-nojit", title: "Windows Hello (x64, no JIT)",
                 detail: "x64 code interpreted by FXI inside Wine: the App Store path", noJIT: true,
                 exeName: "hello-x64.exe"),
@@ -188,12 +196,17 @@ final class WineController: ObservableObject, @unchecked Sendable {
             guard Self.noJITWineAvailable else {
                 return refuse("This build has no signed Wine DLLs (no-JIT Wine).")
             }
+            if program.aarch64 && !FileManager.default.fileExists(atPath: Self.peWineA64Dir + "/libntdll.dll.dylib") {
+                return refuse("This build has no signed aarch64 Wine DLLs.")
+            }
             setenv("WINE_IOS_NOJIT", "1", 1)
             setenv("MYIOSDECK_PE_DIR", Self.peWineDir, 1)
+            setenv("MYIOSDECK_PE_DIR_A64", Self.peWineA64Dir, 1)
             setenv("MYIOSDECK_NOJIT_EMULATOR", Self.peWineDir + "/xtajit64.dll", 1)
-            setenv("MADEIRA_USE_ARM64EC", "1", 1)
+            // An aarch64 program gets Madeira's plain aarch64 session (its exe name picks it).
+            if program.aarch64 { unsetenv("MADEIRA_USE_ARM64EC") } else { setenv("MADEIRA_USE_ARM64EC", "1", 1) }
             setenv("MYIOSDECK_NOJIT_TRACE", CrashReporter.nojitTraceURL.path, 1)
-            dlog("[wine] no-JIT session: DLLs from \(Self.peWineDir)")
+            dlog("[wine] no-JIT session: DLLs from \(Self.peWineDir)\(program.aarch64 ? " (aarch64: \(Self.peWineA64Dir))" : "")")
             // Settings › Without JIT › game audio off: no audio endpoints, so the game's audio
             // engine (decoding and mixing in the interpreter) does not run.
             if UserDefaults.standard.bool(forKey: "noJITMuteAudio") {
@@ -210,8 +223,9 @@ final class WineController: ObservableObject, @unchecked Sendable {
                 unsetenv("MYIOSDECK_WIN_CPU")
             }
         } else {
-            for k in ["WINE_IOS_NOJIT", "MYIOSDECK_PE_DIR", "MYIOSDECK_NOJIT_EMULATOR", "WINEDLLOVERRIDES", "MYIOSDECK_WIN_CPU"] { unsetenv(k) }
-            if program.noJIT { setenv("MADEIRA_USE_ARM64EC", "1", 1) }
+            for k in ["WINE_IOS_NOJIT", "MYIOSDECK_PE_DIR", "MYIOSDECK_PE_DIR_A64", "MYIOSDECK_NOJIT_EMULATOR",
+                      "WINEDLLOVERRIDES", "MYIOSDECK_WIN_CPU"] { unsetenv(k) }
+            if program.aarch64 { unsetenv("MADEIRA_USE_ARM64EC") } else if program.noJIT { setenv("MADEIRA_USE_ARM64EC", "1", 1) }
         }
         // A Dock session publishes no fixed Steam game identity: Madeira's bridge otherwise sets
         // SteamAppId/SteamGameId/SteamAppPath (its Thumper fallback) for every launch, and in

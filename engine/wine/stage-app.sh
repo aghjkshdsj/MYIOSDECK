@@ -72,7 +72,11 @@ srcs = ["WineProcessBridge.m", "WineServerBridge.m", "IOSDisplayShim.m", "PadOut
         "PrefixExtractor.c", "wine_stubs.c", "Winios/Winios.m", "Winios/WiniosGamepad.c",
         "Winios/WiniosCursor.c"]
 lines = [f"      - path: {base}{f}" for f in srcs]
-for d in ["arm64ec-windows", "nls"]:
+# aarch64-windows and i386-windows: 32-bit games (WoW64, docs/NO_JIT_WOW64.md). Madeira's launch
+# path takes a 32-bit target's session from the aarch64 farm and links syswow64 to the i386 farm
+# (filled by build-ipa.yml from wine-i386.yml; without it, i386-windows holds only .gitkeep and
+# no target is treated as 32-bit).
+for d in ["arm64ec-windows", "aarch64-windows", "i386-windows", "nls"]:
     lines += [f"      - path: {base}{d}", "        type: folder", "        buildPhase: resources"]
 lines += [f"      - path: {base}prefix-template.tar.gz", "        buildPhase: resources"]
 s = open(p).read()
@@ -81,4 +85,5 @@ s = s.replace("      # @WINE_SOURCES@", "\n".join(lines))
 open(p, "w").write(s)
 PY
 cat "$ROOT/Config/Wine.xcconfig"
-du -sh "$A/arm64ec-windows" "$A/nls"
+mkdir -p "$A/i386-windows"
+du -sh "$A/arm64ec-windows" "$A/aarch64-windows" "$A/i386-windows" "$A/nls"

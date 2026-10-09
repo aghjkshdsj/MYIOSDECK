@@ -18,6 +18,12 @@ Wine without JIT); with JIT, nothing changes. Three hooks in build/ntdll-unix/vi
                       the request without PROT_EXEC. Nothing reaches the JIT pool.
   eager JIT copy      skipped for these images.
 
+The PE dir depends on the image's machine (docs/NO_JIT_WOW64.md 2.9): a WoW64 session has an
+ARM64EC, an aarch64 and an i386 ntdll.dll. ARM64EC images (machine AMD64) come from
+MYIOSDECK_PE_DIR as always, aarch64 images from MYIOSDECK_PE_DIR_A64, i386 images never from a
+dylib (they are data inside a 32-bit process's guest window, decoded by the interpreter), and
+no page inside a guest window is ever given execute permission.
+
 Usage: nojit_dylib.py <madeira checkout>. Idempotent (marker line).
 """
 import sys
@@ -31,6 +37,7 @@ HELPERS = MARK + r'''
 struct ios_nojit_image
 {
     char  name[64];
+    unsigned short machine;   /* IMAGE_FILE_MACHINE_AMD64 (ARM64EC) or _ARM64: names repeat across them */
     char *base;   /* PE image (headers + code in signed __TEXT) */
     char *data;   /* first __DATA byte: everything below is code/headers, never written */
     size_t size;
@@ -113,6 +120,20 @@ static int ios_nojit_mprotect( void *base, size_t size, int unix_prot, int *ret 
         static int announced;
         if (!announced++) ios_nojit_trace( "[nojit] ntdll unix side: no-JIT mode active (first protection change)\n" );
     }
+    /* A 32-bit process's guest window (docs/NO_JIT_WOW64.md): x86 code there is data the
+     * interpreter decodes, so an executable request is plain memory (PAGE_EXECUTE alone is
+     * readable, as Madeira's ml1030 does), and none of Madeira's JIT-pool paths for window pages
+     * is reached. Only a WoW64 process has a window. */
+    if (ios_wow_in_window( base ))
+    {
+        if (unix_prot & PROT_EXEC)
+        {
+            unix_prot &= ~PROT_EXEC;
+            if (!unix_prot) unix_prot = PROT_READ;
+        }
+        *ret = mprotect( base, size, unix_prot );
+        return 1;
+    }
     if (!(im = ios_nojit_find( base )))
     {
         /* Executable memory outside the signed images would need the JIT pool, which a
@@ -167,11 +188,15 @@ static void ios_nojit_install_fxi( struct ios_nojit_image *im )
     ios_nojit_trace( "[nojit] xtajit64.dll: no MyiosdeckFxiHost export -- x64 code cannot run\n" );
 }
 
-/* Find (and dlopen once) the signed dylib for an image. Called outside virtual_mutex. */
-static struct ios_nojit_image *ios_nojit_load( const UNICODE_STRING *nt_name )
+/* Find (and dlopen once) the signed dylib for an image. Called outside virtual_mutex.
+ * The dylib folder follows the image's machine: ARM64EC images (machine AMD64) from
+ * MYIOSDECK_PE_DIR, aarch64 images (a WoW64 session's 64-bit half) from MYIOSDECK_PE_DIR_A64;
+ * i386 images are never signed code (data in a guest window, docs/NO_JIT_WOW64.md). */
+static struct ios_nojit_image *ios_nojit_load( const UNICODE_STRING *nt_name, unsigned short machine )
 {
     extern int ios_teb_tls_slot_offset;
-    const char *dir = getenv( "MYIOSDECK_PE_DIR" );
+    const char *dir = machine == IMAGE_FILE_MACHINE_AMD64 ? getenv( "MYIOSDECK_PE_DIR" ) :
+                      machine == IMAGE_FILE_MACHINE_ARM64 ? getenv( "MYIOSDECK_PE_DIR_A64" ) : NULL;
     char name[64], path[1024];
     unsigned int i, start = 0, len = nt_name->Length / sizeof(WCHAR), n = 0;
     struct ios_nojit_image *im = NULL;
@@ -196,7 +221,7 @@ static struct ios_nojit_image *ios_nojit_load( const UNICODE_STRING *nt_name )
         struct ios_nojit_image *first = NULL;
         for (i = 0; i < (unsigned int)ios_nojit_count; i++)
         {
-            if (strcmp( ios_nojit_images[i].name, name )) continue;
+            if (ios_nojit_images[i].machine != machine || strcmp( ios_nojit_images[i].name, name )) continue;
             if (!first) first = &ios_nojit_images[i];
             if (!ios_nojit_images[i].mapped) { im = &ios_nojit_images[i]; break; }
         }
@@ -212,7 +237,8 @@ static struct ios_nojit_image *ios_nojit_load( const UNICODE_STRING *nt_name )
             struct ios_nojit_pe_instance in;
             char err[256];
             int k = 1;
-            for (i = 0; i < (unsigned int)ios_nojit_count; i++) k += !strcmp( ios_nojit_images[i].name, name );
+            for (i = 0; i < (unsigned int)ios_nojit_count; i++)
+                k += ios_nojit_images[i].machine == machine && !strcmp( ios_nojit_images[i].name, name );
             if (ios_nojit_count >= (int)(sizeof(ios_nojit_images) / sizeof(ios_nojit_images[0])) ||
                 !mid_pe_dylib_instance( first->handle, path, &in, err, sizeof(err) ))
             {
@@ -224,6 +250,7 @@ static struct ios_nojit_image *ios_nojit_load( const UNICODE_STRING *nt_name )
             *in.teb_offset = ios_teb_tls_slot_offset;
             im = &ios_nojit_images[ios_nojit_count];
             snprintf( im->name, sizeof(im->name), "%s", name );
+            im->machine = machine;
             im->base = in.image;
             im->data = in.data;
             im->size = in.end - in.image;
@@ -256,14 +283,16 @@ static struct ios_nojit_image *ios_nojit_load( const UNICODE_STRING *nt_name )
     *teb_off = ios_teb_tls_slot_offset;   /* x18 trampolines read the TEB from this TSD slot */
     im = &ios_nojit_images[ios_nojit_count];
     snprintf( im->name, sizeof(im->name), "%s", name );
+    im->machine = machine;
     im->base = img;
     im->data = data;
     im->size = end - img;
     im->handle = h;
     __atomic_store_n( &ios_nojit_count, ios_nojit_count + 1, __ATOMIC_RELEASE );
     pthread_mutex_unlock( &ios_nojit_lock );
-    ios_nojit_trace( "[nojit] %s: signed image %p+0x%lx (code+headers 0x%lx), TEB slot offset 0x%x\n",
-             name, img, (unsigned long)im->size, (unsigned long)(data - img), ios_teb_tls_slot_offset );
+    ios_nojit_trace( "[nojit] %s: signed image %p+0x%lx (code+headers 0x%lx), TEB slot offset 0x%x%s\n",
+             name, img, (unsigned long)im->size, (unsigned long)(data - img), ios_teb_tls_slot_offset,
+             machine == IMAGE_FILE_MACHINE_ARM64 ? " (aarch64)" : "" );
     if (!ios_teb_tls_slot_offset) ios_nojit_trace( "[nojit] WARNING: TEB TSD slot not known yet\n" );
     if (!strcmp( name, "xtajit64.dll" )) ios_nojit_install_fxi( im );
     return im;
@@ -367,7 +396,7 @@ def main():
              "    status = map_image_view( &view, image_info, size, limit_low, limit_high, alloc_type, is_builtin );\n")
     s = sub(s, enter,
             "    struct ios_nojit_image *nojit = NULL;\n"
-            "    if (ios_nojit_enabled() && nt_name && !offset) nojit = ios_nojit_load( nt_name );\n\n"
+            "    if (ios_nojit_enabled() && nt_name && !offset) nojit = ios_nojit_load( nt_name, image_info->machine );\n\n"
             "    server_enter_uninterrupted_section( &virtual_mutex, &sigset );\n\n"
             "    if (nojit)\n"
             "    {\n"

@@ -1,0 +1,82 @@
+name: Stage 2b - Wine i386 farm (WoW64)
+
+# 32-bit games (docs/NO_JIT_WOW64.md, stage 1): Wine's i386 DLLs, DXMT's i386 D3D DLLs and
+# Madeira's hello-x86.exe (engine/wine/build-i386.sh). build-ipa.yml bundles the newest successful
+# set as i386-windows (C:\windows\syswow64 in a session). Runs when the build script or a pin
+# changes; the artifact is kept for build-ipa.yml.
+on:
+  push:
+    branches: ["main", "claude/**"]
+    paths: ["engine/wine/build-i386.sh", "engine/wine/PIN", "engine/dxmt/PIN", ".github/workflows/wine-i386.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: wine-i386-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  i386-farm:
+    runs-on: macos-26
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Host tools
+        run: |
+          brew install bison flex meson ninja || true
+          xcodebuild -version
+          xcodebuild -downloadComponent MetalToolchain > /dev/null 2>&1 || true
+          sysctl -n hw.ncpu
+
+      # The Wine stage's checkout (Madeira, its Wine fork, llvm-mingw) as a head start; nothing
+      # is saved back (the i386 tree is large and rebuilt only when a pin changes).
+      - name: Restore checkout
+        uses: actions/cache/restore@v4
+        with:
+          path: engine/wine/madeira
+          key: wine-i386-${{ hashFiles('engine/wine/PIN', 'engine/dxmt/PIN') }}-none
+          restore-keys: |
+            dxmt-pe-${{ hashFiles('engine/wine/PIN', 'engine/dxmt/PIN') }}-v1-
+            wine-unix-${{ hashFiles('engine/wine/PIN') }}-v1-
+
+      - name: Fetch Madeira, Wine fork, DXMT
+        run: bash engine/wine/build-i386.sh fetch
+
+      - name: Wine i386 modules
+        run: bash engine/wine/build-i386.sh wine
+
+      - name: DXMT i386 (d3d11, dxgi, d3d10core, winemetal, d3d9 shim + frontend)
+        run: bash engine/wine/build-i386.sh dxmt
+
+      - name: hello-x86.exe
+        run: bash engine/wine/build-i386.sh extras
+
+      # Fails on a missing import: a 32-bit program that imports one missing DLL never starts.
+      - name: Collect and check imports
+        run: |
+          set -o pipefail
+          bash engine/wine/build-i386.sh collect 2>&1 | tee collect.log
+          {
+            echo "## Wine i386 farm (WoW64)"
+            echo "- Wine $(git -C engine/wine/madeira/wine rev-parse --short HEAD), DXMT $(git -C engine/wine/madeira/dxmt rev-parse --short HEAD)"
+            grep -E '^== ' collect.log | sed 's/^== /- /; s/ ==$//'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: wine-i386-farm
+          path: engine/wine/out-i386/i386-windows
+          retention-days: 90
+
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: wine-i386-logs
+          path: |
+            engine/wine/madeira/wine/build-i386/*.log
+            engine/wine/madeira/dxmt/build-pe-i386-v1/meson-logs/*.txt
+          if-no-files-found: ignore

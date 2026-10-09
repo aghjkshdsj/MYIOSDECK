@@ -159,6 +159,39 @@ jobs:
           fi
           echo "- No-JIT Wine: $ok PE files as signed dylibs, $skip not converted" | tee -a "$GITHUB_STEP_SUMMARY"
 
+      # 32-bit games (WoW64, docs/NO_JIT_WOW64.md stage 1): a 32-bit process's 64-bit half runs on
+      # Madeira's aarch64 farm, which becomes signed dylibs like the ARM64EC farm (PE/wine-a64;
+      # Wine maps aarch64 images from there, nojit_dylib.py). The i386 farm (wine-i386.yml) is
+      # data, bundled as it is. FEX's xtajit.dll (the WoW64 CPU with JIT) is not converted.
+      - name: WoW64 farms (aarch64 as signed dylibs, i386)
+        if: steps.wine.outcome == 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          A64=engine/wine/madeira/app/Madeira/aarch64-windows
+          mkdir -p App/Generated/pedylib/wine-a64
+          ok=0; skip=0
+          for f in "$A64"/*; do
+            [ -f "$f" ] || continue
+            [ "$(basename "$f")" = xtajit.dll ] && continue
+            if python3 engine/pedylib/pe2dylib.py convert --strict --keep-ext "$f" App/Generated/pedylib/wine-a64 > /dev/null 2>&1; then
+              ok=$((ok + 1))
+            else
+              skip=$((skip + 1)); echo "aarch64 not converted: $(basename "$f")"
+            fi
+          done
+          [ -f App/Generated/pedylib/winepe-a64/hello-aarch64.exe ] && cp App/Generated/pedylib/winepe-a64/hello-aarch64.exe "$A64/"
+          echo "- WoW64 host side: $ok aarch64 PE files as signed dylibs, $skip not converted ($(du -sh "$A64" | cut -f1) farm)" | tee -a "$GITHUB_STEP_SUMMARY"
+          I386=engine/wine/madeira/app/Madeira/i386-windows
+          mkdir -p "$I386"
+          I386_RUN=$(bash tools/latest-run.sh wine-i386.yml || true)
+          if [ -n "$I386_RUN" ] && gh run download "$I386_RUN" -R "$GITHUB_REPOSITORY" -n wine-i386-farm -D "$I386"; then
+            echo "- WoW64 i386 farm: run $I386_RUN, $(ls "$I386" | wc -l | tr -d ' ') files, $(du -sh "$I386" | cut -f1)" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- WoW64 i386 farm: none yet (wine-i386.yml): no target is treated as 32-bit" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Build without Wine
         if: steps.wine.outcome != 'success'
         run: |
@@ -194,6 +227,10 @@ jobs:
             bash engine/pedylib/link-dylibs.sh App/Generated/pedylib/wine App/Generated/PE/wine ||
               echo "::warning::Wine dylibs did not link; this IPA cannot run Wine without JIT."
             cp App/Generated/pedylib/winepe/xtajit64.dll App/Generated/PE/wine/ 2>/dev/null || true
+          fi
+          if [ -d App/Generated/pedylib/wine-a64 ] && ls App/Generated/pedylib/wine-a64/*.S > /dev/null 2>&1; then
+            bash engine/pedylib/link-dylibs.sh App/Generated/pedylib/wine-a64 App/Generated/PE/wine-a64 ||
+              echo "::warning::aarch64 Wine dylibs did not link; this IPA cannot run 32-bit games or aarch64 programs without JIT."
           fi
 
       - name: Generate Xcode project
@@ -246,7 +283,10 @@ jobs:
             echo "- Wine (stage 2): ${{ steps.wine.outcome }}"
             echo "- DXMT (stage 3): ${{ steps.dxmt.outcome }}"
             echo "- No-JIT spike DLLs (signed dylibs): $PEDYLIBS"
-            echo "- Size: $(du -h "$NAME" | cut -f1)"
+            echo "- Size: $(du -h "$NAME" | cut -f1) (app $(du -sh Payload/MYIOSDECK.app | cut -f1))"
+            for d in arm64ec-windows aarch64-windows i386-windows PE/wine PE/wine-a64; do
+              if [ -d "Payload/MYIOSDECK.app/$d" ]; then echo "  - $d: $(du -sh "Payload/MYIOSDECK.app/$d" | cut -f1)"; fi
+            done
           } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v5

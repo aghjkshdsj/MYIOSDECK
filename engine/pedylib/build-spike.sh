@@ -67,6 +67,13 @@ build_wine_extras() {
     for f in "$OUT/winepe/xtajit64.dll" "$OUT/winepe/hello-arm64ec.exe"; do
         python3 "$HERE/pe2dylib.py" convert --strict --keep-ext "$f" "$OUT/wine" | tail -3
     done
+    # The same hello as plain ARM64: an aarch64 Wine session, the 64-bit half of every WoW64
+    # (32-bit) process (docs/NO_JIT_WOW64.md). Its dylib goes with the aarch64 farm's (wine-a64).
+    mkdir -p "$OUT/winepe-a64" "$OUT/wine-a64"
+    aarch64-w64-mingw32-clang -O2 -fno-stack-protector -Wl,--section-alignment=0x4000 \
+        -o "$OUT/winepe-a64/hello-aarch64.exe" "$HERE/hello/hello-arm64ec.c"
+    llvm-readobj --file-headers --coff-imports "$OUT/winepe-a64/hello-aarch64.exe" | grep -E 'Machine|Name:' | head -20 || true
+    python3 "$HERE/pe2dylib.py" convert --strict --keep-ext "$OUT/winepe-a64/hello-aarch64.exe" "$OUT/wine-a64" | tail -3
     # The x64 test suite for FXI inside Wine (step D): plain x86-64, its code is interpreted.
     x86_64-w64-mingw32-clang -O2 -c -o "$B/suite-x64.o" "$HERE/hello/suite-x64.c"
     x86_64-w64-mingw32-clang++ -O2 -c -o "$B/suite-x64-cxx.o" "$HERE/hello/suite-x64-cxx.cpp"
