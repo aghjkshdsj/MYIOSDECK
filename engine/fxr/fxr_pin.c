@@ -197,6 +197,16 @@ static void replicate(Uop *u, int M, int copies) {
     free(k);
 }
 
+// Diagnostic knobs, for A/B runs in CI (the defaults are what ships): FXR_TRACES=0 no loop traces,
+// FXR_TRACE_UOPS=n the uop budget for a trace's copies, FXR_REPLICAS=0 no handler replicas.
+static int g_traces = 1, g_trace_uops = 48, g_replicas = 1;
+static void knobs(void) {
+    const char *e;
+    if ((e = getenv("FXR_TRACES"))) g_traces = atoi(e);
+    if ((e = getenv("FXR_TRACE_UOPS"))) g_trace_uops = atoi(e);
+    if ((e = getenv("FXR_REPLICAS"))) g_replicas = atoi(e);
+}
+
 static void init_desc(void) {
     for (int cc = 0; cc < 16; cc++)
         for (int i = 0; i < 16; i++)
@@ -255,6 +265,7 @@ static void init_desc(void) {
     };
     for (size_t i = 0; i < sizeof xnamed / sizeof xnamed[0]; i++) put(fxi_named(xnamed[i].n), FAM_XS, (uint8_t)xnamed[i].id, 0, 0, 0);
     rmap_init();
+    knobs();
 }
 
 static int greg(unsigned off) { return (off & 7) == 0 && off < 128 ? (int)(off >> 3) : -1; }   // pinnable GPR
@@ -704,13 +715,13 @@ static void lower_block(Out *o, const Block *b) {
 
 // ---- Loop traces (superblocks) ----
 // When a block starts a loop, its blocks along the path back to it are laid out one after another
-// (a trace), in several copies while they fit in TRACE_UOPS uops, then the flag stubs. Each edge
+// (a trace), in several copies while they fit in 48 uops (g_trace_uops), then the flag stubs. Each edge
 // along the trace (to the next block, or from the last block back to the first) leads to the next
 // uop, which the branch handlers reach with an add instead of loading the link (PCHAIN_T,
 // fxr_pin.h); only the last copy's edge back to the start loads it. Every guest instruction and
 // every branch of every iteration still runs as before: an exit leaves from whichever copy it is
 // in, and the blocks also exist on their own for entries from elsewhere.
-enum { TRACE_SEGS = 4, TRACE_UOPS = 48, TRACE_COPIES = 8, TRACE_MAX = 160, LOOP_SCAN = 1024 };
+enum { TRACE_SEGS = 4, TRACE_COPIES = 8, TRACE_MAX = 160, LOOP_SCAN = 1024 };   // copies: g_trace_uops (48) uops
 
 // Is rip a loop head: does a direct branch (jcc, jmp; rel8 or rel32) in the LOOP_SCAN bytes after
 // it jump back to it? A scan of the raw bytes: a false match only costs a search that finds no
@@ -772,7 +783,7 @@ static int find_trace(struct Fxi *vm, Block *b, Block **seg, int *edge) {
 Block *fxr_lower(struct Fxi *vm, Block *b) {
     pthread_once(&g_once, init_desc);
     Block *seg[TRACE_SEGS];
-    int edge[TRACE_SEGS], ns = find_trace(vm, b, seg, edge), nseg = ns ? ns : 1;
+    int edge[TRACE_SEGS], ns = g_traces ? find_trace(vm, b, seg, edge) : 0, nseg = ns ? ns : 1;
     if (!ns) seg[0] = b;
     Out o[TRACE_SEGS];
     int m[TRACE_SEGS], off[TRACE_SEGS], soff[TRACE_SEGS], M = 0, S = 0;
@@ -794,7 +805,7 @@ Block *fxr_lower(struct Fxi *vm, Block *b) {
         nseg = 1; M = m[0]; S = o[0].np;
     }
     int copies = 1;
-    if (ns) { copies = TRACE_UOPS / M; if (copies > TRACE_COPIES) copies = TRACE_COPIES; if (copies < 1) copies = 1; }
+    if (ns) { copies = g_trace_uops / M; if (copies > TRACE_COPIES) copies = TRACE_COPIES; if (copies < 1) copies = 1; }
     if (copies > 1 && (copies & 1)) copies--;   // even: the replicas alternate between copies (replicate)
     uint32_t n = (uint32_t)(copies * M + S);
     Block *nb = malloc(sizeof(Block) + sizeof(Uop) * n);
@@ -818,7 +829,7 @@ Block *fxr_lower(struct Fxi *vm, Block *b) {
                 if (edge[i]) t->ulink2 = to; else t->ulink = to;
             }
         }
-    replicate(nb->u, M, copies);
+    if (g_replicas) replicate(nb->u, M, copies);
     for (int i = 0; i < nseg; i++) { free(o[i].out); free(seg[i]); }
     return nb;
 }
