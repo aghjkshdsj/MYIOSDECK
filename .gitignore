@@ -21,3 +21,6 @@ engine/wine/obj-wineserver/
 engine/wine/out/
 engine/dxmt/madeira/
 engine/dxmt/out/
+engine/innoextract/src/
+engine/innoextract/deps/
+engine/innoextract/build-ios/

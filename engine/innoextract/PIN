@@ -1,0 +1,12 @@
+# innoextract: Inno Setup unpacker by Daniel Scharrer (zlib license). MYIOSDECK unpacks GOG
+# offline installers (setup_<game>.exe + setup_<game>-N.bin) with it on the phone.
+# Bump SHA to update (myiosdeck.patch must still apply); CI caches the build by this file.
+REPO=https://github.com/dscharrer/innoextract.git
+SHA=6e9e34ed0876014fdb46e684103ef8c3605e382e
+# Boost (BSL-1.0): headers, plus Boost.Filesystem and Boost.Iostreams' zlib/bzip2 filters compiled
+# into the same library. Same version as Ubuntu 24.04's packages (the CI test's reference build).
+BOOST_URL=https://archives.boost.io/release/1.83.0/source/boost_1_83_0.tar.bz2
+BOOST_SHA256=6478edfe2f3305127cffe8caf73ea0176c53769f4bf1585be237eb30798c3b8e
+# xz (liblzma): headers only. iOS ships liblzma (the SDK has liblzma.tbd) but not lzma.h.
+XZ_REPO=https://github.com/tukaani-project/xz.git
+XZ_SHA=061a1e4d2d0b1c3f5c9a637fd94bac035a826340
