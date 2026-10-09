@@ -363,7 +363,9 @@ static int decode_one_inner(Dec *d) {
         else break;
         d->p++;
     }
-    if ((b & 0xf0) == 0x40) {
+    // Only the REX prefix right before the opcode counts; an earlier one is ignored (MSVC's
+    // unwinder-friendly tail jump is "48 41 ff e2", rex.w then rex.b jmp r10: Valve's client).
+    while ((b & 0xf0) == 0x40) {
         d->rex = 1; d->rexw = (b >> 3) & 1; d->rexr = (b >> 2) & 1; d->rexx = (b >> 1) & 1; d->rexb = b & 1;
         d->p++; b = *d->p;
     }
@@ -817,7 +819,7 @@ int fxi_insn_length(const uint8_t *p, int *op_end) {
         else break;
         if (p - s > 14) return 0;
     }
-    if ((*p & 0xf0) == 0x40) { rexw = (*p >> 3) & 1; p++; }
+    while ((*p & 0xf0) == 0x40) { rexw = (*p >> 3) & 1; p++; }   // the last REX counts
     int immz = osz16 ? 2 : 4, has_modrm = 0, imm = 0, map = 0;
     uint8_t b = *p++;
     if (b == 0xc4 || b == 0xc5 || b == 0x62) {   // VEX / EVEX
