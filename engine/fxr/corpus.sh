@@ -51,7 +51,7 @@ function reg64(o) {   # canonical register for dependency checks ("" for non-reg
     if (o ~ /\[/ || o ~ /^(0x|-?[0-9])/) return ""
     sub(/^e/, "r", o); sub(/[dwb]$/, "", o); return o
 }
-/^@@FILE/ { mode = 1; delete endat; active = -1; prev = ""; prev2 = ""; next }
+/^@@FILE/ { mode = 1; delete endat; active = -1; prev = ""; prev2 = ""; p_movd = ""; pp_movd = ""; next }
 /^@@DIS/ { mode = 2; next }
 mode == 1 { endat[$1] = $2; next }
 mode == 2 && /^ *[0-9a-f]+:\t/ {
@@ -59,7 +59,7 @@ mode == 2 && /^ *[0-9a-f]+:\t/ {
     av = hex(a)
     if ((av "") in endat && endat[av ""] > active) active = endat[av ""]
     inloop = av <= active
-    if (ins == "" || ins ~ /^(\(bad\)|data16|nop|xchg   ax,ax|int3)/) { prev = ""; prev2 = ""; next }
+    if (ins == "" || ins ~ /^(\(bad\)|data16|nop|xchg   ax,ax|int3)/) { prev = ""; prev2 = ""; p_movd = ""; pp_movd = ""; next }
     n = index(ins, " "); mn = n ? substr(ins, 1, n - 1) : ins; ops = n ? substr(ins, n) : ""
     gsub(/^ +/, "", ops); gsub(/(QWORD|DWORD|WORD|BYTE|XMMWORD) PTR /, "", ops); sub(/ +<.*$/, "", ops)
     if (mn ~ /^(rep|repz|repnz|lock|bnd|notrack|cs|ds)$/) { mn = mn " " ops; ops = "" }
@@ -111,10 +111,16 @@ mode == 2 && /^ *[0-9a-f]+:\t/ {
         else if (fam ~ /loop step/) sub_ = (shape ~ /,i$/) ? "  loop step: cmp with an immediate" : "  loop step: cmp with a register"
         else if (fam ~ /^ALU reg ; jcc/) sub_ = (prev ~ /,i$/) ? "  ALU reg ; jcc: immediate operand" : (prev ~ /^(inc|dec)/ ? "  ALU reg ; jcc: inc/dec" : "  ALU reg ; jcc: register operand")
         if (sub_ != "") { famc[sub_]++; if (inloop) lfamc[sub_]++ }
+        # the 3-operand pair with one independent register-only instruction between: mov D,S ; x ; op D,imm
+        if (pp_movd != "" && p_regonly && p_r1 != pp_movd && p_r2 != pp_movd && reg64(d) == pp_movd &&
+            mn ~ /^(add|sub|and|or|xor|shl|shr|sar|rol|ror)$/ && shape ~ /,i$/) {
+            k3 = "mov r,r ; independent reg op ; ALU/shift imm same dst (3-operand across one)"; famc[k3]++; if (inloop) lfamc[k3]++ }
     }
     pmn = mn
-    if (mn ~ /^(j|call|ret|jmp|ud2|hlt)/) { prev = ""; prev2 = ""; next }
+    if (mn ~ /^(j|call|ret|jmp|ud2|hlt)/) { prev = ""; prev2 = ""; p_movd = ""; pp_movd = ""; next }
     prev2 = (prev == "" ? "" : prev); prev = shape; pd = (mn ~ /^(push|cmp|test)/) ? "" : reg64(d)
+    pp_movd = p_movd; p_movd = shape ~ /^mov r(32|64),r(32|64)$/ ? reg64(d) : ""
+    p_regonly = ops !~ /\[/ && mn !~ /^(push|pop|lea|cmov)/; p_r1 = reg64(d); p_r2 = reg64(s)
 }
 END {
     printf "instructions: %d, in loop bodies: %d\n\n", total, ltotal
