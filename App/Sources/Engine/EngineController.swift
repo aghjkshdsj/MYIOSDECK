@@ -65,6 +65,8 @@ final class EngineController: ObservableObject, @unchecked Sendable {
     @Published private(set) var state: State = .notStarted
     @Published private(set) var lastRun: GuestRun?
     @Published private(set) var bench: [BenchResult] = []
+    /// The held-out set (engine/guest/heldout.c, frozen): no-JIT engines only, reduced workload.
+    @Published private(set) var heldout: [BenchResult] = []
     @Published private(set) var busy: String?
     @Published private(set) var lastReportURL: URL?
 
@@ -115,7 +117,9 @@ final class EngineController: ObservableObject, @unchecked Sendable {
     func runBenchmarks(fex: Bool, interpreter: Bool, presetName: String) {
         let (ptr, len) = guest { mid_guest_bench($0) }
         let (iptr, ilen) = guest { mid_guest_bench_sse2($0) }
+        let (hptr, hlen) = guest { mid_guest_heldout($0) }
         work("Benchmarking") {
+            DispatchQueue.main.async { self.heldout = [] }
             var results: [BenchResult] = []
             for i in 0..<Int(mid_bench_count()) {
                 let name = String(cString: mid_bench_name(Int32(i)))
@@ -152,13 +156,37 @@ final class EngineController: ObservableObject, @unchecked Sendable {
                 let snapshot = results
                 DispatchQueue.main.async { self.bench = snapshot }
             }
-            self.writeReport(results, presetName: presetName)
+            // The held-out set: the no-JIT engines only, at the same reduced workload as CI's
+            // (each kernel's default scale / interpreterScaleDivisor), native at that size too.
+            var held: [BenchResult] = []
+            if interpreter, let hptr {
+                for i in 0..<Int(mid_heldout_count()) {
+                    let name = String(cString: mid_heldout_name(Int32(i)))
+                    let scale = max(1, mid_heldout_default_scale(Int32(i)) / Self.interpreterScaleDivisor)
+                    self.setBusy("Held-out, native ARM64: \(name)")
+                    var sum: UInt64 = 0
+                    let nativeNs = mid_heldout_native(Int32(i), scale, &sum)
+                    var r = BenchResult(name: name, what: "held-out", nativeNs: nativeNs)
+                    r.interpScale = scale
+                    r.nativeAtInterpScaleNs = nativeNs
+                    self.setBusy("Held-out via FXI interpreter (no JIT): \(name)")
+                    let run = self.run(hptr, hlen, ["heldout", name, String(scale)], mode: .interpreter)
+                    (r.interpNs, r.interpMatch) = Self.parseResult(run, expectedSum: sum)
+                    self.setBusy("Held-out via FXR (no JIT): \(name)")
+                    let x = self.run(hptr, hlen, ["heldout", name, String(scale)], mode: .fxr)
+                    (r.fxrNs, r.fxrMatch) = Self.parseResult(x, expectedSum: sum)
+                    held.append(r)
+                    let snapshot = held
+                    DispatchQueue.main.async { self.heldout = snapshot }
+                }
+            }
+            self.writeReport(results, heldout: held, presetName: presetName)
         }
     }
 
     // MARK: - report
 
-    private func writeReport(_ results: [BenchResult], presetName: String) {
+    private func writeReport(_ results: [BenchResult], heldout: [BenchResult], presetName: String) {
         let date = ISO8601DateFormatter().string(from: Date())
         let info = Bundle.main.infoDictionary
         let d = Self.interpreterScaleDivisor
@@ -199,6 +227,25 @@ final class EngineController: ObservableObject, @unchecked Sendable {
         }
         if let a = Self.average(results.compactMap(\.blinkEfficiency)) {
             lines.append(String(format: "average Blink interpreter (no JIT): %.1f%% of native", a))
+        }
+        if !heldout.isEmpty {
+            lines.append("held-out set (engine/guest/heldout.c, frozen; no engine is tuned for it), workload /\(d):")
+            lines.append(Self.row(["kernel", "native/\(d)", "fxi/\(d)", "fxi%", "fxr/\(d)", "fxr%"]))
+            for r in heldout {
+                lines.append(Self.row([r.name, Self.ms(r.nativeNs), r.interpNs.map(Self.ms) ?? "-",
+                                       r.interpEfficiency.map { String(format: "%.1f%%", $0) } ?? "-",
+                                       r.fxrNs.map(Self.ms) ?? "-",
+                                       r.fxrEfficiency.map { String(format: "%.1f%%", $0) } ?? "-"]))
+                if r.interpMatch == false || r.fxrMatch == false {
+                    lines.append("  ! checksum mismatch (fxi=\(String(describing: r.interpMatch)) fxr=\(String(describing: r.fxrMatch)))")
+                }
+            }
+            if let a = Self.average(heldout.compactMap(\.interpEfficiency)) {
+                lines.append(String(format: "held-out average FXI: %.1f%% of native", a))
+            }
+            if let a = Self.average(heldout.compactMap(\.fxrEfficiency)) {
+                lines.append(String(format: "held-out average FXR: %.1f%% of native", a))
+            }
         }
         lines.append("==== END REPORT ====")
         lines.forEach { dlog("[report] \($0)") }

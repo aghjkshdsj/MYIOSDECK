@@ -98,8 +98,36 @@ struct PerformanceView: View {
                     Text(String(format: "Blink (old interpreter, for comparison): %.1f%% of native.", avg))
                         .font(.caption).foregroundStyle(Deck.dim)
                 }
+                if !engine.heldout.isEmpty { heldoutGrid }
                 Text("The full report is in the Logs tab and in Files › MYIOSDECK › benchmarks.")
                     .font(.caption).foregroundStyle(Deck.dim)
+            }
+        }
+    }
+
+    /// The held-out set (engine/guest/heldout.c): kernels no engine is tuned for, no-JIT engines only.
+    private var heldoutGrid: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Held-out set (never tuned for), 1/\(EngineController.interpreterScaleDivisor) workload")
+                .font(.subheadline.weight(.semibold)).padding(.top, 6)
+            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
+                GridRow {
+                    Text("Kernel"); Text("Native"); Text("FXI"); Text("FXR")
+                }
+                .font(.caption.weight(.bold)).foregroundStyle(Deck.dim)
+                ForEach(engine.heldout) { r in
+                    GridRow {
+                        Text(r.name).font(.body.weight(.semibold))
+                        Text(ms(r.nativeNs)).monospacedDigit()
+                        pct(r.interpEfficiency, time: r.interpNs, match: r.interpMatch, digits: 1)
+                        pct(r.fxrEfficiency, time: r.fxrNs, match: r.fxrMatch, digits: 1)
+                    }
+                }
+            }
+            if let avg = EngineController.average(engine.heldout.compactMap(\.fxrEfficiency)) {
+                let fxi = EngineController.average(engine.heldout.compactMap(\.interpEfficiency)) ?? 0
+                Text(String(format: "Held-out: FXR %.1f%% of native, FXI %.1f%%.", avg, fxi))
+                    .font(.subheadline.weight(.semibold)).foregroundStyle(Deck.warn)
             }
         }
     }

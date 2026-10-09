@@ -34,8 +34,12 @@ targets:
       - path: App/Sources
         excludes:
           - "Native/bench.c"
+          - "Native/heldout.c"
       - path: App/Sources/Native/bench.c
         # Same math as the x86-64 guest (no FMA contraction) so checksums compare exactly.
+        compilerFlags: ["-O2", "-ffp-contract=off"]
+      - path: App/Sources/Native/heldout.c
+        # The held-out benchmark (engine/guest/heldout.c), built as CI builds its native side.
         compilerFlags: ["-O2", "-ffp-contract=off"]
       # FXI, the no-JIT x86-64 interpreter (docs/FAST_INTERPRETER.md). Always -O2, and no FMA
       # contraction so guest float results match x86.
