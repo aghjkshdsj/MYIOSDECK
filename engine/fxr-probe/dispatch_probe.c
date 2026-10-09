@@ -5,6 +5,7 @@
 //   cc -O2 [-DALIGN=n] [-DFAT] dispatch_probe.c && ./a.out <ind|chain> <ring> <handlers>
 // ALIGN: each handler aligned to n bytes (spreads them in memory as FXR's are spread).
 // FAT: FXR's full handler signature (23 integer and 8 vector arguments).
+// SPREAD: padding between handlers (see below).
 // chain: each uop reaches the next through a link pointer (FXR's block chaining: two dependent loads).
 #include <stdint.h>
 #include <stdio.h>
@@ -37,11 +38,21 @@ struct U { H p; U *link; uint64_t pad[8]; };   // 80 bytes, as FXR's uops
 
 #define HD static CC __attribute__((noinline, aligned(ALIGN))) void
 #define DONE() do { printf("%llu\n", (unsigned long long)a); return; } while (0)
+// SPREAD=n: n bytes (plus a varying 64-byte multiple, so L1I sets do not alias) of padding after
+// each handler pair, spreading the hot handlers over megabytes of text as FXR's are
+#ifdef SPREAD
+#define STR_(X) #X
+#define STR(X) STR_(X)
+#define PAD(N) static __attribute__((used, noinline)) void pad##N(void) { __asm__ volatile(".skip " STR(SPREAD) " + 64 * ((" #N " * 7) % 32)"); }
+#else
+#define PAD(N)
+#endif
 #define DEF_I(N)                                                                           \
     HD hi##N(PARAMS) { a += N; if (__builtin_expect(!--n, 0)) DONE();                      \
         U *x = u + 1; __attribute__((musttail)) return x->p(x, ARGS); }                    \
     HD hc##N(PARAMS) { a += N; if (__builtin_expect(!--n, 0)) DONE();                      \
-        U *x = u->link; __attribute__((musttail)) return x->p(x, ARGS); }
+        U *x = u->link; __attribute__((musttail)) return x->p(x, ARGS); }                  \
+    PAD(N)
 DEF_I(0) DEF_I(1) DEF_I(2) DEF_I(3) DEF_I(4) DEF_I(5) DEF_I(6) DEF_I(7)
 DEF_I(8) DEF_I(9) DEF_I(10) DEF_I(11) DEF_I(12) DEF_I(13) DEF_I(14) DEF_I(15)
 DEF_I(16) DEF_I(17) DEF_I(18) DEF_I(19) DEF_I(20) DEF_I(21) DEF_I(22) DEF_I(23)
