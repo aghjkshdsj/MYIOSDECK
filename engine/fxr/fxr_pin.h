@@ -194,16 +194,10 @@ FXI_INLINE int pcond_tab(uint64_t tab, uint64_t F0, uint64_t F1, uint64_t F2, ui
 // an out-of-line handler looks the block up and fills the link (release: Windows threads).
 #define PCHAIN(LINK, MISS) do { Uop *l_ = (LINK); if (FXI_LIKELY(l_ != 0)) PGO(l_); PTAIL(MISS); } while (0)
 // A conditional branch's two successors (imm: taken target, aux: fallthrough)
-// No conditional host branch: the successor is selected (csel) and reached by the one indirect
-// jump every handler ends with, so a taken guest branch costs no extra taken host branch. A link
-// still missing (first use) is resolved by p_miss_c (T: 1 taken, 0 fallthrough).
-// (Its locals have names no caller uses: FJ_BR(t_) once read its own uninitialised t_.)
-#define FJ_BR(TAKEN) do {                                                                  \
-        uint64_t fjb_t_ = (TAKEN) != 0;                                                    \
-        Uop *fjb_l1_ = u->ulink, *fjb_l2_ = u->ulink2, *fjb_n_ = fjb_t_ ? fjb_l1_ : fjb_l2_; \
-        if (FXI_UNLIKELY(!fjb_n_)) { T = fjb_t_; PTAIL(p_miss_c); }                        \
-        PGO(fjb_n_);                                                                       \
-    } while (0)
+// The direction is a host conditional branch (the conditional predictor), each side chains to
+// its link. Measured: selecting the link with csel and one indirect jump instead was much slower
+// on Neoverse N2 (the indirect predictor then predicts every guest branch's direction).
+#define FJ_BR(TAKEN) do { if (TAKEN) PCHAIN(u->ulink, p_miss_t); PCHAIN(u->ulink2, p_miss_f); } while (0)
 // Indirect branches (ret, jmp/call through a register or memory): a per-thread direct-mapped
 // cache of target -> first uop; a miss looks the block up (target in T) and fills the entry.
 #define IBTC_MASK 1023u
