@@ -58,7 +58,7 @@ struct LibraryView: View {
                             }
                             Button("Cancel", role: .cancel) {}
                         } message: { _ in
-                            Text("Without JIT the game's x64 code runs in MYIOSDECK's interpreter (FXI), about 10× slower than native, and only 64-bit games can run. With JIT (StikDebug) it runs through FEX at full speed, 32-bit games too.")
+                            Text("Without JIT the game's x86 code runs in MYIOSDECK's interpreter (FXI), about 10× slower than native. 32-bit games run through WoW64 (experimental, and slower still: their Windows libraries are interpreted too). With JIT (StikDebug) everything runs through FEX at full speed.")
                         }
                 }
                 if let customError {
@@ -202,7 +202,7 @@ struct LibraryView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: { _ in
-            Text("Without JIT, Wine loads from signed app files and the game's x64 code runs in MYIOSDECK's interpreter (FXI), about 10× slower than native. Small 64-bit Direct3D 11/12 games may run; 32-bit games need JIT. If it stops, send myiosdeck-log.txt from the Logs tab.")
+            Text("Without JIT, Wine loads from signed app files and the game's x64 code runs in MYIOSDECK's interpreter (FXI), about 10× slower than native. Small 64-bit Direct3D 11/12 games may run; 32-bit games are experimental. If it stops, send myiosdeck-log.txt from the Logs tab.")
         }
     }
 

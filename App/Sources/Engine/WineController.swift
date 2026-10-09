@@ -30,6 +30,16 @@ final class WineController: ObservableObject, @unchecked Sendable {
     }
     /// The aarch64 farm as signed dylibs: Wine maps aarch64 images from here (nojit_dylib.py).
     static let peWineA64Dir = Bundle.main.bundlePath + "/PE/wine-a64"
+    /// 32-bit programs without JIT (docs/NO_JIT_WOW64.md): the i386 farm, the aarch64 farm's
+    /// dylibs and the WoW64 CPU module (FXI32's front end) are all in this build.
+    static var wow64NoJITAvailable: Bool {
+        let fm = FileManager.default
+        return fm.fileExists(atPath: Bundle.main.bundlePath + "/i386-windows/ntdll.dll") &&
+            fm.fileExists(atPath: peWineA64Dir + "/libntdll.dll.dylib") &&
+            fm.fileExists(atPath: peWineA64Dir + "/libxtajit.dll.dylib") &&
+            fm.fileExists(atPath: peWineA64Dir + "/xtajit.dll")
+    }
+    static let wow64Refusal = "This build cannot run 32-bit games without JIT (its WoW64 files are missing): enable JIT to play it."
 
     /// Madeira's test programs, shipped in the ARM64EC DLL farm.
     static let programs = [
@@ -111,18 +121,20 @@ final class WineController: ObservableObject, @unchecked Sendable {
     /// the built-in no-JIT programs do; Madeira picks ARM64EC for it from the full path.
     func runSteamGame(appID: Int, title: String, plan: SteamLaunchPlan) {
         let noJIT = !mid_jit_pool_ready()
+        var is32 = false
         if noJIT {
             let machine = peMachine(windowsPath: plan.exe)
-            dlog("[wine] no-JIT Steam launch: \(plan.exe) machine=0x\(String(machine, radix: 16))")
-            if machine == 0x14c {
-                state = .failed("This is a 32-bit game. Without JIT only 64-bit (x64) games can run: enable JIT to play it.")
+            is32 = machine == 0x14c
+            dlog("[wine] no-JIT Steam launch: \(plan.exe) machine=0x\(String(machine, radix: 16))\(is32 ? " (32-bit: WoW64 with FXI32, experimental)" : "")")
+            if is32 && !Self.wow64NoJITAvailable {
+                state = .failed(Self.wow64Refusal)
                 return
             }
         }
         setenv("MADEIRA_STEAM_APPID", String(appID), 1)
         setenv("MADEIRA_STEAM_APPPATH", plan.appPath, 1)
         setenv("MADEIRA_WORKDIR", plan.workingFolder, 1)
-        run(Program(id: plan.exe, title: title, detail: "", graphics: true, noJIT: noJIT), args: plan.arguments)
+        run(Program(id: plan.exe, title: title, detail: "", graphics: true, noJIT: noJIT, aarch64: is32), args: plan.arguments)
     }
 
     /// A game the user added (CustomGames: a DRM-free folder in Documents/Games, C:\Games in
@@ -133,15 +145,16 @@ final class WineController: ObservableObject, @unchecked Sendable {
         let noJIT = !mid_jit_pool_ready()
         CustomGames.prepare(prefix: prefixURL)                       // C:\Games -> Documents/Games
         let machine = peMachine(windowsPath: game.windowsExe)
-        dlog("[games] start \(game.name): \(game.windowsExe) machine=0x\(String(machine, radix: 16)) noJIT=\(noJIT ? 1 : 0)")
-        if noJIT, machine == 0x14c {
-            state = .failed("This is a 32-bit game. Without JIT only 64-bit (x64) games can run: enable JIT to play it.")
+        let is32 = noJIT && machine == 0x14c
+        dlog("[games] start \(game.name): \(game.windowsExe) machine=0x\(String(machine, radix: 16)) noJIT=\(noJIT ? 1 : 0)\(is32 ? " (32-bit: WoW64 with FXI32, experimental)" : "")")
+        if is32 && !Self.wow64NoJITAvailable {
+            state = .failed(Self.wow64Refusal)
             return
         }
         for k in ["MADEIRA_STEAM_APPID", "MADEIRA_STEAM_APPPATH"] { unsetenv(k) }
         setenv("MADEIRA_WORKDIR", game.windowsWorkdir, 1)
         customActive = true
-        run(Program(id: game.windowsExe, title: game.name, detail: "", graphics: true, noJIT: noJIT), args: game.arguments)
+        run(Program(id: game.windowsExe, title: game.name, detail: "", graphics: true, noJIT: noJIT, aarch64: is32), args: game.arguments)
     }
 
     /// Set while an added game's session runs (no Steam identity for it).

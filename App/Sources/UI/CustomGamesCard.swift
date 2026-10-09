@@ -17,7 +17,7 @@ struct CustomGamesCard: View {
 
     var body: some View {
         DeckCard(title: "My games (DRM-free)", icon: "folder.fill") {
-            Text("Put an installed game's folder (GOG, itch.io, or copied from a PC) into Files › On My iPhone › MYIOSDECK › Games, or add one from anywhere in Files. Wine sees it as C:\\Games. 64-bit games run with or without JIT; 32-bit games need JIT.")
+            Text("Put an installed game's folder (GOG, itch.io, or copied from a PC) into Files › On My iPhone › MYIOSDECK › Games, or add one from anywhere in Files. Wine sees it as C:\\Games. 64-bit games run with or without JIT; 32-bit games without JIT are experimental.")
                 .font(.subheadline).foregroundStyle(Deck.dim)
             HStack {
                 Button("Add a game folder…") { showImporter = true }
