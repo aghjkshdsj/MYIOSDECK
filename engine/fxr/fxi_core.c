@@ -250,6 +250,9 @@ int fxi_run_elf(const uint8_t *elf, size_t len, int argc, const char *const *arg
     Block *b = fxi_lookup(c, entry);
     if (!c->stop) fxr_enter(c, b);         // FXR: returns only when the guest stops
     if (!c->stop) fxi_fail(c, "dispatch chain returned unexpectedly");
+#ifdef FXR_PROFILE
+    fxr_profile_dump(vm);                  // FXR: diagnostic build
+#endif
 
     out->ok = c->stop == FXI_STOP_EXIT;
     out->exit_code = c->exit_code;

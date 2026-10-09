@@ -127,6 +127,9 @@ struct Uop {
     uint8_t flive;           // FXR: arithmetic flags live after this uop (decoder liveness, across blocks)
     uint8_t fdir;            // FXR: a block-ending branch: flags live at its target (bit 0), fallthrough (bit 1)
     int32_t fimm;            // FXR: a fused uop's second immediate (imm and disp are taken)
+#ifdef FXR_PROFILE
+    uint64_t prof;           // FXR diagnostic build: times this uop was dispatched (fxr_profile_dump)
+#endif
 };
 
 struct Block {
@@ -204,6 +207,9 @@ int fxi_cond(FxiCpu *c, unsigned cc);        // x86 condition code 0-15
 #define FXI_NEXT(c, u) do { (void)(c); (void)(u); return; } while (0)   // FXR: back to the pinned caller
 Block *fxr_lower(struct Fxi *vm, Block *b);     // FXR: pinned handlers for a translated block
 void fxr_enter(FxiCpu *c, Block *b);            // FXR: run the pinned chain from b until it stops
+#ifdef FXR_PROFILE
+void fxr_profile_dump(struct Fxi *vm);          // FXR diagnostic build: the hottest blocks, uop by uop
+#endif
 void fxr_init_stop(Block *b);                   // FXR: the stop block's pinned handler
 #define FXI_GOTO_BLOCK(c, b) do { Block *fxi_gb_ = (b); __attribute__((musttail)) return fxi_gb_->u[0].fn((c), fxi_gb_->u); } while (0)
 

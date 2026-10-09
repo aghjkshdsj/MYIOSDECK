@@ -627,6 +627,9 @@ Block *fxr_lower(struct Fxi *vm, Block *b) {
     nb->rip = b->rip;
     nb->n = (uint32_t)o.n;
     memcpy(nb->u, o.out, sizeof(Uop) * (size_t)o.n);
+#ifdef FXR_PROFILE
+    for (int k = 0; k < o.n; k++) nb->u[k].prof = 0;
+#endif
     for (int k = 0; k < o.np; k++) {   // point the branch's edges at their flag stubs
         Uop *br = &nb->u[o.patch[k].at], *st = &nb->u[o.patch[k].stub];
         if (o.patch[k].edge) br->ulink2 = st; else br->ulink = st;
@@ -637,6 +640,42 @@ Block *fxr_lower(struct Fxi *vm, Block *b) {
 }
 
 void fxr_init_stop(Block *b) { b->u[0].p = p_stop; }
+
+#ifdef FXR_PROFILE
+// Diagnostic build (-DFXR_PROFILE): every dispatch counts its uop. At exit, the total and the
+// hottest blocks, uop by uop: count, handler (as an offset from fxr_lower; CI names it with nm),
+// guest rip (as an offset into the loaded image). Shows what one iteration of a hot loop costs.
+void fxr_profile_dump(struct Fxi *vm) {
+    enum { TOP = 8 };
+    BlockTable *t = vm->table;
+    Block *top[TOP] = { 0 };
+    uint64_t topn[TOP] = { 0 }, total = 0, nblocks = 0;
+    for (uint64_t i = 0; i <= t->mask; i++) {
+        Block *b = t->slot[i];
+        if (!b || !b->n || b->u[0].p == p_stop) continue;
+        uint64_t s = 0;
+        for (uint32_t k = 0; k < b->n; k++) s += b->u[k].prof;
+        total += s;
+        nblocks++;
+        for (int j = 0; j < TOP; j++)
+            if (s > topn[j]) {
+                for (int m = TOP - 1; m > j; m--) { top[m] = top[m - 1]; topn[m] = topn[m - 1]; }
+                top[j] = b; topn[j] = s;
+                break;
+            }
+    }
+    fprintf(stderr, "[fxr-prof] %llu dispatches in %llu blocks\n", (unsigned long long)total, (unsigned long long)nblocks);
+    for (int j = 0; j < TOP && top[j]; j++) {
+        Block *b = top[j];
+        fprintf(stderr, "[fxr-prof] block img+%#llx: %u uops, %llu dispatches (%.1f%%)\n",
+                (unsigned long long)(b->rip - (uintptr_t)vm->image), b->n,
+                (unsigned long long)topn[j], 100.0 * (double)topn[j] / (double)(total ? total : 1));
+        for (uint32_t k = 0; k < b->n; k++)
+            fprintf(stderr, "[fxr-prof]   %12llu  @%ld  img+%#llx\n", (unsigned long long)b->u[k].prof,
+                    (long)((intptr_t)b->u[k].p - (intptr_t)fxr_lower), (unsigned long long)(b->u[k].rip - (uintptr_t)vm->image));
+    }
+}
+#endif
 
 void fxr_enter(FxiCpu *c, Block *b) {
     if (!c->fxr_ready) {

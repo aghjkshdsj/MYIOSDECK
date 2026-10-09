@@ -16,7 +16,11 @@
 #define PH static FXR_CC void
 // Dispatch: the handler pointer is the uop's first field, so stepping to the next uop is one
 // load with writeback and an indirect branch.
+#ifdef FXR_PROFILE   // diagnostic build: count every dispatch (fxr_profile_dump)
+#define PGO(nu) do { Uop *n_ = (nu); n_->prof++; __attribute__((musttail)) return n_->p(c, n_, FXR_ARGS); } while (0)
+#else
 #define PGO(nu) do { Uop *n_ = (nu); __attribute__((musttail)) return n_->p(c, n_, FXR_ARGS); } while (0)
+#endif
 #define PNEXT() PGO(u + 1)
 #define PTAIL(fn) do { __attribute__((musttail)) return fn(c, u, FXR_ARGS); } while (0)
 #define gZ ((uint64_t)0)

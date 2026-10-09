@@ -121,6 +121,14 @@ jobs:
             sudo taskset -c 1 "$PERF" stat -x, -e cycles,instructions,stall_frontend,br_mis_pred "/tmp/dprobe_$1" "$2" "$3" "$4" 2>&1 >/dev/null | \
               awk -F, -v c="$cfg" 'BEGIN { printf "%-24s", c } { v[$3] = $1 } END { printf " cycles/dispatch=%.2f insns/dispatch=%.2f frontend-stall/dispatch=%.2f mispredicts/dispatch=%.4f\n", v["cycles"] / 2e8, v["instructions"] / 2e8, v["stall_frontend"] / 2e8, v["br_mis_pred"] / 2e8 }'
           done
+          echo "== diagnostic: the hottest blocks uop by uop (FXR built with -DFXR_PROFILE, engine/fxr-probe/profile.py)"
+          sudo apt-get install -y -qq llvm-19 > /dev/null 2>&1 || true
+          EXTRA_CFLAGS=-DFXR_PROFILE CC=clang-19 bash engine/fxr/build.sh /tmp/fxrprof > /dev/null
+          for k in integer:1 float:4 memory:10 branch:1 simd:30; do
+            echo "-- ${k%%:*}"
+            /tmp/fxrprof/fxr guests/bench_sse2.elf "${k%%:*}" "${k##*:}" > /dev/null 2> /tmp/prof.txt || true
+            python3 engine/fxr-probe/profile.py /tmp/fxrprof/fxr guests/bench_sse2.elf /tmp/prof.txt | head -160
+          done
           echo "== diagnostic: where the frontend stalls (PMU events the runner exposes)"
           for k in integer:3 memory:50 branch:6 simd:150; do
             for aslr in on on off off; do
