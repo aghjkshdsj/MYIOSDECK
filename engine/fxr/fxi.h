@@ -68,6 +68,20 @@ uint64_t fxi_win_profile(FxiCpu *c, uint64_t *lookups, uint64_t *exits, uint64_t
 /// Profiler: calls into native code per target since the previous call (racy by design).
 int fxi_win_exit_counts(FxiCpu *c, uint64_t *targets, uint64_t *counts, int max);
 
+// FXR: the guest registers live in host registers while FXR runs, so the x64 state at a host
+// fault or at a stop of the thread (a suspension) comes from the host's registers there.
+typedef struct { uint64_t x[31], sp, pc; uint8_t q[8][16]; } fxr_host_state;   // FXR: x0-x30, sp, pc, q0-q7
+/// FXR: build the index of FXR's handlers (once, before any fault or stop; not async-signal-safe).
+void fxr_win_index(void);
+/// FXR: the x64 state from the host's state h of the thread running c, stopped inside
+/// fxi_win_run. fault = 1: a host fault (a guest memory access); the state is the faulting
+/// instruction's, as before it ran. fault = 0: a stop anywhere (exact at a handler's start or at
+/// its dispatch). Returns 1 with the CPU loaded (GPRs, flags, XMM0-7) and *rip set; for a stop,
+/// h->pc and h->x[21] may be moved to the next handler's start (write h back to the thread).
+/// Returns 0 when the state is not exact there (a stop: let the thread run on and try again).
+/// Async-signal-safe.
+int fxr_win_host_state(FxiCpu *c, fxr_host_state *h, int fault, uint64_t *rip);
+
 #ifdef __cplusplus
 }
 #endif

@@ -23,8 +23,12 @@
 
 static uint16_t k_cctab[16];   // cmov truth tables per condition code (pcond_tab)
 
+// Windows mode: the state goes to the CPU structure first, so a fault while translating the
+// target (fetching its code) has the exact x64 state (fxr_win_host_state).
+#define WIN_SPILL() do { if (FXI_UNLIKELY(c->vm->windows)) { SPILL_R(); SPILL_F(); SPILL_X(); } } while (0)
 #define DEF_MISS(NAME, SLOT, RIP)                                                          \
     PX NAME(FXR_PARAMS) {                                                                  \
+        WIN_SPILL();                                                                       \
         Block *b = fxi_lookup(c, (RIP));                                                   \
         if (b != fxi_stop) __atomic_store_n(&(SLOT), b->u, __ATOMIC_RELEASE);              \
         PGO(b->u);                                                                         \
@@ -33,6 +37,7 @@ DEF_MISS(p_miss_t, u->ulink, u->imm)     // jump, call or taken branch: the targ
 DEF_MISS(p_miss_f, u->ulink2, u->aux)    // a conditional branch's fallthrough (aux)
 DEF_MISS(p_miss_g, u->ulink, u->aux)     // goto (a block split) and syscall: the next instruction
 PX p_miss_ind(FXR_PARAMS) {
+    WIN_SPILL();
     Block *b = fxi_lookup(c, T);
     if (b != fxi_stop) { __typeof__(c->fxr_ibtc[0]) *e = IBTC(T); e->u = b->u; e->rip = T; }
     PGO(b->u);
@@ -48,8 +53,12 @@ PH p_ret(FXR_PARAMS) { uint64_t t = ld64(g4); g4 += 8 + u->aux; PIND(t); }
 PH p_call_T(FXR_PARAMS) { uint64_t t = ld64(T); g4 -= 8; st64(g4, u->aux); PIND(t); }
 PH p_jmp_T(FXR_PARAMS) { PIND(ld64(T)); }
 // An fs/gs operand: the segment base lives in memory, so the address is computed FXI's way.
-PH p_call_M(FXR_PARAMS) { SPILL_R(); uint64_t t = ld64(fxi_ea(c, u)); g4 -= 8; st64(g4, u->aux); PIND(t); }
-PH p_jmp_M(FXR_PARAMS) { SPILL_R(); PIND(ld64(fxi_ea(c, u))); }
+// fxi_ea is a call: these two run outside the pinned section, with the whole state in the CPU
+// structure and c->cur set first, so a fault in them is exact (fxr_win_host_state).
+#define PO static FXR_CC void
+#define CPU_STATE() do { SPILL_R(); SPILL_F(); SPILL_X(); c->cur = u; } while (0)
+PO p_call_M(FXR_PARAMS) { CPU_STATE(); uint64_t t = ld64(fxi_ea(c, u)); st64(g4 - 8, u->aux); g4 -= 8; PIND(t); }
+PO p_jmp_M(FXR_PARAMS) { CPU_STATE(); PIND(ld64(fxi_ea(c, u))); }
 // Conditional branch on the lazy flags, one handler per condition code.
 PX p_jcc_slow(FXR_PARAMS) {
     SPILL_F();
@@ -483,11 +492,15 @@ static void lower_one(Out *o, const Uop *u) {
 // Superinstructions (fxr_pin_fuse.c): u and the uop after it as one uop. Returns 2 when fused.
 // The fused uop starts as a copy of the second uop (a branch keeps its targets and links).
 static int is_named(const Desc *d, int id) { return d && d->fam == FAM_NAMED && d->a == id; }
+static int g_win;   // lowering for Windows mode (fxr_lower sets it; lowering is serialised)
 static int try_fuse(Out *o, const Uop *u, uint32_t left) {
     if (left < 2) return 0;
     const Uop *v = u + 1;
     const Desc *a = find(u->fn), *b = find(v->fn);
     if (!a || !b) return 0;
+    // Windows mode: no pair whose second instruction touches memory after the first wrote a
+    // register (a fault there would not be exact): argument setup + call, pop + pop/ret, push + push
+    if (g_win && (is_named(b, N_CALL) || is_named(a, N_POP_R) || is_named(a, N_PUSH_R))) return 0;
     int D = greg(u->dst), S = greg(u->src);
     Uop *x = 0;
     // Fused handlers never record flags. A pair ending in a branch whose successor reads them
@@ -702,22 +715,51 @@ static int can_sink(const Uop *a, const Uop *x, const Uop *c) {
     return D >= 0 && greg(a->src) >= 0 && greg(c->dst) == D && reg_rw(x, &rd, &wr) && !((rd | wr) & (1u << D));
 }
 
+// Instruction boundaries, for an exact x64 state at a stop (fxr_win_host_state): out[start..n),
+// just lowered, take rip (the first x64 instruction they cover; 0: keep theirs), and the flag
+// stubs among them (patches from np on) are no boundary: their branch already went.
+static void bound(Out *o, int start, int np, uint64_t rip, int nobound) {
+    for (int k = start; k < o->n; k++) {
+        int stub = 0;
+        for (int j = np; j < o->np; j++) if (o->patch[j].stub == k) stub = 1;
+        if (stub || nobound) o->out[k].fdir |= FXR_NOBOUND;
+        else if (rip) o->out[k].rip = rip;
+    }
+}
+
 static void lower_block(Out *o, const Block *b) {
     for (uint32_t i = 0; i < b->n; i++) {
+        int start = o->n, np = o->np;
         if (i + 2 < b->n && can_hoist(&b->u[i], &b->u[i + 1], &b->u[i + 2])) {
+            // [a][x][c] runs as x, then a + c: x starts where a did; between x and the pair is no
+            // x64 instruction boundary
             Uop pair[2] = { b->u[i], b->u[i + 2] };
             lower_one(o, &b->u[i + 1]);
-            if (try_fuse(o, pair, 2)) { i += 2; continue; }
+            bound(o, start, np, b->u[i].rip, 0);
+            int mid = o->n;
+            np = o->np;
+            if (try_fuse(o, pair, 2)) { bound(o, mid, np, 0, 1); i += 2; continue; }
             lower_one(o, &b->u[i]);   // not fused after all: a, then c in its turn (order still valid)
+            bound(o, mid, np, 0, 1);
             i++;
             continue;
         }
         if (i + 2 < b->n && can_sink(&b->u[i], &b->u[i + 1], &b->u[i + 2])) {
+            // [a][x][c] runs as a + c, then x: no boundary before x
             Uop pair[2] = { b->u[i], b->u[i + 2] };
-            if (try_fuse(o, pair, 2)) { lower_one(o, &b->u[i + 1]); i += 2; continue; }
+            if (try_fuse(o, pair, 2)) {
+                bound(o, start, np, b->u[i].rip, 0);
+                int mid = o->n;
+                np = o->np;
+                lower_one(o, &b->u[i + 1]);
+                bound(o, mid, np, 0, 1);
+                i += 2;
+                continue;
+            }
         }
-        if (try_fuse(o, &b->u[i], b->n - i)) { i++; continue; }
+        if (try_fuse(o, &b->u[i], b->n - i)) { bound(o, start, np, b->u[i].rip, 0); i++; continue; }
         lower_one(o, &b->u[i]);
+        bound(o, start, np, 0, 0);
     }
 }
 
@@ -790,6 +832,7 @@ static int find_trace(struct Fxi *vm, Block *b, Block **seg, int *edge) {
 
 Block *fxr_lower(struct Fxi *vm, Block *b) {
     pthread_once(&g_once, init_desc);
+    g_win = vm && vm->windows;
     Block *seg[TRACE_SEGS];
     int edge[TRACE_SEGS], ns = g_traces ? find_trace(vm, b, seg, edge) : 0, nseg = ns ? ns : 1;
     if (!ns) seg[0] = b;
@@ -892,4 +935,136 @@ void fxr_enter(FxiCpu *c, Block *b) {
     RELOAD_F();
     RELOAD_X();
     b->u[0].p(c, b->u, FXR_ARGS);
+}
+
+// ---- Windows mode: the x64 state at a host fault or at a stop of the thread ----
+// FXR keeps the guest registers in host registers (FXR_PARAMS, preserve_none on ARM64): RAX x22,
+// RCX x23, RDX x24, RBX x28, RSP x27, RBP x0, RSI x25, RDI x26, R8-R14 x1-x7, R15 x9, T x10,
+// flags x11-x14, XMM0-7 v0-v7; x21 is the uop. At a fault inside a pinned handler (section
+// fxr_h) those hold the x64 state as before the instruction: no handler writes guest-visible
+// state before its last guest memory access (engine/fxr-probe/precise.py checks it in CI, and
+// Windows mode lowers the forms that would to FXI's handlers). Outside the pinned handlers the
+// state is in the CPU structure: FXI's handlers under p_slow, syscalls and block lookups run
+// with the registers spilled.
+#if defined(__aarch64__) && defined(__has_attribute) && __has_attribute(preserve_none)
+#define FXR_HOST_STATE 1
+#if defined(__APPLE__)
+extern const char fxr_h_start[] __asm("section$start$__TEXT$__fxr_h");
+extern const char fxr_h_end[] __asm("section$end$__TEXT$__fxr_h");
+#else
+extern const char __start_fxr_h[], __stop_fxr_h[];
+#define fxr_h_start __start_fxr_h
+#define fxr_h_end __stop_fxr_h
+#endif
+static const uint8_t k_host_gpr[16] = { 22, 23, 24, 28, 27, 0, 25, 26, 1, 2, 3, 4, 5, 6, 7, 9 };   // RAX..R15
+#endif
+
+static uintptr_t *g_hidx;   // every pinned handler's start, sorted
+static size_t g_hn, g_hcap;
+static pthread_once_t g_hidx_once = PTHREAD_ONCE_INIT;
+static void hidx_add(PFn p) {
+    if (!p) return;
+    if (g_hn == g_hcap) { g_hcap = g_hcap ? 2 * g_hcap : 1 << 16; g_hidx = realloc(g_hidx, g_hcap * sizeof *g_hidx); }
+    g_hidx[g_hn++] = (uintptr_t)p;
+}
+static void hidx_tab(const PFn *a, size_t n) { for (size_t i = 0; i < n; i++) hidx_add(a[i]); }
+static int cmp_uptr(const void *a, const void *b) {
+    uintptr_t x = *(const uintptr_t *)a, y = *(const uintptr_t *)b;
+    return x < y ? -1 : x > y;
+}
+static void hidx_build(void) {
+    pthread_once(&g_once, init_desc);   // the replica map
+#define HIDX_TAB(NAME, DIMS) hidx_tab((const PFn *)fxr_##NAME, sizeof fxr_##NAME / sizeof(PFn));
+    FXR_TABLES(HIDX_TAB)
+    for (size_t i = 0; i < RMAP_SLOTS; i++) hidx_add(g_rmap[i].r);
+    for (size_t i = 0; i < fxr_n_xops; i++) { hidx_tab(&fxr_xops[i].rr[0][0], 81); hidx_tab(fxr_xops[i].rt, 9); }
+    for (size_t i = 0; i < fxr_n_xshift; i++) hidx_tab(fxr_xshift[i].h, 9);
+    hidx_tab(t_push, 16); hidx_tab(t_pop, 16); hidx_tab(t_call_R, 16); hidx_tab(t_jmp_R, 16); hidx_tab(t_jcc, 16);
+    static const PFn one[] = { p_stop, p_nop, p_jmp, p_goto, p_call, p_ret, p_call_T, p_jmp_T, p_call_M, p_jmp_M, p_syscall };
+    hidx_tab(one, sizeof one / sizeof one[0]);
+    qsort(g_hidx, g_hn, sizeof *g_hidx, cmp_uptr);
+    size_t n = 0;
+    for (size_t i = 0; i < g_hn; i++) if (!n || g_hidx[i] != g_hidx[n - 1]) g_hidx[n++] = g_hidx[i];
+    g_hn = n;
+}
+void fxr_win_index(void) { pthread_once(&g_hidx_once, hidx_build); }
+
+#ifdef FXR_HOST_STATE
+// The start of the pinned handler containing pc (0: none).
+static uintptr_t handler_at(uintptr_t pc) {
+    size_t lo = 0, hi = g_hn;
+    while (lo < hi) { size_t mid = (lo + hi) / 2; if (g_hidx[mid] <= pc) lo = mid + 1; else hi = mid; }
+    return lo ? g_hidx[lo - 1] : 0;
+}
+// How far the handler at h moved x21 (the uop) before pc, in address order: the dispatch's load
+// with writeback (ldr xT, [x21, #imm]!) or an add x21, x21, #imm. INT64_MIN after a mov x21, xN
+// (the chain to another block). The caller checks the result against the handler's identity.
+static int64_t x21_moved(uintptr_t h, uintptr_t pc) {
+    int64_t d = 0;
+    for (const uint32_t *p = (const uint32_t *)h; (uintptr_t)p < pc; p++) {
+        uint32_t i = *p;
+        if ((i & 0xFFE00C00u) == 0xF8400C00u && ((i >> 5) & 31) == 21) {   // ldr Xt, [x21, #simm9]!
+            int32_t imm = (int32_t)((i >> 12) & 0x1FF);
+            d += imm >= 256 ? imm - 512 : imm;
+        } else if ((i & 0xFF8003FFu) == 0x910002B5u) {                    // add x21, x21, #imm{, lsl 12}
+            d += (int64_t)((i >> 10) & 0xFFF) << ((i >> 22) & 1 ? 12 : 0);
+        } else if ((i & 0xFFE0FFFFu) == 0xAA0003F5u) {                    // mov x21, xN
+            return INT64_MIN;
+        }
+    }
+    return d;
+}
+static void load_host(FxiCpu *c, const fxr_host_state *h) {
+    for (int i = 0; i < 16; i++) c->r[i] = h->x[k_host_gpr[i]];
+    uint64_t F0 = h->x[11], F1 = h->x[12], F2 = h->x[13], F3 = h->x[14];
+    SPILL_F();
+    for (int i = 0; i < 8; i++) memcpy(&c->xmm[i], h->q[i], 16);
+}
+#endif
+
+int fxr_win_host_state(FxiCpu *c, fxr_host_state *h, int fault, uint64_t *rip) {
+#ifdef FXR_HOST_STATE
+    uintptr_t pc = (uintptr_t)h->pc;
+    if (pc < (uintptr_t)fxr_h_start || pc >= (uintptr_t)fxr_h_end) {
+        // FXI's code under p_slow, a block lookup or translation (registers in the CPU
+        // structure): exact for a fault (FXI's rule: the instruction whose access faulted, or
+        // the block being translated). A stop there may be mid-way through FXI's handler.
+        if (!fault) return 0;
+        *rip = c->cur ? c->cur->rip : c->rip;
+        return 1;
+    }
+    if (!g_hn) return 0;
+    uintptr_t hs = handler_at(pc);
+    if (!hs) return 0;
+    Uop *u = (Uop *)(uintptr_t)h->x[21], *cur = NULL;
+    if (fault) {
+        int64_t d = x21_moved(hs, pc);
+        if (d != INT64_MIN && d % (int64_t)sizeof(Uop) == 0) cur = (Uop *)((uintptr_t)u - (uintptr_t)d);
+        if (!cur || (uintptr_t)cur->p != hs) {
+            if ((uintptr_t)u->p == hs) cur = u;
+            else if ((uintptr_t)(u - 1)->p == hs) cur = u - 1;
+            else return 0;
+        }
+    } else {
+        uint32_t ins = *(const uint32_t *)pc;
+        cur = u;
+        if (pc == hs) {                                         // a handler's start: x21 is its uop
+            if ((uintptr_t)cur->p != hs || (cur->fdir & FXR_NOBOUND)) return 0;
+        } else if ((ins & 0xFFFFFC1Fu) == 0xD61F0000u) {        // br Xn: the dispatch, x21 the next uop
+            uint64_t target = h->x[(ins >> 5) & 31];
+            if ((uintptr_t)cur->p != target || (cur->fdir & FXR_NOBOUND)) return 0;
+            h->pc = target;
+        } else {
+            return 0;
+        }
+    }
+    load_host(c, h);
+    c->rip = cur->rip;
+    c->cur = cur;
+    *rip = cur->rip;
+    return 1;
+#else
+    (void)c; (void)h; (void)fault; (void)rip;
+    return 0;
+#endif
 }

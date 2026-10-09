@@ -106,6 +106,7 @@ struct FxiCpu {
 };
 
 // One decoded instruction (or fused pair). FXR: 80 bytes.
+#define FXR_NOBOUND 4      // FXR: Uop.fdir bit
 struct Uop {
     PFn p;                   // FXR: the pinned handler that runs this uop (first: the step to the next
                              // uop is one load with writeback and an indirect branch)
@@ -125,7 +126,8 @@ struct Uop {
     uint8_t base, index, scale, cc;
     uint64_t rip;            // the instruction's address (exceptions, faults)
     uint8_t flive;           // FXR: arithmetic flags live after this uop (decoder liveness, across blocks)
-    uint8_t fdir;            // FXR: a block-ending branch: flags live at its target (bit 0), fallthrough (bit 1)
+    uint8_t fdir;            // FXR: a block-ending branch: flags live at its target (bit 0), fallthrough (bit 1);
+                             // FXR_NOBOUND: no x64 instruction boundary at this uop's start (fxr_pin.c)
     int32_t fimm;            // FXR: a fused uop's second immediate (imm and disp are taken)
 #ifdef FXR_PROFILE
     uint64_t prof;           // FXR diagnostic build: times this uop was dispatched (fxr_profile_dump)
