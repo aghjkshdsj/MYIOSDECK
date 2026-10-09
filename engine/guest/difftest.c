@@ -143,6 +143,13 @@ RR(movsbq, "movsbq %b[b], %[r]", ARITH) RR(movswq, "movswq %w[b], %[r]", ARITH) 
 RR(movsbl, "movsbl %b[b], %k[r]", ARITH) RR(movsbw, "movsbw %b[b], %w[r]", ARITH) RR(movzbl, "movzbl %b[b], %k[r]", ARITH)
 RR(movzwl, "movzwl %w[b], %k[r]", ARITH) RR(movzbw, "movzbw %b[b], %w[r]", ARITH) RR(movl_zext, "movl %k[b], %k[r]", ARITH)
 RR(movw_keep, "movw %w[b], %w[r]", ARITH) RR(movb_keep, "movb %b[b], %b[r]", ARITH)
+// Forms FXR pins for Windows games (fxr_pin_win.c): inc/dec/not/neg of memory in every size and
+// 8/16-bit loads into a register's low part (with mul/div memory forms in muldiv_m, gs: in gs_load)
+RM(inc_m_q, "incq %[m]", ARITH) RM(inc_m_l, "incl %[m]", ARITH) RM(inc_m_w, "incw %[m]", ARITH) RM(inc_m_b, "incb %[m]", ARITH)
+RM(dec_m_q, "decq %[m]", ARITH) RM(dec_m_l, "decl %[m]", ARITH) RM(dec_m_b, "decb %[m]", ARITH)
+RM(neg_m_l, "negl %[m]", ARITH) RM(neg_m_w, "negw %[m]", ARITH) RM(neg_m_q, "negq %[m]", ARITH)
+RM(not_m_q, "notq %[m]", ARITH) RM(not_m_b, "notb %[m]", ARITH)
+RM(movb_ld, "movb %[m], %b[r]", ARITH) RM(movw_ld, "movw %[m], %w[r]", ARITH)
 RR(lea_q, "leaq 0x12(%[r],%[b],4), %[r]", ARITH) RR(lea_l, "leal -3(%[r],%[b],8), %k[r]", ARITH)
 RR(lea_w, "leaw 7(%[r],%[b]), %w[r]", ARITH)
 // 67 lea (32-bit address registers make the assembler emit the prefix; Dokimon: lea eax, [edx+ecx])
@@ -233,6 +240,59 @@ static void muldiv(void) {
         h = mix(h, bq & 0xffff);
     }
     out("muldiv", h);
+}
+// mul/imul/div/idiv with a memory operand, 32 and 64-bit, flags read after mul/imul; 64-bit div
+// with rdx 0 (FXR's pinned path) and with rdx nonzero (FXI's handler: a 128-bit dividend)
+static void muldiv_m(void) {
+    u64 h = 14695981039346656037ull;
+    for (int i = 0; i < N; i++) {
+        u64 a = val(), b = val(), fi = flags_in(), f, lo, hi, m = b;
+        u32 m32 = (u32)b;
+        lo = a;
+        __asm__ volatile(PRE "mulq %[m]" POST : "+a"(lo), "=d"(hi), [f] "=&r"(f) : [m] "m"(m), [fi] "r"(fi) : "cc");
+        h = mix(mix(mix(h, lo), hi), f & CFOF);
+        lo = a;
+        __asm__ volatile(PRE "imulq %[m]" POST : "+a"(lo), "=d"(hi), [f] "=&r"(f) : [m] "m"(m), [fi] "r"(fi) : "cc");
+        h = mix(mix(mix(h, lo), hi), f & CFOF);
+        lo = a;
+        __asm__ volatile(PRE "mull %[m]" POST : "+a"(lo), "=d"(hi), [f] "=&r"(f) : [m] "m"(m32), [fi] "r"(fi) : "cc");
+        h = mix(mix(mix(h, lo), hi), f & CFOF);
+        lo = a;
+        __asm__ volatile(PRE "imull %[m]" POST : "+a"(lo), "=d"(hi), [f] "=&r"(f) : [m] "m"(m32), [fi] "r"(fi) : "cc");
+        h = mix(mix(mix(h, lo), hi), f & CFOF);
+        u64 d = b | 1, q = a, r = (i & 1) ? rnd() % d : 0;
+        m = d;
+        __asm__ volatile("divq %[m]" : "+a"(q), "+d"(r) : [m] "m"(m) : "cc");
+        h = mix(mix(h, q), r);
+        q = a; r = 0;
+        __asm__ volatile("divq %[d]" : "+a"(q), "+d"(r) : [d] "r"(d) : "cc");
+        h = mix(mix(h, q), r);
+        u32 q32 = (u32)a, r32 = (u32)rnd() % ((u32)b | 1);
+        m32 = (u32)b | 1;
+        __asm__ volatile("divl %[m]" : "+a"(q32), "+d"(r32) : [m] "m"(m32) : "cc");
+        h = mix(mix(h, q32), r32);
+        long long sd = (long long)((b | 2) & ~1ull), sq = (long long)a, sr;   // even: never 0 or -1
+        __asm__ volatile("cqto\n\tidivq %[m]" : "+a"(sq), "=&d"(sr) : [m] "m"(sd) : "cc");
+        h = mix(mix(h, (u64)sq), (u64)sr);
+        int sd32 = (int)((b | 2) & ~1u), sq32 = (int)a, sr32;
+        __asm__ volatile("cltd\n\tidivl %[m]" : "+a"(sq32), "=&d"(sr32) : [m] "m"(sd32) : "cc");
+        h = mix(mix(h, (u64)(u32)sq32), (u64)(u32)sr32);
+    }
+    out("muldiv_m", h);
+}
+// mov r64/r32, gs:[disp]: Windows reads its TEB this way (the GS base set with arch_prctl here;
+// rcx/edx, not rax: the assembler would use the moffs encoding for rax)
+static u64 g_gsblk[8];
+static void gs_load(void) {
+    u64 h = 14695981039346656037ull;
+    g_syscall3(158, 0x1001, (long)g_gsblk, 0);   // arch_prctl(ARCH_SET_GS)
+    for (int i = 0; i < N; i++) {
+        for (int k = 0; k < 8; k++) g_gsblk[k] = val();
+        u64 a, b = val();
+        __asm__ volatile("movq %%gs:0x10, %[a]\n\tmovl %%gs:0x2c, %k[b]" : [a] "=&c"(a), [b] "+d"(b) : : "memory");
+        h = mix(mix(h, a), b);
+    }
+    out("gs_load", h);
 }
 
 // cbw/cwde/cdqe/cwd/cdq/cqo, lahf/sahf, cmpxchg (reg), xchg with rax
@@ -639,6 +699,8 @@ static const test_fn kTests[] = {
     fz_o, fz_no, fz_b, fz_ae, fz_e, fz_ne, fz_be, fz_a, fz_s, fz_ns, fz_p, fz_np, fz_l, fz_ge, fz_le, fz_g,
     fc_o, fc_no, fc_b, fc_ae, fc_e, fc_ne, fc_be, fc_a, fc_s, fc_ns, fc_p, fc_np, fc_l, fc_ge, fc_le, fc_g,
     fz_call, fz_index, fz_xindex, fz_3op, fz_3gap, fz_x3, fz_hoist,
+    inc_m_q, inc_m_l, inc_m_w, inc_m_b, dec_m_q, dec_m_l, dec_m_b, neg_m_l, neg_m_w, neg_m_q, not_m_q, not_m_b,
+    movb_ld, movw_ld, muldiv_m, gs_load,
 };
 
 int guest_main(int argc, char **argv) {

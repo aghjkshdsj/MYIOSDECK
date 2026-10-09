@@ -473,7 +473,8 @@ typedef struct { const char *name; PFn h[9]; } XShift;
     X(t_fs_sub, [4][16][16]) X(t_fs_and, [4][16][16]) X(t_fs_subi, [4][16]) X(t_fs_andi, [4][16]) X(t_fs_log, [4][16]) \
     X(t_fs_addr, [4][16]) X(t_fs_subr, [4][16]) X(t_fs_comis, [2][9][9]) \
     X(t_fs_addrr, [4][16][16]) X(t_fs_subrr, [4][16][16]) \
-    X(t_x3, [20][9][9][9]) X(t_arj, [5][2][8][16][16]) X(t_lcj, [2][16][17][16])
+    X(t_x3, [20][9][9][9]) X(t_arj, [5][2][8][16][16]) X(t_lcj, [2][16][17][16]) \
+    X(t_unt, [2][4][4]) X(t_ldp, [2][16]) X(t_ldgs, [2][16]) X(t_mul, [2][2][2][17]) X(t_div, [2][2][17])
 #define FXR_DECL_TABLE(NAME, DIMS) extern const PFn FXR_T(NAME) DIMS; extern const PFn fxr_##NAME##_r1 DIMS;
 FXR_TABLES(FXR_DECL_TABLE)
 #define t_setcc FXR_T(t_setcc)
@@ -567,6 +568,11 @@ FXR_TABLES(FXR_DECL_TABLE)
 #define t_x3 FXR_T(t_x3)
 #define t_arj FXR_T(t_arj)
 #define t_lcj FXR_T(t_lcj)
+#define t_unt FXR_T(t_unt)     // fxr_pin_win.c (no replicas)
+#define t_ldp FXR_T(t_ldp)
+#define t_ldgs FXR_T(t_ldgs)
+#define t_mul FXR_T(t_mul)
+#define t_div FXR_T(t_div)
 // The SSE ops with a 3-operand fused form (copy ; op), in t_x3 order; -1 when not one of them
 static inline int x3_index(const char *n) {
     static const char *const k[20] = { "addps", "subps", "mulps", "divps", "addpd", "subpd", "mulpd", "divpd",

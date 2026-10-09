@@ -187,7 +187,10 @@ sideload edition (FEX, ~90% of native) stays the full-speed option, from the sam
   code paths on the same fields, Wine's function when a lock is contended; the host names the
   targets from the export tables, fxi_win_host.c `host_native_kind`; CI `winstate_test
   winnative`); the profiler samples FXR threads' pc/x21 (pinned handlers vs FXI handlers by
-  name vs lookups vs entering) and names native targets through the fast-forward thunks.
+  name vs lookups vs entering) and names native targets through the fast-forward thunks; pinned
+  forms (engine/fxr/fxr_pin_win.c) for what 118's profile showed on the slow path: inc/dec/not/neg
+  of memory, 8/16-bit loads, `mov r, gs:[disp]`, one-operand mul/imul/div/idiv (difftest: inc_m_*,
+  movb_ld, muldiv_m, gs_load).
 - **Build 74 result (iPhone 15 Pro Max, JIT off)**: FXR 11.6% of native vs FXI 8.7% = **1.33x**
   (integer 20.3% vs 10.9%, float 9.9/8.3, memory 10.9/9.1, branch 8.5/8.5, simd 8.4/7.0), all
   checksums match. Branch-heavy code gains nothing yet (the indirect/jcc paths go through p_slow

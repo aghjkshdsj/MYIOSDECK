@@ -192,7 +192,7 @@ const PFn t_setcc[16][16] = { C16(ROW_SETCC, _) };   // [cc][reg]
 // Lowering: FXI's decoded uops -> pinned handlers
 // ===========================================================================
 enum { FAM_NONE, FAM_ALU, FAM_MOV, FAM_LEA, FAM_SHIFT, FAM_UNARY, FAM_EXT, FAM_CMOV, FAM_SETCC, FAM_IMUL2,
-       FAM_IMUL3, FAM_FJCC, FAM_NAMED, FAM_X, FAM_XI, FAM_XS };
+       FAM_IMUL3, FAM_FJCC, FAM_NAMED, FAM_X, FAM_XI, FAM_XS, FAM_MULDIV };
 enum { N_JMP, N_JCC, N_CALL, N_CALL_R, N_CALL_M, N_JMP_R, N_JMP_M, N_RET, N_GOTO, N_SYSCALL, N_STOP, N_PUSH_R,
        N_POP_R, N_NOP };
 // FAM_XS: SSE loads/stores and the ops between general registers and XMM
@@ -321,6 +321,8 @@ static void init_desc(void) {
         put(fxi_imul2_tab[rm][si], FAM_IMUL2, rm, si, 0, 0);
         put(fxi_imul3_tab[rm][si], FAM_IMUL3, rm, si, 0, 0);
     }
+    for (int op = 0; op < 4; op++) for (int rm = 0; rm < 2; rm++) for (int si = 0; si < 4; si++)
+        put(fxi_muldiv_tab[op][rm][si], FAM_MULDIV, op, rm, si, 0);   // mul imul div idiv (one operand)
     put(fxi_setcc_tab[0], FAM_SETCC, 0, 0, 0, 0);
     for (int t = 0; t < 2; t++) for (int ri = 0; ri < 2; ri++) for (int s = 0; s < 2; s++) for (int cc = 0; cc < 16; cc++)
         put(fxi_fjcc_tab[t][ri][s][cc], FAM_FJCC, t, ri, s, cc);
@@ -413,7 +415,9 @@ static void lower_one(Out *o, const Uop *u) {
         if (fm == F_RM && si >= 2 && D >= 0) {
             if (simple_mem(u)) { put_uop(o, u, t_ld[si - 2][u->base][D]); return; }
             if (ea_ok(u)) { put_uop(o, u, t_ldi[si == 3 ? FL_LD64 : FL_LD32][u->base][u->index][D]); return; }
+            if (u->base == R_GS && u->index == R_ZERO) { put_uop(o, u, t_ldgs[si - 2][D]); return; }   // gs:[disp]
         }
+        if (fm == F_RM && si < 2 && D >= 0 && ea_ok(u)) { with_ea(o, u, t_ldp[si][D]); return; }   // the low byte/word
         if (fm == F_MR && S >= 0) {
             if (simple_mem(u)) { put_uop(o, u, t_st[si][u->base][S]); return; }
             if (ea_ok(u) && si != 1) { put_uop(o, u, t_stx[si == 0 ? 0 : si == 2 ? 1 : 2][u->base][u->index][S]); return; }
@@ -464,7 +468,15 @@ static void lower_one(Out *o, const Uop *u) {
     }
     case FAM_UNARY:
         if (!d->b && d->c2 >= 2 && D >= 0) { put_uop(o, u, t_un[fl][d->c2 - 2][d->a][D]); return; }
+        if (d->b && ea_ok(u)) { with_ea(o, u, t_unt[fl][d->a & 3][d->c2 & 3]); return; }   // inc/dec/not/neg [mem]
         break;
+    case FAM_MULDIV: {   // mul imul div idiv with rDX:rAX, 32/64-bit (fxr_pin_win.c)
+        int op = d->a, rm = d->b, si = d->c2, k = rm ? 16 : S;
+        if (si < 2 || k < 0 || (rm && !ea_ok(u))) break;
+        PFn p = op < 2 ? t_mul[op][si == 3][fl][k] : t_div[op - 2][si == 3][k];
+        if (rm) with_ea(o, u, p); else put_uop(o, u, p);
+        return;
+    }
     case FAM_IMUL2: case FAM_IMUL3: {
         int rm = d->a, si = d->b;
         if (si < 2 || D < 0) break;
@@ -1217,6 +1229,7 @@ const char *fxi_win_op_name(const void *fp, char *buf, size_t n) {
     case FAM_FJCC: snprintf(buf, n, "%s+jcc", d->a ? "test" : "cmp"); return buf;
     case FAM_X: snprintf(buf, n, "%s %s", fxr_xops[d->a].name, d->b ? "m" : "r"); return buf;
     case FAM_XI: snprintf(buf, n, "%s imm", fxr_xshift[d->a].name); return buf;
+    case FAM_MULDIV: snprintf(buf, n, "%s %s %s", md[d->a & 3], d->b ? "m" : "r", sz[d->c2 & 3]); return buf;
     default: break;
     }
     for (size_t i = 0; fn && i < sizeof k_named_ops / sizeof k_named_ops[0]; i++)
