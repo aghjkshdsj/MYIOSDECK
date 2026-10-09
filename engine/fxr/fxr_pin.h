@@ -13,6 +13,23 @@
 
 #include "fxi_internal.h"
 
+// Handler replicas: fxr_pin_*_r1.c compile a hot handler file a second time with FXR_R1, which
+// gives its tables (and the SSE op lists) an _r1 suffix: the same handlers at other addresses,
+// for the lowering to give a handler used at two places different copies (fxr_pin.c, replicas).
+#ifdef FXR_R1
+#define FXR_RSUF _r1
+#define fxr_xops fxr_xops_r1
+#define fxr_n_xops fxr_n_xops_r1
+#define fxr_xshift fxr_xshift_r1
+#define fxr_n_xshift fxr_n_xshift_r1
+#define fxr_xshuffle_index fxr_xshuffle_index_r1
+#else
+#define FXR_RSUF
+#endif
+#define FXR_T3(N, S) fxr_##N##S
+#define FXR_T2(N, S) FXR_T3(N, S)
+#define FXR_T(N) FXR_T2(N, FXR_RSUF)
+
 #define PH static FXR_CC void
 // Dispatch: the handler pointer is the uop's first field, so stepping to the next uop is one
 // load with writeback and an indirect branch.
@@ -403,96 +420,96 @@ typedef struct { const char *name; PFn h[9]; } XShift;
     X(t_fs_addr, [4][16]) X(t_fs_subr, [4][16]) X(t_fs_comis, [2][9][9]) \
     X(t_fs_addrr, [4][16][16]) X(t_fs_subrr, [4][16][16]) \
     X(t_x3, [20][9][9][9]) X(t_arj, [5][2][8][16][16]) X(t_lcj, [2][16][17][16])
-#define FXR_DECL_TABLE(NAME, DIMS) extern const PFn fxr_##NAME DIMS;
+#define FXR_DECL_TABLE(NAME, DIMS) extern const PFn FXR_T(NAME) DIMS; extern const PFn fxr_##NAME##_r1 DIMS;
 FXR_TABLES(FXR_DECL_TABLE)
-#define t_setcc fxr_t_setcc
-#define t_alu_rr fxr_t_alu_rr
-#define t_alu_ri fxr_t_alu_ri
-#define t_alu_rt fxr_t_alu_rt
-#define t_alu_tr fxr_t_alu_tr
-#define t_alu_ti fxr_t_alu_ti
-#define t_stti fxr_t_stti
-#define t_ld fxr_t_ld
-#define t_st fxr_t_st
-#define t_lea fxr_t_lea
-#define t_sti fxr_t_sti
-#define t_sti_bi fxr_t_sti_bi
-#define t_ea fxr_t_ea
-#define t_mov_rr fxr_t_mov_rr
-#define t_mov_ri fxr_t_mov_ri
-#define t_movt fxr_t_movt
-#define t_ldt fxr_t_ldt
-#define t_stt fxr_t_stt
-#define t_ext fxr_t_ext
-#define t_sh fxr_t_sh
-#define t_un fxr_t_un
-#define t_imul2 fxr_t_imul2
-#define t_imul3 fxr_t_imul3
-#define t_imul2t fxr_t_imul2t
-#define t_imul3t fxr_t_imul3t
-#define t_cmov fxr_t_cmov
-#define t_cmovt fxr_t_cmovt
-#define t_fjc_rr fxr_t_fjc_rr
-#define t_fjc_ri fxr_t_fjc_ri
-#define t_fjt_ri fxr_t_fjt_ri
-#define t_fjt_rr fxr_t_fjt_rr
-#define t_fjt_rrx fxr_t_fjt_rrx
-#define t_xl_movx fxr_t_xl_movx
-#define t_xs_movx fxr_t_xs_movx
-#define t_xl_movss fxr_t_xl_movss
-#define t_xl_movsd fxr_t_xl_movsd
-#define t_xs_movss fxr_t_xs_movss
-#define t_xs_movsd fxr_t_xs_movsd
-#define t_xlt_movss fxr_t_xlt_movss
-#define t_xlt_movsd fxr_t_xlt_movsd
-#define t_xlt_movlps fxr_t_xlt_movlps
-#define t_xlt_movhps fxr_t_xlt_movhps
-#define t_xst_movss fxr_t_xst_movss
-#define t_xst_movsd fxr_t_xst_movsd
-#define t_xst_movhps fxr_t_xst_movhps
-#define t_xst_movx fxr_t_xst_movx
-#define t_xg fxr_t_xg
-#define t_gx fxr_t_gx
-#define t_xgt fxr_t_xgt
-#define t_ldi fxr_t_ldi
-#define t_ldz8s fxr_t_ldz8s
-#define t_stx fxr_t_stx
-#define t_fmi fxr_t_fmi
-#define t_fmit fxr_t_fmit
-#define t_fmr fxr_t_fmr
-#define t_fjs_ri fxr_t_fjs_ri
-#define t_fjs_rr fxr_t_fjs_rr
-#define t_fjs_rrx fxr_t_fjs_rrx
-#define t_fcj fxr_t_fcj
-#define t_fcjt fxr_t_fcjt
-#define t_fai fxr_t_fai
-#define t_fid fxr_t_fid
-#define t_amr fxr_t_amr
-#define t_alea fxr_t_alea
-#define t_ami fxr_t_ami
-#define t_axz fxr_t_axz
-#define t_pop2 fxr_t_pop2
-#define t_push2 fxr_t_push2
-#define t_popret fxr_t_popret
-#define t_ltj fxr_t_ltj
-#define t_sic fxr_t_sic
-#define t_sicr fxr_t_sicr
-#define t_sii fxr_t_sii
-#define t_sri fxr_t_sri
-#define t_3op fxr_t_3op
-#define t_fs_sub fxr_t_fs_sub
-#define t_fs_and fxr_t_fs_and
-#define t_fs_subi fxr_t_fs_subi
-#define t_fs_andi fxr_t_fs_andi
-#define t_fs_log fxr_t_fs_log
-#define t_fs_addr fxr_t_fs_addr
-#define t_fs_subr fxr_t_fs_subr
-#define t_fs_comis fxr_t_fs_comis
-#define t_fs_addrr fxr_t_fs_addrr
-#define t_fs_subrr fxr_t_fs_subrr
-#define t_x3 fxr_t_x3
-#define t_arj fxr_t_arj
-#define t_lcj fxr_t_lcj
+#define t_setcc FXR_T(t_setcc)
+#define t_alu_rr FXR_T(t_alu_rr)
+#define t_alu_ri FXR_T(t_alu_ri)
+#define t_alu_rt FXR_T(t_alu_rt)
+#define t_alu_tr FXR_T(t_alu_tr)
+#define t_alu_ti FXR_T(t_alu_ti)
+#define t_stti FXR_T(t_stti)
+#define t_ld FXR_T(t_ld)
+#define t_st FXR_T(t_st)
+#define t_lea FXR_T(t_lea)
+#define t_sti FXR_T(t_sti)
+#define t_sti_bi FXR_T(t_sti_bi)
+#define t_ea FXR_T(t_ea)
+#define t_mov_rr FXR_T(t_mov_rr)
+#define t_mov_ri FXR_T(t_mov_ri)
+#define t_movt FXR_T(t_movt)
+#define t_ldt FXR_T(t_ldt)
+#define t_stt FXR_T(t_stt)
+#define t_ext FXR_T(t_ext)
+#define t_sh FXR_T(t_sh)
+#define t_un FXR_T(t_un)
+#define t_imul2 FXR_T(t_imul2)
+#define t_imul3 FXR_T(t_imul3)
+#define t_imul2t FXR_T(t_imul2t)
+#define t_imul3t FXR_T(t_imul3t)
+#define t_cmov FXR_T(t_cmov)
+#define t_cmovt FXR_T(t_cmovt)
+#define t_fjc_rr FXR_T(t_fjc_rr)
+#define t_fjc_ri FXR_T(t_fjc_ri)
+#define t_fjt_ri FXR_T(t_fjt_ri)
+#define t_fjt_rr FXR_T(t_fjt_rr)
+#define t_fjt_rrx FXR_T(t_fjt_rrx)
+#define t_xl_movx FXR_T(t_xl_movx)
+#define t_xs_movx FXR_T(t_xs_movx)
+#define t_xl_movss FXR_T(t_xl_movss)
+#define t_xl_movsd FXR_T(t_xl_movsd)
+#define t_xs_movss FXR_T(t_xs_movss)
+#define t_xs_movsd FXR_T(t_xs_movsd)
+#define t_xlt_movss FXR_T(t_xlt_movss)
+#define t_xlt_movsd FXR_T(t_xlt_movsd)
+#define t_xlt_movlps FXR_T(t_xlt_movlps)
+#define t_xlt_movhps FXR_T(t_xlt_movhps)
+#define t_xst_movss FXR_T(t_xst_movss)
+#define t_xst_movsd FXR_T(t_xst_movsd)
+#define t_xst_movhps FXR_T(t_xst_movhps)
+#define t_xst_movx FXR_T(t_xst_movx)
+#define t_xg FXR_T(t_xg)
+#define t_gx FXR_T(t_gx)
+#define t_xgt FXR_T(t_xgt)
+#define t_ldi FXR_T(t_ldi)
+#define t_ldz8s FXR_T(t_ldz8s)
+#define t_stx FXR_T(t_stx)
+#define t_fmi FXR_T(t_fmi)
+#define t_fmit FXR_T(t_fmit)
+#define t_fmr FXR_T(t_fmr)
+#define t_fjs_ri FXR_T(t_fjs_ri)
+#define t_fjs_rr FXR_T(t_fjs_rr)
+#define t_fjs_rrx FXR_T(t_fjs_rrx)
+#define t_fcj FXR_T(t_fcj)
+#define t_fcjt FXR_T(t_fcjt)
+#define t_fai FXR_T(t_fai)
+#define t_fid FXR_T(t_fid)
+#define t_amr FXR_T(t_amr)
+#define t_alea FXR_T(t_alea)
+#define t_ami FXR_T(t_ami)
+#define t_axz FXR_T(t_axz)
+#define t_pop2 FXR_T(t_pop2)
+#define t_push2 FXR_T(t_push2)
+#define t_popret FXR_T(t_popret)
+#define t_ltj FXR_T(t_ltj)
+#define t_sic FXR_T(t_sic)
+#define t_sicr FXR_T(t_sicr)
+#define t_sii FXR_T(t_sii)
+#define t_sri FXR_T(t_sri)
+#define t_3op FXR_T(t_3op)
+#define t_fs_sub FXR_T(t_fs_sub)
+#define t_fs_and FXR_T(t_fs_and)
+#define t_fs_subi FXR_T(t_fs_subi)
+#define t_fs_andi FXR_T(t_fs_andi)
+#define t_fs_log FXR_T(t_fs_log)
+#define t_fs_addr FXR_T(t_fs_addr)
+#define t_fs_subr FXR_T(t_fs_subr)
+#define t_fs_comis FXR_T(t_fs_comis)
+#define t_fs_addrr FXR_T(t_fs_addrr)
+#define t_fs_subrr FXR_T(t_fs_subrr)
+#define t_x3 FXR_T(t_x3)
+#define t_arj FXR_T(t_arj)
+#define t_lcj FXR_T(t_lcj)
 // The SSE ops with a 3-operand fused form (copy ; op), in t_x3 order; -1 when not one of them
 static inline int x3_index(const char *n) {
     static const char *const k[20] = { "addps", "subps", "mulps", "divps", "addpd", "subpd", "mulpd", "divpd",
@@ -531,6 +548,10 @@ extern const size_t fxr_n_xops;
 extern const XShift fxr_xshift[];
 extern const size_t fxr_n_xshift;
 void fxr_xshuffle_index(const char *op, unsigned imm, uint8_t *x);
+#ifndef FXR_R1
+extern const XOp fxr_xops_r1[];       // the replicas (fxr_pin_sse_r1.c)
+extern const XShift fxr_xshift_r1[];
+#endif
 #define E1(R, NAME) p_##NAME##_##R,
 #define E_RR(S, D, NAME) p_##NAME##_##D##_##S,
 #define ROW_RR(D, NAME) { R16B(E_RR, D, NAME) },

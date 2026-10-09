@@ -134,6 +134,69 @@ static int is_shuffle(const char *n) {
     return !strcmp(n, "pshufd") || !strcmp(n, "pshuflw") || !strcmp(n, "pshufhw") || !strcmp(n, "shufps") ||
            !strcmp(n, "shufpd") || !strcmp(n, "psrldq") || !strcmp(n, "pslldq");
 }
+// ---- Handler replicas ----
+// On Neoverse N2 an indirect branch with several successors costs 2-3 cycles more each time, even
+// when predicted right (engine/fxr-probe/dispatch_probe.c, "mix": 3-4 cycles a dispatch against
+// 1.3), and a handler used at two places in a loop is such a branch. The hot handler files are
+// compiled twice (fxr_pin_*_r1.c: the same code at other addresses), and the lowering runs a
+// handler's second place in a block (or in one copy of a loop trace) from the replica, so each
+// branch keeps one successor: Ertl and Gregg's replication of interpreter instructions. A handler
+// at one place per copy alternates between the copies of a trace, which also spaces out repeats of
+// the same branch (the probe: a branch taken again within a few dispatches costs more).
+#define RMAP_SLOTS (1u << 17)
+typedef struct { PFn p, r; } RPair;
+static RPair *g_rmap;
+static uint64_t hpfn(PFn p) { return ((uint64_t)(uintptr_t)p * 0x9E3779B97F4A7C15ull) >> 40; }
+static void rmap_put(PFn p, PFn r) {
+    if (!p || !r || p == r) return;
+    uint64_t h = hpfn(p) & (RMAP_SLOTS - 1);
+    while (g_rmap[h].p && g_rmap[h].p != p) h = (h + 1) & (RMAP_SLOTS - 1);
+    g_rmap[h] = (RPair){ p, r };
+}
+static PFn rmap_get(PFn p) {
+    uint64_t h = hpfn(p) & (RMAP_SLOTS - 1);
+    for (; g_rmap[h].p; h = (h + 1) & (RMAP_SLOTS - 1)) if (g_rmap[h].p == p) return g_rmap[h].r;
+    return 0;
+}
+static void rmap_tab(const PFn *a, const PFn *b, size_t n) { for (size_t i = 0; i < n; i++) rmap_put(a[i], b[i]); }
+#define RMAP(N) rmap_tab((const PFn *)fxr_##N, (const PFn *)fxr_##N##_r1, sizeof fxr_##N / sizeof(PFn))
+static void rmap_init(void) {
+    g_rmap = calloc(RMAP_SLOTS, sizeof *g_rmap);
+    // fxr_pin_alu.c
+    RMAP(t_alu_rr); RMAP(t_alu_ri); RMAP(t_alu_rt); RMAP(t_alu_tr); RMAP(t_alu_ti); RMAP(t_stti); RMAP(t_ld);
+    RMAP(t_st); RMAP(t_lea); RMAP(t_sti); RMAP(t_sti_bi); RMAP(t_ea); RMAP(t_mov_rr); RMAP(t_mov_ri); RMAP(t_movt);
+    RMAP(t_ldt); RMAP(t_stt); RMAP(t_ext); RMAP(t_sh); RMAP(t_un); RMAP(t_imul2); RMAP(t_imul3); RMAP(t_imul2t);
+    RMAP(t_imul3t); RMAP(t_cmov); RMAP(t_cmovt);
+    // fxr_pin_sse.c
+    RMAP(t_xl_movx); RMAP(t_xs_movx); RMAP(t_xl_movss); RMAP(t_xl_movsd); RMAP(t_xs_movss); RMAP(t_xs_movsd);
+    RMAP(t_xlt_movss); RMAP(t_xlt_movsd); RMAP(t_xlt_movlps); RMAP(t_xlt_movhps); RMAP(t_xst_movss); RMAP(t_xst_movsd);
+    RMAP(t_xst_movhps); RMAP(t_xst_movx); RMAP(t_xg); RMAP(t_xgt); RMAP(t_gx);
+    for (size_t i = 0; i < fxr_n_xops; i++) {
+        rmap_tab(&fxr_xops[i].rr[0][0], &fxr_xops_r1[i].rr[0][0], 81);
+        rmap_tab(fxr_xops[i].rt, fxr_xops_r1[i].rt, 9);
+    }
+    for (size_t i = 0; i < fxr_n_xshift; i++) rmap_tab(fxr_xshift[i].h, fxr_xshift_r1[i].h, 9);
+    // fxr_pin_mem.c, fxr_pin_mem2.c, fxr_pin_step3.c
+    RMAP(t_ldi); RMAP(t_ldz8s); RMAP(t_stx); RMAP(t_sri); RMAP(t_sii); RMAP(t_3op);
+}
+// u: `copies` copies of M uops (a block: one copy). A handler at several places in a copy takes
+// the replica at every second place; one at a single place takes it in every second copy.
+static void replicate(Uop *u, int M, int copies) {
+    unsigned char *k = calloc((size_t)M, 1);
+    for (int j = 0; j < M; j++) {
+        int occ = 0, cnt = 0;
+        for (int i = 0; i < M; i++) if (u[i].p == u[j].p) { cnt++; if (i < j) occ++; }
+        k[j] = (unsigned char)(cnt > 1 ? 1 + (occ & 1) : 0);   // 0: alternate by copy
+    }
+    for (int j = 0; j < M; j++) {
+        PFn r = rmap_get(u[j].p);
+        if (!r) continue;
+        for (int c = 0; c < copies; c++)
+            if (k[j] ? k[j] == 2 : (c & 1)) u[c * M + j].p = r;
+    }
+    free(k);
+}
+
 static void init_desc(void) {
     for (int cc = 0; cc < 16; cc++)
         for (int i = 0; i < 16; i++)
@@ -191,6 +254,7 @@ static void init_desc(void) {
         { "pmovmskb_RR", XS_GX + GX_PMOVMSKB }, { "movmskps_RR", XS_GX + GX_MOVMSKPS }, { "movmskpd_RR", XS_GX + GX_MOVMSKPD },
     };
     for (size_t i = 0; i < sizeof xnamed / sizeof xnamed[0]; i++) put(fxi_named(xnamed[i].n), FAM_XS, (uint8_t)xnamed[i].id, 0, 0, 0);
+    rmap_init();
 }
 
 static int greg(unsigned off) { return (off & 7) == 0 && off < 128 ? (int)(off >> 3) : -1; }   // pinnable GPR
@@ -731,6 +795,7 @@ Block *fxr_lower(struct Fxi *vm, Block *b) {
     }
     int copies = 1;
     if (ns) { copies = TRACE_UOPS / M; if (copies > TRACE_COPIES) copies = TRACE_COPIES; if (copies < 1) copies = 1; }
+    if (copies > 1 && (copies & 1)) copies--;   // even: the replicas alternate between copies (replicate)
     uint32_t n = (uint32_t)(copies * M + S);
     Block *nb = malloc(sizeof(Block) + sizeof(Uop) * n);
     nb->rip = b->rip;
@@ -753,6 +818,7 @@ Block *fxr_lower(struct Fxi *vm, Block *b) {
                 if (edge[i]) t->ulink2 = to; else t->ulink = to;
             }
         }
+    replicate(nb->u, M, copies);
     for (int i = 0; i < nseg; i++) { free(o[i].out); free(seg[i]); }
     return nb;
 }

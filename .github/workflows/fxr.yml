@@ -162,7 +162,7 @@ jobs:
         run: |
           cd engine/fxr
           xcrun -sdk iphoneos clang --version | head -1
-          srcs="fxr_pin_x3.c fxr_pin_arj.c fxr_pin_lcj.c fxr_pin_stub.c fxr_pin_step1.c fxr_pin_step2.c fxr_pin_step3.c fxr_pin_mem.c fxr_pin_mem2.c fxr_pin_fuse.c fxr_pin_sse.c fxr_pin_alu.c fxr_pin_br.c fxr_pin.c fxi_core.c fxi_decode.c fxi_flags.c fxi_ops.c fxi_sse.c fxi_atomic.c fxi_x87.c fxi_win.c"
+          srcs="fxr_pin_x3.c fxr_pin_arj.c fxr_pin_lcj.c fxr_pin_stub.c fxr_pin_step1.c fxr_pin_step2.c fxr_pin_step3.c fxr_pin_mem.c fxr_pin_mem2.c fxr_pin_fuse.c fxr_pin_sse.c fxr_pin_alu.c fxr_pin_br.c fxr_pin.c fxr_pin_alu_r1.c fxr_pin_sse_r1.c fxr_pin_mem_r1.c fxr_pin_mem2_r1.c fxr_pin_step3_r1.c fxi_core.c fxi_decode.c fxi_flags.c fxi_ops.c fxi_sse.c fxi_atomic.c fxi_x87.c fxi_win.c"
           printf '%s\n' $srcs | xargs -P "$(sysctl -n hw.ncpu)" -I{} sh -c 'xcrun -sdk iphoneos clang -arch arm64 -O2 -std=gnu11 -ffp-contract=off -miphoneos-version-min=17.0 -c "{}" -o "/tmp/$(basename {} .c).o"'
           echo "preserve_none: $(echo '__attribute__((preserve_none)) void f(void){}' | xcrun -sdk iphoneos clang -arch arm64 -x c -c - -o /dev/null 2>&1 && echo supported || echo NOT supported)"
           bash probe_cc.sh "xcrun -sdk iphoneos clang -arch arm64" || true

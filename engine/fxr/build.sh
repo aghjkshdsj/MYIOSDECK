@@ -14,6 +14,7 @@ if [ "$(uname -m)" = x86_64 ]; then ARCH_FLAGS=(-mcx16); fi
 CFLAGS="-O2 -std=gnu11 -Wall -Wextra -Wno-unused-parameter -Wno-unused-function -Wno-unused-variable \
 -Wno-unused-but-set-variable -Wno-sign-compare -ffp-contract=off -fno-math-errno ${ARCH_FLAGS[*]:-} ${EXTRA_CFLAGS:-}"
 SRCS="fxr_pin_x3.c fxr_pin_arj.c fxr_pin_lcj.c fxr_pin_stub.c fxr_pin_step1.c fxr_pin_step2.c fxr_pin_step3.c fxr_pin_mem.c fxr_pin_mem2.c fxr_pin_fuse.c fxr_pin_sse.c fxr_pin_alu.c fxr_pin_br.c fxr_pin.c
+      fxr_pin_alu_r1.c fxr_pin_sse_r1.c fxr_pin_mem_r1.c fxr_pin_mem2_r1.c fxr_pin_step3_r1.c
       fxi_core.c fxi_decode.c fxi_flags.c fxi_ops.c fxi_sse.c fxi_atomic.c fxi_x87.c fxi_win.c fxi_main.c"
 JOBS=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
 export CC CFLAGS HERE OUT
