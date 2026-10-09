@@ -123,7 +123,9 @@ def analyse(insns):
             srcs = [reg(x) for x in o[1:]]
             if d is not None and d != 'sp':
                 n = int(d[1:])
-                if mn in ('add', 'sub', 'mov', 'adds', 'subs') and any(s in ow_ for s in srcs if s):
+                if mn in ('adrp', 'adr'):
+                    ow_.add(d); t.discard(d)   # FXR's static data (a jump table, a constant table)
+                elif mn in ('add', 'sub', 'mov', 'adds', 'subs') and any(s in ow_ for s in srcs if s):
                     ow_.add(d); t.discard(d)   # an FXR pointer plus an offset stays FXR's memory
                 elif any(s in t for s in srcs if s): t.add(d); ow_.discard(d)
                 else:

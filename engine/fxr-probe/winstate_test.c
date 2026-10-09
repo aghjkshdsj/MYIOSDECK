@@ -123,7 +123,7 @@ static void on_fault(int sig, siginfo_t *si, void *ctx) {
     FxiCpu *c = (FxiCpu *)(uintptr_t)h.x[20];
     uint64_t rip = 0;
     int ok = fxr_win_host_state(c, &h, 1, &rip);
-    char out[512];
+    char out[1536];
     int n = 0, bad = !ok;
     n += snprintf(out + n, sizeof out - (size_t)n, "fault site %d at %#llx (address %p): ", g_site, (unsigned long long)h.pc, si->si_addr);
     if (!ok) n += snprintf(out + n, sizeof out - (size_t)n, "NOT exact");
@@ -145,6 +145,10 @@ static void on_fault(int sig, siginfo_t *si, void *ctx) {
         uint64_t fl = fxi_rflags(c) & 0x8d5;
         if (fl != 0x44) { bad = 1; n += snprintf(out + n, sizeof out - (size_t)n, "flags %#llx want 0x44; ", (unsigned long long)fl); }
         if (!bad) n += snprintf(out + n, sizeof out - (size_t)n, "exact (rip, GPRs, flags, XMM0-7)");
+    }
+    if (bad) {   // the host registers, to see where the guest state really is
+        n += snprintf(out + n, sizeof out - (size_t)n, "\n  host:");
+        for (int i = 0; i < 31 && n < (int)sizeof out - 24; i++) n += snprintf(out + n, sizeof out - (size_t)n, " x%d=%llx", i, (unsigned long long)h.x[i]);
     }
     out[n++] = '\n';
     (void)!write(1, out, (size_t)n);
