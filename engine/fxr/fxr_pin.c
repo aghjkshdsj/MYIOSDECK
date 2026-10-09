@@ -41,8 +41,8 @@ PX p_miss_ind(FXR_PARAMS) {
 // Leaving the chain (exit, error): the CPU state goes back to memory.
 PH p_stop(FXR_PARAMS) { SPILL_R(); SPILL_F(); SPILL_X(); }
 PH p_nop(FXR_PARAMS) { PNEXT(); }
-PH p_jmp(FXR_PARAMS) { PCHAIN(u->ulink, p_miss_t); }
-PH p_goto(FXR_PARAMS) { PCHAIN(u->ulink, p_miss_g); }
+PH p_jmp(FXR_PARAMS) { PCHAIN_T(u->ulink, p_miss_t); }
+PH p_goto(FXR_PARAMS) { PCHAIN_T(u->ulink, p_miss_g); }
 PH p_call(FXR_PARAMS) { g4 -= 8; st64(g4, u->aux); PCHAIN(u->ulink, p_miss_t); }
 PH p_ret(FXR_PARAMS) { uint64_t t = ld64(g4); g4 += 8 + u->aux; PIND(t); }
 PH p_call_T(FXR_PARAMS) { uint64_t t = ld64(T); g4 -= 8; st64(g4, u->aux); PIND(t); }
@@ -607,35 +607,137 @@ static int can_hoist(const Uop *a, const Uop *x, const Uop *c) {
     return reg_rw(x, &rd, &wr) && !(wr & used) && !(rd & (1u << D));
 }
 
-Block *fxr_lower(struct Fxi *vm, Block *b) {
-    (void)vm;
-    pthread_once(&g_once, init_desc);
-    Out o = { malloc(sizeof(Uop) * (2 * (size_t)b->n + 3)), 0, 0, { { 0, 0, 0 } } };   // + 2 flag stubs
+static void lower_block(Out *o, const Block *b) {
     for (uint32_t i = 0; i < b->n; i++) {
         if (i + 2 < b->n && can_hoist(&b->u[i], &b->u[i + 1], &b->u[i + 2])) {
             Uop pair[2] = { b->u[i], b->u[i + 2] };
-            lower_one(&o, &b->u[i + 1]);
-            if (try_fuse(&o, pair, 2)) { i += 2; continue; }
-            lower_one(&o, &b->u[i]);   // not fused after all: a, then c in its turn (order still valid)
+            lower_one(o, &b->u[i + 1]);
+            if (try_fuse(o, pair, 2)) { i += 2; continue; }
+            lower_one(o, &b->u[i]);   // not fused after all: a, then c in its turn (order still valid)
             i++;
             continue;
         }
-        if (try_fuse(&o, &b->u[i], b->n - i)) { i++; continue; }
-        lower_one(&o, &b->u[i]);
+        if (try_fuse(o, &b->u[i], b->n - i)) { i++; continue; }
+        lower_one(o, &b->u[i]);
     }
-    Block *nb = malloc(sizeof(Block) + sizeof(Uop) * (size_t)o.n);
+}
+
+// ---- Loop traces (superblocks) ----
+// When a block starts a loop, its blocks along the path back to it are laid out one after another
+// (a trace), in several copies while they fit in TRACE_UOPS uops, then the flag stubs. Each edge
+// along the trace (to the next block, or from the last block back to the first) leads to the next
+// uop, which the branch handlers reach with an add instead of loading the link (PCHAIN_T,
+// fxr_pin.h); only the last copy's edge back to the start loads it. Every guest instruction and
+// every branch of every iteration still runs as before: an exit leaves from whichever copy it is
+// in, and the blocks also exist on their own for entries from elsewhere.
+enum { TRACE_SEGS = 4, TRACE_UOPS = 48, TRACE_COPIES = 8, TRACE_MAX = 160, LOOP_SCAN = 1024 };
+
+// Is rip a loop head: does a direct branch (jcc, jmp; rel8 or rel32) in the LOOP_SCAN bytes after
+// it jump back to it? A scan of the raw bytes: a false match only costs a search that finds no
+// loop. Returns the end of the furthest such branch (the loop's code is [rip, end)), or 0.
+static uint64_t loop_end(struct Fxi *vm, uint64_t rip) {
+    uint64_t lo = (uint64_t)(uintptr_t)vm->image, hi = lo + vm->image_size, found = 0;
+    if (vm->windows || rip < lo || rip >= hi) return 0;
+    uint64_t end = hi - rip > LOOP_SCAN ? rip + LOOP_SCAN : hi;
+    for (uint64_t a = rip; a + 2 <= end; a++) {
+        const uint8_t *q = (const uint8_t *)(uintptr_t)a;
+        int32_t r;
+        if (((q[0] & 0xf0) == 0x70 || q[0] == 0xeb) && a + 2 + (uint64_t)(int64_t)(int8_t)q[1] == rip) found = a + 2;
+        else if (q[0] == 0xe9 && a + 5 <= end && (memcpy(&r, q + 1, 4), a + 5 + (uint64_t)(int64_t)r == rip)) found = a + 5;
+        else if (q[0] == 0x0f && (q[1] & 0xf0) == 0x80 && a + 6 <= end && (memcpy(&r, q + 2, 4), a + 6 + (uint64_t)(int64_t)r == rip))
+            found = a + 6;
+    }
+    return found;
+}
+
+// A decoded block's direct successors: e[0] the taken target (jcc, jmp) or the next block (a goto
+// that splits a long block), e[1] a conditional branch's fallthrough. Returns how many (0: none
+// the trace can follow: calls, returns, indirect jumps, syscalls).
+static int trace_succ(const Block *b, uint64_t e[2]) {
+    if (!b->n) return 0;
+    const Uop *t = &b->u[b->n - 1];
+    const Desc *d = find(t->fn);
+    if (d && (d->fam == FAM_FJCC || is_named(d, N_JCC))) { e[0] = t->imm; e[1] = t->aux; return 2; }
+    if (is_named(d, N_JMP)) { e[0] = t->imm; return 1; }
+    if (is_named(d, N_GOTO)) { e[0] = t->aux; return 1; }
+    return 0;
+}
+
+// The blocks of the loop starting at b: seg[0] = b, seg[i + 1] the successor of seg[i] along
+// edge[i] (0 taken / jump / goto, 1 fallthrough), and the last block's edge[] leads back to b.
+// Follows the successor inside the loop's code (the fallthrough when both are). Returns how many
+// blocks, or 0 when there is no such loop (any blocks it decoded are freed).
+static int find_trace(struct Fxi *vm, Block *b, Block **seg, int *edge) {
+    uint64_t end = 0, e[2];
+    int n = 1, scanned = 0;
+    seg[0] = b;
+    for (;;) {
+        int k = trace_succ(seg[n - 1], e);
+        if (!k) break;
+        if (e[0] == b->rip) { edge[n - 1] = 0; return n; }
+        if (k == 2 && e[1] == b->rip) { edge[n - 1] = 1; return n; }
+        if (n == TRACE_SEGS) break;
+        if (!scanned) { end = loop_end(vm, b->rip); scanned = 1; }
+        if (!end) break;
+        int j = k == 2 && e[1] > b->rip && e[1] < end ? 1 : e[0] > b->rip && e[0] < end ? 0 : -1;
+        for (int i = 1; j >= 0 && i < n; i++) if (seg[i]->rip == e[j]) j = -1;   // an inner loop
+        if (j < 0) break;
+        edge[n - 1] = j;
+        seg[n++] = fxr_decode(vm, e[j]);
+    }
+    for (int i = 1; i < n; i++) free(seg[i]);
+    return 0;
+}
+
+Block *fxr_lower(struct Fxi *vm, Block *b) {
+    pthread_once(&g_once, init_desc);
+    Block *seg[TRACE_SEGS];
+    int edge[TRACE_SEGS], ns = find_trace(vm, b, seg, edge), nseg = ns ? ns : 1;
+    if (!ns) seg[0] = b;
+    Out o[TRACE_SEGS];
+    int m[TRACE_SEGS], off[TRACE_SEGS], soff[TRACE_SEGS], M = 0, S = 0;
+    for (int i = 0; i < nseg; i++) {
+        o[i] = (Out){ malloc(sizeof(Uop) * (2 * (size_t)seg[i]->n + 3)), 0, 0, { { 0, 0, 0 } } };   // + 2 flag stubs
+        lower_block(&o[i], seg[i]);
+        m[i] = o[i].n - o[i].np;
+        off[i] = M; soff[i] = S;
+        M += m[i]; S += o[i].np;
+    }
+    // A trace edge whose successor reads the flags needs its stub: no trace then.
+    for (int i = 0; ns && i < nseg; i++) {
+        if (m[i] < 1) ns = 0;
+        for (int k = 0; ns && k < o[i].np; k++) if (o[i].patch[k].edge == edge[i]) ns = 0;
+    }
+    if (M > TRACE_MAX) ns = 0;
+    if (!ns && nseg > 1) {   // the first block alone
+        for (int i = 1; i < nseg; i++) { free(o[i].out); free(seg[i]); }
+        nseg = 1; M = m[0]; S = o[0].np;
+    }
+    int copies = 1;
+    if (ns) { copies = TRACE_UOPS / M; if (copies > TRACE_COPIES) copies = TRACE_COPIES; if (copies < 1) copies = 1; }
+    uint32_t n = (uint32_t)(copies * M + S);
+    Block *nb = malloc(sizeof(Block) + sizeof(Uop) * n);
     nb->rip = b->rip;
-    nb->n = (uint32_t)o.n;
-    memcpy(nb->u, o.out, sizeof(Uop) * (size_t)o.n);
+    nb->n = n;
+    for (int c = 0; c < copies; c++)
+        for (int i = 0; i < nseg; i++) memcpy(&nb->u[c * M + off[i]], o[i].out, sizeof(Uop) * (size_t)m[i]);
+    for (int i = 0; i < nseg; i++) memcpy(&nb->u[copies * M + soff[i]], o[i].out + m[i], sizeof(Uop) * (size_t)o[i].np);
 #ifdef FXR_PROFILE
-    for (int k = 0; k < o.n; k++) nb->u[k].prof = 0;
+    for (uint32_t k = 0; k < n; k++) nb->u[k].prof = 0;
 #endif
-    for (int k = 0; k < o.np; k++) {   // point the branch's edges at their flag stubs
-        Uop *br = &nb->u[o.patch[k].at], *st = &nb->u[o.patch[k].stub];
-        if (o.patch[k].edge) br->ulink2 = st; else br->ulink = st;
-    }
-    free(o.out);
-    free(b);
+    for (int c = 0; c < copies; c++)
+        for (int i = 0; i < nseg; i++) {
+            int base = c * M + off[i];
+            for (int k = 0; k < o[i].np; k++) {   // point the branch's edges at their flag stubs
+                Uop *br = &nb->u[base + o[i].patch[k].at], *st = &nb->u[copies * M + soff[i] + (o[i].patch[k].stub - m[i])];
+                if (o[i].patch[k].edge) br->ulink2 = st; else br->ulink = st;
+            }
+            if (ns) {   // the trace edge: the next block, or back to the start (the next copy's)
+                Uop *t = &nb->u[base + m[i] - 1], *to = i + 1 < nseg ? t + 1 : &nb->u[c + 1 < copies ? (c + 1) * M : 0];
+                if (edge[i]) t->ulink2 = to; else t->ulink = to;
+            }
+        }
+    for (int i = 0; i < nseg; i++) { free(o[i].out); free(seg[i]); }
     return nb;
 }
 

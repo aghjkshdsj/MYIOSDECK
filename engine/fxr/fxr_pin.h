@@ -199,7 +199,17 @@ FXI_INLINE int pcond_tab(uint64_t tab, uint64_t F0, uint64_t F1, uint64_t F2, ui
 // The direction is a host conditional branch (the conditional predictor), each side chains to
 // its link. Measured: selecting the link with csel and one indirect jump instead was much slower
 // on Neoverse N2 (the indirect predictor then predicts every guest branch's direction).
-#define FJ_BR(TAKEN) do { if (TAKEN) PCHAIN(u->ulink, p_miss_t); PCHAIN(u->ulink2, p_miss_f); } while (0)
+// An edge that leads to the next uop (a loop trace, fxr_lower) steps there with an add, as PNEXT
+// does: the next dispatch then does not wait for the link load, which only feeds this predicted
+// compare. (Measured on Neoverse N2: a dispatch whose uop pointer comes from a load costs 4
+// cycles, one from an add about 1.3; engine/fxr-probe/dispatch_probe.c.)
+#define PCHAIN_T(LINK, MISS) do {                                                          \
+        Uop *lk_ = (LINK), *nx_ = u + 1;                                                   \
+        if (lk_ == nx_) { __asm__("" : "+r"(nx_)); PGO(nx_); }                             \
+        if (FXI_LIKELY(lk_ != 0)) PGO(lk_);                                                \
+        PTAIL(MISS);                                                                       \
+    } while (0)
+#define FJ_BR(TAKEN) do { if (TAKEN) PCHAIN_T(u->ulink, p_miss_t); PCHAIN_T(u->ulink2, p_miss_f); } while (0)
 // Indirect branches (ret, jmp/call through a register or memory): a per-thread direct-mapped
 // cache of target -> first uop; a miss looks the block up (target in T) and fills the entry.
 #define IBTC_MASK 1023u

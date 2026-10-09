@@ -937,7 +937,7 @@ static int fxr_live_in(struct Fxi *vm, uint64_t rip) {
     return live;
 }
 
-Block *fxi_translate(struct Fxi *vm, uint64_t rip) {
+Block *fxr_decode(struct Fxi *vm, uint64_t rip) {   // FXR: fxi_translate without the lowering
     Dec *d = malloc(sizeof *d);
     d->p = (const uint8_t *)(uintptr_t)rip;
     d->n = 0;
@@ -968,6 +968,11 @@ Block *fxi_translate(struct Fxi *vm, uint64_t rip) {
     b->n = (uint32_t)d->n;
     memcpy(b->u, d->u, (size_t)d->n * sizeof(Uop));
     free(d);
+    return b;   // FXR
+}
+
+Block *fxi_translate(struct Fxi *vm, uint64_t rip) {   // FXR
+    Block *b = fxr_decode(vm, rip);                    // FXR
     vm->blocks++;
     return fxr_lower(vm, b);   // FXR: pinned handlers
 }

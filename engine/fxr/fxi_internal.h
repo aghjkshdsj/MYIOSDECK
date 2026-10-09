@@ -206,6 +206,7 @@ int fxi_cond(FxiCpu *c, unsigned cc);        // x86 condition code 0-15
 // ---- Dispatch ----
 #define FXI_NEXT(c, u) do { (void)(c); (void)(u); return; } while (0)   // FXR: back to the pinned caller
 Block *fxr_lower(struct Fxi *vm, Block *b);     // FXR: pinned handlers for a translated block
+Block *fxr_decode(struct Fxi *vm, uint64_t rip); // FXR: a decoded block (FXI uops, flag liveness), not lowered
 void fxr_enter(FxiCpu *c, Block *b);            // FXR: run the pinned chain from b until it stops
 #ifdef FXR_PROFILE
 void fxr_profile_dump(struct Fxi *vm);          // FXR diagnostic build: the hottest blocks, uop by uop
