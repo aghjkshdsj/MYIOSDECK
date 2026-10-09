@@ -72,17 +72,18 @@ def analyse(insns):
     # the uop, sp, and those plus any offset, e.g. the indirect-branch cache entry))
     init_taint = frozenset({'r%d' % r for r in PINNED_GPR} | {'r%d' % T_REG})
     init_own = frozenset({"r10", "r21", "sp"})
-    state_in = {0: (frozenset(), init_taint, init_own)}
+    init_holds = frozenset(("r%d" % r, "r%d" % r) for r in PINNED_GPR | FLAGS)
+    state_in = {0: (frozenset(), init_taint, init_own, init_holds)}
     work = [0]
     viol = {}
     guest = 0
     seen_guest = set()
     while work:
         i = work.pop()
-        written, taint, own = state_in[i]
+        written, taint, own, holds = state_in[i]
         a, mn, ops = insns[i]
         o = split_ops(ops)
-        w, t, ow_ = set(written), set(taint), set(own)
+        w, t, ow_, hd = set(written), set(taint), set(own), dict(holds)
         mem = next((x for x in o if x.startswith('[')), None)
         if mem is not None:
             inner = mem[1:mem.index(']')]
@@ -115,6 +116,7 @@ def analyse(insns):
             for d in dests:
                 if d is None or d == 'sp': continue
                 n = int(d[1:])
+                hd.pop(d, None)
                 if d[0] == 'r' and (n in PINNED_GPR or n in FLAGS): w.add(d)
                 if d[0] == 'v' and n < 8: w.add(d)
         elif o and not NODEST.match(mn):
@@ -129,17 +131,25 @@ def analyse(insns):
                 elif any(s in t for s in srcs if s): t.add(d); ow_.discard(d)
                 else:
                     ow_.discard(d); t.discard(d)
-                if d[0] == 'r' and (n in PINNED_GPR or n in FLAGS): w.add(d)   # taint follows the content
+                # a 64-bit register copy carries which entry value it holds; a guest register given
+                # its own entry value back (spilled to a scratch register and restored) is unchanged
+                if mn == 'mov' and len(o) == 2 and o[0].startswith('x') and o[1].startswith('x') and srcs[0] in hd:
+                    hd[d] = hd[srcs[0]]
+                else:
+                    hd.pop(d, None)
+                if d[0] == 'r' and (n in PINNED_GPR or n in FLAGS):   # taint follows the content
+                    if hd.get(d) == d: w.discard(d)
+                    else: w.add(d)
                 if d[0] == 'v' and n < 8: w.add(d)
             # instructions writing two registers (umull etc. write one); ldp handled above
-        out_state = (frozenset(w), frozenset(t), frozenset(ow_))
+        out_state = (frozenset(w), frozenset(t), frozenset(ow_), frozenset(hd.items()))
         for s in succ(i):
             if s in state_in:
-                pw, pt, po = state_in[s]
+                pw, pt, po, ph = state_in[s]
                 # merge: written and tainted unite; a register is FXR's own only if it is on both paths
-                nw, nt, no = pw | out_state[0], pt | out_state[1], po & out_state[2]
-                if (nw, nt, no) == (pw, pt, po): continue
-                state_in[s] = (nw, nt, no)
+                nw, nt, no, nh = pw | out_state[0], pt | out_state[1], po & out_state[2], ph & out_state[3]
+                if (nw, nt, no, nh) == (pw, pt, po, ph): continue
+                state_in[s] = (nw, nt, no, nh)
             else:
                 state_in[s] = out_state
             work.append(s)
