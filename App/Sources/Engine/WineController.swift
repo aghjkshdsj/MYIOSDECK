@@ -147,8 +147,15 @@ final class WineController: ObservableObject, @unchecked Sendable {
             } else {
                 unsetenv("WINEDLLOVERRIDES")
             }
+            // Settings › Without JIT › Windows games: FXR (fxi_win_host.c picks the x64 CPU).
+            if UserDefaults.standard.bool(forKey: "winFXR") {
+                setenv("MYIOSDECK_WIN_CPU", "fxr", 1)
+                dlog("[wine] no-JIT session with FXR as the x64 CPU (experimental)")
+            } else {
+                unsetenv("MYIOSDECK_WIN_CPU")
+            }
         } else {
-            for k in ["WINE_IOS_NOJIT", "MYIOSDECK_PE_DIR", "MYIOSDECK_NOJIT_EMULATOR", "WINEDLLOVERRIDES"] { unsetenv(k) }
+            for k in ["WINE_IOS_NOJIT", "MYIOSDECK_PE_DIR", "MYIOSDECK_NOJIT_EMULATOR", "WINEDLLOVERRIDES", "MYIOSDECK_WIN_CPU"] { unsetenv(k) }
             if program.noJIT { setenv("MADEIRA_USE_ARM64EC", "1", 1) }
         }
         state = .booting(program.title)

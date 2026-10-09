@@ -27,7 +27,10 @@ struct SettingsView: View {
 
                 DeckCard(title: "Without JIT", icon: "lock.shield") {
                     Toggle("Use FXR for x86-64 Hello (experimental)", isOn: $settings.useFXR).tint(Deck.accent)
-                    Text("FXR is FXI with the x86 registers kept in ARM registers (\(engine.fxrPinned ? "pinned in this build" : "NOT pinned in this build")). It is here to test speed; Windows programs always use FXI. The Performance tab benchmark measures both.")
+                    Text("FXR is FXI with the x86 registers kept in ARM registers (\(engine.fxrPinned ? "pinned in this build" : "NOT pinned in this build")), about 2-3× FXI's speed. The Performance tab benchmark measures both.")
+                        .font(.footnote).foregroundStyle(Deck.dim)
+                    Toggle("Windows games: FXR (experimental)", isOn: $settings.winFXR).tint(Deck.accent)
+                    Text("Runs a Windows game's x64 code with FXR instead of FXI. Faults (x64 exceptions) are exact; a debugger or garbage collector reading another thread's registers is not supported yet. Applies to the next game you start without JIT.")
                         .font(.footnote).foregroundStyle(Deck.dim)
                     Toggle("Windows games without audio", isOn: $settings.noJITMuteAudio).tint(Deck.accent)
                     Text("Without JIT a game's audio engine decodes and mixes sound in the interpreter, and that can take a whole CPU core (Stick Fight's menu music did). Off: the game starts with no audio device. Applies to the next game you start without JIT.")

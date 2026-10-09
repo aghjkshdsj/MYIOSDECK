@@ -42,6 +42,67 @@ void fxi_win_ret_to_entry_thunk(void);
 void fxi_win_begin_simulation(void);
 void __attribute__((noreturn)) fxi_win_jump_stack(void *sp, uint64_t pc);   // fxi_win_glue.S
 
+// ---- The x64 CPU: FXI, or FXR (experimental) when MYIOSDECK_WIN_CPU=fxr ----
+// Settings › Without JIT › "Windows games: FXR". The CPU is opaque here (the glue relies only on
+// the layout both share: GPRs at 0x00, rip at 0x98, xmm at 0xa0), so one table serves both.
+typedef struct {
+    const char *name;
+    void *(*cpu_new)(void);
+    uint64_t (*run)(void *c);
+    const char *(*error)(void *c);
+    void (*set_teb)(void *c, uint64_t teb);
+    uint64_t (*rip)(void *c);
+    void (*load_context)(void *c, const void *ctx);
+    void (*save_context)(void *c, void *ctx, uint64_t rip);
+    int (*exception)(void *c, void *e);
+    uint64_t (*fault_rip)(void *c, int *is_fetch);
+    int (*trail)(void *c, uint64_t *rips, int max);
+    int (*df_source)(void *c, uint64_t *rip);
+    uint64_t (*profile)(void *c, uint64_t *lookups, uint64_t *exits, uint64_t *blocks);
+    int (*exit_counts)(void *c, uint64_t *targets, uint64_t *counts, int max);
+    // FXR: the x64 state from the host registers of the thread (x0-x30, sp, pc, q0-q7), at a fault
+    // (fault = 1) or a stop; 1 = exact (the CPU loaded). NULL for FXI: its state is in memory.
+    int (*host_state)(void *c, const uint64_t *x31, uint64_t sp, uint64_t *pc, const void *q, int fault, uint64_t *rip);
+} win_cpu;
+
+static void *fxi_cpu_new(void) { return fxi_win_cpu_new(); }
+static uint64_t fxi_run(void *c) { return fxi_win_run(c); }
+static const char *fxi_error(void *c) { return fxi_win_error(c); }
+static void fxi_set_teb(void *c, uint64_t teb) { fxi_win_set_teb(c, teb); }
+static uint64_t fxi_rip(void *c) { return fxi_win_rip(c); }
+static void fxi_load_context(void *c, const void *ctx) { fxi_win_load_context(c, ctx); }
+static void fxi_save_context(void *c, void *ctx, uint64_t rip) { fxi_win_save_context(c, ctx, rip); }
+static int fxi_exception(void *c, void *e) { return fxi_win_exception(c, e); }
+static uint64_t fxi_fault_rip(void *c, int *is_fetch) { return fxi_win_fault_rip(c, is_fetch); }
+static int fxi_trail(void *c, uint64_t *rips, int max) { return fxi_win_trail(c, rips, max); }
+static int fxi_df_source(void *c, uint64_t *rip) { return fxi_win_df_source(c, rip); }
+static uint64_t fxi_profile(void *c, uint64_t *l, uint64_t *e, uint64_t *b) { return fxi_win_profile(c, l, e, b); }
+static int fxi_exit_counts(void *c, uint64_t *t, uint64_t *n, int max) { return fxi_win_exit_counts(c, t, n, max); }
+static const win_cpu k_fxi = { "FXI", fxi_cpu_new, fxi_run, fxi_error, fxi_set_teb, fxi_rip, fxi_load_context,
+                               fxi_save_context, fxi_exception, fxi_fault_rip, fxi_trail, fxi_df_source, fxi_profile,
+                               fxi_exit_counts, NULL };
+
+// fxr_win_shim.c
+void *mid_fxr_win_cpu_new(void);
+uint64_t mid_fxr_win_run(void *c);
+const char *mid_fxr_win_error(void *c);
+void mid_fxr_win_set_teb(void *c, uint64_t teb);
+uint64_t mid_fxr_win_rip(void *c);
+void mid_fxr_win_load_context(void *c, const void *ctx);
+void mid_fxr_win_save_context(void *c, void *ctx, uint64_t rip);
+int mid_fxr_win_exception(void *c, void *e);
+uint64_t mid_fxr_win_fault_rip(void *c, int *is_fetch);
+int mid_fxr_win_trail(void *c, uint64_t *rips, int max);
+int mid_fxr_win_df_source(void *c, uint64_t *rip);
+uint64_t mid_fxr_win_profile(void *c, uint64_t *lookups, uint64_t *exits, uint64_t *blocks);
+int mid_fxr_win_exit_counts(void *c, uint64_t *targets, uint64_t *counts, int max);
+int mid_fxr_win_host_state(void *c, const uint64_t *x31, uint64_t sp, uint64_t *pc, const void *q, int fault, uint64_t *rip);
+static const win_cpu k_fxr = { "FXR", mid_fxr_win_cpu_new, mid_fxr_win_run, mid_fxr_win_error, mid_fxr_win_set_teb,
+                               mid_fxr_win_rip, mid_fxr_win_load_context, mid_fxr_win_save_context,
+                               mid_fxr_win_exception, mid_fxr_win_fault_rip, mid_fxr_win_trail, mid_fxr_win_df_source,
+                               mid_fxr_win_profile, mid_fxr_win_exit_counts, mid_fxr_win_host_state };
+static const win_cpu *g_cpu = &k_fxi;
+
 static uint8_t *teb_now(void) {
     uint64_t tsd;
     __asm__ volatile("mrs %0, TPIDRRO_EL0" : "=r"(tsd));
@@ -165,7 +226,7 @@ static void log_exception_state(FxiCpu *c, const uint8_t *ctx64, uint64_t rip) {
     uint32_t ef; memcpy(&ef, ctx64 + 0x44, 4);
     mid_log("[fxi-win]   eflags %08x", ef);
     uint64_t df_rip;
-    int df_how = fxi_win_df_source(c, &df_rip);
+    int df_how = g_cpu->df_source(c, &df_rip);
     static const char *df_names[4] = { "never set", "std", "popf", "a context load" };
     mid_log("[fxi-win]   DF %u, last set by %s at %#llx", (ef >> 10) & 1, df_names[df_how & 3], (unsigned long long)df_rip);
     if (df_how) log_code("df code", df_rip > 48 ? df_rip - 48 : df_rip, 64);
@@ -173,7 +234,7 @@ static void log_exception_state(FxiCpu *c, const uint8_t *ctx64, uint64_t rip) {
     log_code("code before", from, (unsigned)(rip - from));
     log_code("code at", rip, 32);
     uint64_t t[16];
-    int n = fxi_win_trail(c, t, 16);
+    int n = g_cpu->trail(c, t, 16);
     for (int i = 0; i < n; i++) {
         char label[24];
         snprintf(label, sizeof label, "edge %d/%d", i + 1, n);
@@ -195,7 +256,7 @@ static void __attribute__((noreturn)) raise_x64(FxiCpu *c, uint64_t rip, uint32_
     uint8_t *area = cpu_area_now();
     if (area) area[0] = 0;                       // InSimulation
     uint8_t ctx64[0x4d0];
-    fxi_win_save_context(c, ctx64, rip);
+    g_cpu->save_context(c, ctx64, rip);
     static int dumped;
     if (dumped < 3) { dumped++; log_exception_state(c, ctx64, rip); }
     ki_layout *k = (ki_layout *)(uintptr_t)(rd64(ctx64 + 0x98) & ~63ull) - 1;   // below RSP
@@ -220,7 +281,17 @@ static long host_reset_to_consistent(const uint8_t *rec, const uint8_t *arm_ctx)
     memcpy(&code, rec, 4); memcpy(&flags, rec + 4, 4); memcpy(&nparams, rec + 0x18, 4);
     uint64_t info[2] = { nparams > 0 ? rd64(rec + 0x20) : 0, nparams > 1 ? rd64(rec + 0x28) : 0 };
     int fetch;
-    uint64_t rip = fxi_win_fault_rip(c, &fetch);
+    if (g_cpu->host_state) {
+        // FXR: the x64 registers are in host registers at the fault. Wine's ARM64 CONTEXT: X0-X28
+        // at 0x08, Fp 0xf0, Lr 0xf8, Sp 0x100, Pc 0x108, V0-V31 at 0x110.
+        uint64_t x[31], pc = rd64(arm_ctx + 0x108), r;
+        for (int i = 0; i < 29; i++) x[i] = rd64(arm_ctx + 0x08 + 8 * i);
+        x[29] = rd64(arm_ctx + 0xf0);
+        x[30] = rd64(arm_ctx + 0xf8);
+        if (!g_cpu->host_state(c, x, rd64(arm_ctx + 0x100), &pc, arm_ctx + 0x110, 1, &r))
+            fatal("FXR: no exact x64 state at this host fault");
+    }
+    uint64_t rip = g_cpu->fault_rip(c, &fetch);
     if (nparams > 2) nparams = 2;
     if (fetch && code == 0xC0000005) { info[0] = 8; info[1] = rip; nparams = 2; }   // execute fault
     char why[96];
@@ -361,7 +432,7 @@ static void prof_report(uint64_t period_samples) {
         if (best < 0 || bestn * 50 < period_samples) break;   // under 2% of the period: skip
         FxiCpu *c = g_fault_threads[best].cpu;
         uint64_t lk = 0, ex = 0;
-        if (c) fxi_win_profile(c, &lk, &ex, &blocks);
+        if (c) g_cpu->profile(c, &lk, &ex, &blocks);
         mid_log("[fxi-prof]   thread TEB %p: running %.0f%% of the time, x64 %.0f%% / native %.0f%%, "
                 "%llu lookups/s, %llu native calls/s", (void *)g_fault_threads[best].teb,
                 100.0 * bestn / (double)period_samples, 100.0 * g_prof_thr[best].x64 / (double)bestn,
@@ -373,7 +444,7 @@ static void prof_report(uint64_t period_samples) {
     for (int i = 0; i < FAULT_THREADS; i++) {                 // counters for the next period
         if (!g_fault_threads[i].thread) continue;
         FxiCpu *c = g_fault_threads[i].cpu;
-        if (c) fxi_win_profile(c, &g_prof_thr[i].last_lookups, &g_prof_thr[i].last_exits, &blocks);
+        if (c) g_cpu->profile(c, &g_prof_thr[i].last_lookups, &g_prof_thr[i].last_exits, &blocks);
         g_prof_thr[i].x64 = g_prof_thr[i].native = 0;
     }
     // x64 time per module, then the hottest instructions.
@@ -419,7 +490,7 @@ static void prof_report(uint64_t period_samples) {
     for (int i = 0; i < FAULT_THREADS; i++) {
         if (!g_fault_threads[i].thread || !g_fault_threads[i].cpu) continue;
         uint64_t tg[256], ct[256];
-        int k = fxi_win_exit_counts(g_fault_threads[i].cpu, tg, ct, 256);
+        int k = g_cpu->exit_counts(g_fault_threads[i].cpu, tg, ct, 256);
         for (int j = 0; j < k; j++) {
             total_calls += ct[j];
             uint64_t h = (tg[j] * 0x9E3779B97F4A7C15ull) >> 54;
@@ -461,7 +532,7 @@ static void *prof_thread(void *arg) {
             if (!c || !vmr((uint64_t)(uintptr_t)g_fault_threads[i].area, &insim, 1)) continue;
             if (!insim) { g_prof_thr[i].native++; continue; }
             g_prof_thr[i].x64++;
-            uint64_t lk, ex, bl, rip = fxi_win_profile(c, &lk, &ex, &bl);
+            uint64_t lk, ex, bl, rip = g_cpu->profile(c, &lk, &ex, &bl);
             uint64_t h = (rip * 0x9E3779B97F4A7C15ull) >> 50;
             for (int probe = 0; probe < 32; probe++, h = (h + 1) & (PROF_SLOTS - 1)) {
                 if (g_prof_hits[h].rip == rip) { g_prof_hits[h].n++; break; }
@@ -483,7 +554,7 @@ static void __attribute__((noreturn, used)) fault_entry(uint64_t addr, uint64_t 
     FxiCpu *c = area ? *(FxiCpu **)(area + 0x30) : NULL;
     if (!c) fatal("wild pointer: no FXI CPU on the faulting thread");
     int fetch;
-    uint64_t rip = fxi_win_fault_rip(c, &fetch);
+    uint64_t rip = g_cpu->fault_rip(c, &fetch);
     uint64_t info[2] = { fetch ? 8 : is_write, fetch ? rip : addr };
     char why[96];
     snprintf(why, sizeof why, "unmapped address%s, via the Mach hook", fetch ? ", fetching code" : "");
@@ -512,6 +583,23 @@ int mid_fxi_mach_fault(mach_port_t thread, arm_thread_state64_t *state, uint64_t
     uint64_t is_write = 0;
     if (thread_get_state(thread, ARM_EXCEPTION_STATE64, (thread_state_t)&es, &en) == KERN_SUCCESS)
         is_write = (es.__esr >> 6) & 1;                     // ESR WnR (data abort)
+    if (g_cpu->host_state) {
+        // FXR: the x64 registers are in the faulting thread's host registers (and XMM0-7 in
+        // q0-q7): load them into its CPU before the state below is replaced
+        FxiCpu *c = NULL;
+        for (int i = 0; i < FAULT_THREADS && !c; i++)
+            if (__atomic_load_n(&g_fault_threads[i].thread, __ATOMIC_ACQUIRE) == thread) c = g_fault_threads[i].cpu;
+        if (!c) return 0;
+        uint64_t x[31], pc = arm_thread_state64_get_pc(*state), rip;
+        for (int i = 0; i < 29; i++) x[i] = state->__x[i];
+        x[29] = arm_thread_state64_get_fp(*state);
+        x[30] = arm_thread_state64_get_lr(*state);
+        uint8_t q[8][16] = { { 0 } };
+        arm_neon_state64_t ns;
+        mach_msg_type_number_t nn = ARM_NEON_STATE64_COUNT;
+        if (thread_get_state(thread, ARM_NEON_STATE64, (thread_state_t)&ns, &nn) == KERN_SUCCESS) memcpy(q, &ns.__v[0], sizeof q);
+        if (!g_cpu->host_state(c, x, arm_thread_state64_get_sp(*state), &pc, q, 1, &rip)) return 0;
+    }
     state->__x[0] = fault_addr;
     state->__x[1] = is_write;
     arm_thread_state64_set_lr_fptr(*state, (void *)0);
@@ -534,8 +622,8 @@ static long host_thread_init(void) {
     }
     FxiCpu **slot = (FxiCpu **)(area + 0x30);                   // EmulatorData[0]
     if (!*slot) {
-        *slot = fxi_win_cpu_new();
-        fxi_win_set_teb(*slot, (uint64_t)(uintptr_t)teb);
+        *slot = g_cpu->cpu_new();
+        g_cpu->set_teb(*slot, (uint64_t)(uintptr_t)teb);
     }
     fault_thread_register(area, teb, *slot);
     // Game threads at user-interactive QoS: the scheduler keeps them on the performance cores.
@@ -568,6 +656,9 @@ void *mid_fxi_win_host_table(int tsd_offset) {
         (void *)host_feature_present,      (void *)host_reset_to_consistent,
     };
     fxi_win_tsd_offset = tsd_offset;
+    const char *cpu = getenv("MYIOSDECK_WIN_CPU");   // set by WineController from Settings
+    g_cpu = cpu && !strcmp(cpu, "fxr") ? &k_fxr : &k_fxi;
+    mid_log("[fxi-win] x64 CPU: %s", g_cpu->name);
     return &table;
 }
 
@@ -588,20 +679,20 @@ uint64_t fxi_win_glue_run(FxiCpu *c) {
     static int announced;
     if (!announced) {
         announced = 1;
-        mid_log("[fxi-win] first x64 code at %#llx", (unsigned long long)fxi_win_rip(c));
+        mid_log("[fxi-win] first x64 code at %#llx", (unsigned long long)g_cpu->rip(c));
     }
-    uint64_t target = fxi_win_run(c);
+    uint64_t target = g_cpu->run(c);
     if (!target) {
         fxi_win_exc e;
-        if (fxi_win_exception(c, &e)) raise_x64(c, e.rip, e.code, e.flags, e.nparams, e.info, "CPU exception");
-        fatal(fxi_win_error(c));
+        if (g_cpu->exception(c, &e)) raise_x64(c, e.rip, e.code, e.flags, e.nparams, e.info, "CPU exception");
+        fatal(g_cpu->error(c));
     }
     return target;
 }
 
 void fxi_win_glue_load_context(FxiCpu *c, const void *ctx) {
-    fxi_win_load_context(c, ctx);
-    fxi_win_set_teb(c, (uint64_t)(uintptr_t)teb_now());
+    g_cpu->load_context(c, ctx);
+    g_cpu->set_teb(c, (uint64_t)(uintptr_t)teb_now());
 }
 
 void fxi_win_glue_no_cpu(void) { fatal("x64 code entered on a thread without an FXI CPU (ThreadInit did not run)"); }
