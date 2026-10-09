@@ -98,7 +98,11 @@ mode == 2 && /^ *[0-9a-f]+:\t/ {
         if (fam != "") { famc[fam]++; if (inloop) lfamc[fam]++ }
         # single-instruction forms worth a specialised handler
         if (mn ~ /^(add|sub|mul|div|min|max|and|andn|or|xor)(ps|pd|ss|sd)$|^p(add|sub|and|or|xor|cmp)/ && shape ~ /,m$/) { famc["  SSE op with a memory operand"]++; if (inloop) lfamc["  SSE op with a memory operand"]++ }
-        if (ops ~ /\[[a-z0-9]+\+[a-z0-9]+\*[1248]/ || ops ~ /\[[a-z0-9]+\+[a-z0-9]+(\+|-|\])/) { famc["  operand with base + index"]++; if (inloop) lfamc["  operand with base + index"]++ }
+        if (ops ~ /\[[a-z0-9]+\+[a-z0-9]+\*[1248]/ || ops ~ /\[[a-z0-9]+\+[a-z0-9]+(\+|-|\])/) { famc["  operand with base + index"]++; if (inloop) lfamc["  operand with base + index"]++
+            # split: no displacement, and the scale (1, or the access size for a load or store)
+            ix = ops ~ /\[[a-z0-9]+\+[a-z0-9]+(\*[1248])?\]/ ? (ops ~ /\*[248]\]/ ? "  base + index*scale, no displacement" : "  base + index, no scale, no displacement") : "  base + index (*scale) + displacement"
+            ix = ix (mn ~ /^(mov|movzx|movsx|movsxd|movaps|movups|movdqa|movdqu|movss|movsd|movapd|movupd)$/ ? " (a move)" : " (other)")
+            famc[ix]++; if (inloop) lfamc[ix]++ }
         # SSE pairs: a register copy then an op on the copy (3-operand SSE), a load then an op on it
         if (pmn ~ /^mov(aps|apd|ups|upd|dqa|dqu|ss|sd)$/ && prev ~ / x,x$/ && rel == " [same dst]" && shape ~ / x,(x|m)$/) { famc["SSE: copy ; op on the copy (3-operand)"]++; if (inloop) lfamc["SSE: copy ; op on the copy (3-operand)"]++ }
         if (pmn ~ /^mov(aps|apd|ups|upd|dqa|dqu|ss|sd)$/ && prev ~ / x,m$/ && rel == " [same dst]" && shape ~ / x,(x|m)$/) { famc["SSE: load ; op on the loaded register"]++; if (inloop) lfamc["SSE: load ; op on the loaded register"]++ }
