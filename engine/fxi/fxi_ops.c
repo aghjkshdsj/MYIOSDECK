@@ -522,6 +522,106 @@ static void op_popad(FxiCpu *c, Uop *u) {
 static void op_pop_skip(FxiCpu *c, Uop *u) { FXI_TOUCH(c, u); (void)ld32(GPTR(c, c->r[R_SP])); POPW(c); FXI_NEXT(c, u); }
 // WoW64: control reached the system-call (imm) or unix-call (imm + 2) entry; the host takes over.
 static void op_bop_exit(FxiCpu *c, Uop *u) { c->rip = u->imm; c->stop = FXI_STOP_BOP; }
+
+// ---- i386 legacy instructions (Intel SDM pseudo-code); flags they leave undefined get the
+// values a logic op on AL gives ----
+static uint64_t flags_szp8(uint64_t f, uint64_t al) {   // SF ZF PF from AL, the rest from f
+    f &= ~0xc4ull;
+    return f | (uint64_t)!__builtin_parity((unsigned)(al & 0xff)) << 2 | (uint64_t)((al & 0xff) == 0) << 6 | (al & 0x80);
+}
+static void op_daa(FxiCpu *c, Uop *u) {
+    uint64_t f = fxi_rflags(c), al = c->r[R_AX] & 0xff, old_al = al, cf = 0, af = 0;
+    if ((al & 0x0f) > 9 || (f & 0x10)) { al = (al + 6) & 0xff; af = 1; }
+    if (old_al > 0x99 || (f & 1)) { al = (al + 0x60) & 0xff; cf = 1; }
+    wr8(c, R_AX * 8, al);
+    fxi_set_rflags(c, flags_szp8((f & ~0x811ull) | cf | af << 4, al));
+    FXI_NEXT(c, u);
+}
+static void op_das(FxiCpu *c, Uop *u) {
+    uint64_t f = fxi_rflags(c), al = c->r[R_AX] & 0xff, old_al = al, old_cf = f & 1, cf = 0, af = 0;
+    if ((al & 0x0f) > 9 || (f & 0x10)) { cf = old_cf | (al < 6); al = (al - 6) & 0xff; af = 1; }
+    if (old_al > 0x99 || old_cf) { al = (al - 0x60) & 0xff; cf = 1; }
+    wr8(c, R_AX * 8, al);
+    fxi_set_rflags(c, flags_szp8((f & ~0x811ull) | cf | af << 4, al));
+    FXI_NEXT(c, u);
+}
+static void op_aaa(FxiCpu *c, Uop *u) {
+    uint64_t f = fxi_rflags(c), ax = c->r[R_AX] & 0xffff, adj = (ax & 0x0f) > 9 || (f & 0x10);
+    if (adj) ax = (ax + 0x106) & 0xffff;
+    ax &= 0xff0f;
+    wr16(c, R_AX * 8, ax);
+    fxi_set_rflags(c, flags_szp8((f & ~0x811ull) | adj | adj << 4, ax));
+    FXI_NEXT(c, u);
+}
+static void op_aas(FxiCpu *c, Uop *u) {
+    uint64_t f = fxi_rflags(c), ax = c->r[R_AX] & 0xffff, adj = (ax & 0x0f) > 9 || (f & 0x10);
+    if (adj) ax = ((ax - 6) & 0xffff) - 0x100;
+    ax &= 0xff0f;
+    wr16(c, R_AX * 8, ax);
+    fxi_set_rflags(c, flags_szp8((f & ~0x811ull) | adj | adj << 4, ax));
+    FXI_NEXT(c, u);
+}
+static void op_aam(FxiCpu *c, Uop *u) {   // u->imm: the base (10 for plain aam)
+    uint64_t al = c->r[R_AX] & 0xff, base = u->imm & 0xff;
+    if (!base) { fxi_raise(c, u->rip, 0xC0000094, 0, 0, 0, 0); return; }
+    wr16(c, R_AX * 8, (al / base) << 8 | (al % base));
+    fxi_set_rflags(c, flags_szp8(fxi_rflags(c) & ~0x811ull, al % base));
+    FXI_NEXT(c, u);
+}
+static void op_aad(FxiCpu *c, Uop *u) {
+    uint64_t al = c->r[R_AX] & 0xff, ah = (c->r[R_AX] >> 8) & 0xff, r = (al + ah * (u->imm & 0xff)) & 0xff;
+    wr16(c, R_AX * 8, r);
+    fxi_set_rflags(c, flags_szp8(fxi_rflags(c) & ~0x811ull, r));
+    FXI_NEXT(c, u);
+}
+static void op_salc(FxiCpu *c, Uop *u) { wr8(c, R_AX * 8, fxi_flag_cf(c) ? 0xff : 0); FXI_NEXT(c, u); }
+// xlat: AL = [EBX + AL] (u->index: the segment base slot of an fs:/gs: override, else zero)
+static void op_xlat(FxiCpu *c, Uop *u) {
+    FXI_TOUCH(c, u);
+    wr8(c, R_AX * 8, ld8(GPTR(c, c->r[R_BX] + c->r[u->index] + (c->r[R_AX] & 0xff))));
+    FXI_NEXT(c, u);
+}
+// loop / loope / loopne (u->cc 0/1/2) and jecxz (3): ECX counts, the branch as a jcc's.
+static void op_loop(FxiCpu *c, Uop *u) {
+    uint32_t ecx = (uint32_t)c->r[R_CX];
+    int take;
+    if (u->cc == 3) take = ecx == 0;
+    else {
+        ecx--;
+        c->r[R_CX] = ecx;
+        take = ecx != 0 && (u->cc == 0 || (u->cc == 1) == (fxi_flag_zf(c) != 0));
+    }
+    if (take) CHAIN(c, u->link, u->imm);
+    CHAIN(c, u->link2, u->aux);
+}
+// into: #OF when OF is set (EXCEPTION_INT_OVERFLOW, reported after the instruction).
+static void op_into(FxiCpu *c, Uop *u) {
+    if (fxi_flag_of(c)) { fxi_raise(c, u->aux, 0xC0000095, 0, 0, 0, 0); return; }
+    FXI_NEXT(c, u);
+}
+// bound r32, m32&32: #BR (EXCEPTION_ARRAY_BOUNDS_EXCEEDED) outside [lower, upper].
+static void op_bound(FxiCpu *c, Uop *u) {
+    uint64_t a = fxi_ea(c, u);
+    int32_t v = (int32_t)c->r[u->dst >> 3], lo = (int32_t)ld32(a), hi = (int32_t)ld32(a + 4);
+    if (v < lo || v > hi) { fxi_raise(c, u->rip, 0xC000008C, 0, 0, 0, 0); return; }
+    FXI_NEXT(c, u);
+}
+// enter alloc (u->imm), level (u->aux): push ebp, copy level - 1 frame pointers, frame = esp.
+static void op_enter(FxiCpu *c, Uop *u) {
+    unsigned level = (unsigned)u->aux & 31;
+    uint32_t ebp = (uint32_t)c->r[R_BP], sp = (uint32_t)c->r[R_SP] - 4;
+    FXI_TOUCH(c, u);
+    st32(GPTR(c, sp), ebp);
+    uint32_t frame = sp;
+    for (unsigned i = 1; i < level; i++) {
+        ebp -= 4; sp -= 4;
+        st32(GPTR(c, sp), ld32(GPTR(c, ebp)));
+    }
+    if (level) { sp -= 4; st32(GPTR(c, sp), frame); }
+    c->r[R_BP] = frame;
+    c->r[R_SP] = (sp - (uint32_t)u->imm) & FXI_PTRMASK;
+    FXI_NEXT(c, u);
+}
 #endif
 
 // Fused cmp/test + jcc: [cmp/test][RR/RI][32/64][cc]. Flags are still recorded
@@ -764,7 +864,9 @@ static const struct { const char *name; OpFn fn; } kNamed[] = {
     { "stos", op_stos }, { "movs", op_movs }, { "scas", op_scas }, { "cmps", op_cmps }, { "lods", op_lods },
 #if FXI_I386
     { "int80", op_int80 }, { "pushad", op_pushad }, { "popad", op_popad }, { "pop_skip", op_pop_skip },
-    { "bop_exit", op_bop_exit },
+    { "bop_exit", op_bop_exit }, { "daa", op_daa }, { "das", op_das }, { "aaa", op_aaa }, { "aas", op_aas },
+    { "aam", op_aam }, { "aad", op_aad }, { "salc", op_salc }, { "xlat", op_xlat }, { "loop", op_loop },
+    { "into", op_into }, { "bound", op_bound }, { "enter", op_enter },
 #endif
 };
 

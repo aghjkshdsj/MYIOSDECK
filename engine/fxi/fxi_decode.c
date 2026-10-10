@@ -389,6 +389,9 @@ static int decode_one_inner(Dec *d) {
     int bits = vsize(d);
     int prev_fuse = d->fuse_at;
     d->fuse_at = -1;
+#if FXI_I386
+    if (b == 0x82) b = 0x80;   // i386: 82 is another encoding of the 80 group (ALU r/m8, imm8)
+#endif
 
     // ALU block 00-3F
     if (b < 0x40 && (b & 7) < 6) {
@@ -452,6 +455,41 @@ static int decode_one_inner(Dec *d) {
         if ((d->reg & 7) == 1 || (d->reg & 7) > 5) return unimplemented(d, "mov to cs");
         emit(d, named("nop"));
         return 0;
+    // BCD adjusts: they read CF/AF and write every arithmetic flag (OF undefined)
+    case 0x27: emit(d, named("daa")); meta(d)->reads = 1; return 0;
+    case 0x2f: emit(d, named("das")); meta(d)->reads = 1; return 0;
+    case 0x37: emit(d, named("aaa")); meta(d)->reads = 1; return 0;
+    case 0x3f: emit(d, named("aas")); meta(d)->reads = 1; return 0;
+    case 0xd4: case 0xd5: {                                           // aam / aad imm8 (the base)
+        Uop *u = emit(d, named(b == 0xd4 ? "aam" : "aad")); u->imm = rd_u8(d); meta(d)->reads = 1; return 0; }
+    case 0xd6: emit(d, named("salc")); meta(d)->reads = 1; return 0;   // AL = CF ? ff : 0
+    case 0xd7: {                                                      // xlat: AL = [ebx + al]
+        Uop *u = emit(d, named("xlat"));
+        u->index = d->seg ? (d->seg == 0x64 ? R_FS : R_GS) : R_ZERO;
+        return 0;
+    }
+    case 0xe0: case 0xe1: case 0xe2: case 0xe3: {                     // loopne loope loop jecxz
+        if (d->addr32) return unimplemented(d, "loop/jcxz on CX");    // 67: the 16-bit count
+        int64_t rel = rd_s8(d);
+        Uop *u = emit(d, named("loop"));
+        u->cc = (uint8_t)(b == 0xe2 ? 0 : b == 0xe1 ? 1 : b == 0xe0 ? 2 : 3);
+        u->imm = br_target(next_rip(d) + (uint64_t)rel); u->aux = next_rip(d);
+        if (b == 0xe0 || b == 0xe1) meta(d)->reads = 1;
+        return 1;
+    }
+    case 0xce: { Uop *u = emit(d, named("into")); u->aux = next_rip(d); meta(d)->reads = 1; return 0; }
+    case 0x62: {                                                      // bound r32, m32&32
+        modrm(d);
+        if (!d->is_mem || d->opsize16) return unimplemented(d, "bound");
+        Uop *u = emit(d, named("bound")); u->dst = gpr(d, d->reg, 32); set_mem(d, u);
+        return 0;
+    }
+    case 0xc8: {                                                      // enter imm16, imm8
+        if (d->opsize16) return unimplemented(d, "enterw");
+        Uop *u = emit(d, named("enter"));
+        u->imm = (uint64_t)(uint16_t)rd_s16(d); u->aux = rd_u8(d);
+        return 0;
+    }
 #endif
     case 0x50: case 0x51: case 0x52: case 0x53: case 0x54: case 0x55: case 0x56: case 0x57: {
         Uop *u = emit(d, named("push_R")); u->src = (uint16_t)(((b & 7) | (d->rexb << 3)) * 8); return 0; }
@@ -741,6 +779,10 @@ static int decode_one_inner(Dec *d) {
         return 0;
     }
     switch (op) {
+#if FXI_I386
+    case 0xa0: case 0xa8: { Uop *u = emit(d, named("push_I")); u->imm = op == 0xa0 ? 0x53 : 0x2b; return 0; }   // push fs/gs
+    case 0xa1: case 0xa9: emit(d, named("pop_skip")); return 0;                                               // pop fs/gs
+#endif
     case 0x05: { Uop *u = emit(d, named("syscall")); u->aux = next_rip(d); meta(d)->reads = 1; return 1; }
     case 0x0b: emit(d, named("trap"))->imm = 0x106; return 1;   // ud2
     case 0x0d: case 0x18: case 0x19: case 0x1a: case 0x1b: case 0x1c: case 0x1d: case 0x1e: case 0x1f:

@@ -323,6 +323,93 @@ static void sse(void) {
     out("sse", h);
 }
 
+// ---- Legacy i386 instructions (old compilers, hand-written and obfuscated code) ----
+// BCD adjusts and aam/aad with any base: AX and the flags each defines (Intel SDM). AAA/AAS stay
+// clear of an AL carry/borrow, where Intel and AMD differ.
+#define BCD(NAME, INSN, MASK, AXEXPR)                                                         \
+    static void NAME(void) {                                                                  \
+        u64 h = H0;                                                                           \
+        for (int i = 0; i < N; i++) {                                                         \
+            u32 ax = (AXEXPR), fi = flags_in(), f;                                            \
+            __asm__ volatile(PRE INSN POST : "+a"(ax), [f] "=&r"(f) : [fi] "r"(fi) : "cc");   \
+            h = mix(mix(h, ax & 0xffff), f & (MASK));                                         \
+        }                                                                                     \
+        out(#NAME, h);                                                                        \
+    }
+BCD(daa, "daa", 0xd5u, rnd() & 0xffff)
+BCD(das, "das", 0xd5u, rnd() & 0xffff)
+BCD(aaa, "aaa", 0x11u, (rnd() & 0xff00) | (rnd() % 0xfa))
+BCD(aas, "aas", 0x11u, (rnd() & 0xff00) | (6 + rnd() % 0xfa))
+BCD(aam10, "aam", 0xc4u, rnd() & 0xffff)
+BCD(aam16, ".byte 0xd4, 0x10", 0xc4u, rnd() & 0xffff)
+BCD(aam73, ".byte 0xd4, 0x49", 0xc4u, rnd() & 0xffff)
+BCD(aad10, "aad", 0xc4u, rnd() & 0xffff)
+BCD(aad7, ".byte 0xd5, 0x07", 0xc4u, rnd() & 0xffff)
+
+// 82: the 80 group's other encoding (add/xor/cmp al, imm8).
+static void alias82(void) {
+    u64 h = H0;
+    for (int i = 0; i < N; i++) {
+        u32 a = val(), fi = flags_in(), f;
+        __asm__ volatile(PRE ".byte 0x82, 0xc0, 0x7f\n\t.byte 0x82, 0xf0, 0x55\n\t.byte 0x82, 0xf8, 0x10" POST
+                         : "+a"(a), [f] "=&r"(f) : [fi] "r"(fi) : "cc");
+        h = mix(mix(h, a), f & ARITH);
+    }
+    out("alias82", h);
+}
+
+// xlat through a table; loop / loope / loopne / jecxz.
+static unsigned char xtab[256];
+static void xlat_loop(void) {
+    for (int k = 0; k < 256; k++) xtab[k] = (unsigned char)(k * 7 + 3);
+    u64 h = H0;
+    for (int i = 0; i < N; i++) {
+        u32 r = val();
+        __asm__ volatile("xlatb" : "+a"(r) : "b"(xtab) : "memory");
+        h = mix(h, r);
+        u32 ecx = rnd() % 50, cnt = 0;
+        __asm__ volatile("jecxz 2f\n1:\tincl %[c]\n\tloop 1b\n2:" : "+c"(ecx), [c] "+r"(cnt) : : "cc");
+        h = mix(mix(h, cnt), ecx);
+        u32 k = 0, stop = 1 + rnd() % 15;
+        ecx = 20;
+        __asm__ volatile("1:\tincl %[k]\n\tcmpl %[k], %[s]\n\tloopne 1b" : "+c"(ecx), [k] "+r"(k) : [s] "r"(stop) : "cc");
+        h = mix(mix(h, k), ecx);
+        k = 0; ecx = 1 + rnd() % 30;
+        __asm__ volatile("1:\tincl %[k]\n\tcmpl %[k], %[k]\n\tloope 1b" : "+c"(ecx), [k] "+r"(k) : : "cc");
+        h = mix(mix(h, k), ecx);
+    }
+    out("xlat_loop", h);
+}
+
+// enter with nesting level 3 over a frame chain in g_frame; bound and into on their no-trap paths.
+volatile u32 g_frame[64] __attribute__((used));
+volatile u32 g_save_ebp __attribute__((used));
+typedef struct { int lo, hi; } bounds;
+static void enter_bound(void) {
+    u64 h = H0;
+    for (int i = 0; i < N; i++) {
+        for (int k = 0; k < 64; k++) g_frame[k] = val();
+        u32 depth, c1, c2;
+        __asm__ volatile("movl %%ebp, g_save_ebp\n\t"
+                         "leal g_frame+128, %%ebp\n\t"
+                         "enter $24, $3\n\t"
+                         "movl %%ebp, %%eax\n\t"
+                         "subl %%esp, %%eax\n\t"
+                         "movl -4(%%ebp), %%ecx\n\t"
+                         "movl -8(%%ebp), %%edx\n\t"
+                         "leave\n\t"
+                         "movl g_save_ebp, %%ebp"
+                         : "=a"(depth), "=c"(c1), "=d"(c2) : : "memory");
+        h = mix(mix(mix(h, depth), c1), c2);
+        bounds b = { -100, 100 };
+        int v = (int)(rnd() % 201) - 100;
+        u32 x = val();
+        __asm__ volatile("bound %[v], %[m]\n\taddl $0, %[x]\n\tinto" : [x] "+r"(x) : [v] "r"(v), [m] "m"(b) : "cc");
+        h = mix(h, x ^ (u32)v);
+    }
+    out("enter_bound", h);
+}
+
 typedef void (*test_fn)(void);
 #define ALU_LIST(OP) OP##_l, OP##_w, OP##_b, OP##_mr_l, OP##_rm_l, OP##_mr_b, OP##_rm_w,
 static const test_fn kTests[] = {
@@ -337,6 +424,7 @@ static const test_fn kTests[] = {
     cmov_l, cmov_w, cwde,
     cc_o, cc_no, cc_b, cc_ae, cc_e, cc_ne, cc_be, cc_a, cc_s, cc_ns, cc_p, cc_np, cc_l, cc_ge, cc_le, cc_g,
     muldiv, stack_forms, moffs, strings, control, sse,
+    daa, das, aaa, aas, aam10, aam16, aam73, aad10, aad7, alias82, xlat_loop, enter_bound,
 };
 
 int guest_main(int argc, char **argv) {
