@@ -292,6 +292,7 @@ static void replicate(Uop *u, int M, int copies) {
 // Diagnostic knobs, for A/B runs in CI (the defaults are what ships): GPTA_TRACES=0 no loop traces,
 // GPTA_TRACE_UOPS=n the uop budget for a trace's copies, GPTA_REPLICAS=0 no handler replicas.
 static int g_traces = 1, g_trace_uops = 48, g_replicas = 1, g_win_force;
+static int g_win;   // lowering for Windows mode (gpta_lower sets it; lowering is serialised)
 // GPTA_WINLOWER=1: lower as for Windows mode (the exact-state test, engine/gpta-probe/winstate_test.c)
 static void knobs(void) {
     const char *e;
@@ -586,7 +587,6 @@ static void lower_one(Out *o, const Uop *u) {
 // Superinstructions (gpta_pin_fuse.c): u and the uop after it as one uop. Returns 2 when fused.
 // The fused uop starts as a copy of the second uop (a branch keeps its targets and links).
 static int is_named(const Desc *d, int id) { return d && d->fam == FAM_NAMED && d->a == id; }
-static int g_win;   // lowering for Windows mode (gpta_lower sets it; lowering is serialised)
 static int try_fuse(Out *o, const Uop *u, uint32_t left) {
     if (left < 2) return 0;
     const Uop *v = u + 1;
