@@ -49,6 +49,9 @@ typedef struct {
     volatile int in_x86;                 // interpreting x86 code (a fault there is the guest's)
     void *entry_ctx;                     // the innermost BTCpuSimulate's captured CONTEXT
     uint64_t syscalls, unixcalls;
+    // Diagnostics: the last 32 system calls (number, return into the stub, the stub's caller, status).
+    struct { uint32_t num, stub, caller, status; } ring[32];
+    uint32_t ring_n;
 } wow_thread;
 
 static uint64_t g_last_base;   // the newest 32-bit process's window (a notice before any thread runs)
@@ -105,14 +108,27 @@ static int trace_call(void) {
     return __atomic_fetch_add(&n, 1, __ATOMIC_RELAXED) < 48;
 }
 
-// [esp] return address into the stub, the arguments from esp + 8 (FEX's Wow64SystemServiceEx call).
+static void find_terminate(wow_thread *t, uint32_t stub_ret);
+static void exit_report(wow_thread *t, uint32_t handle, uint32_t code);
+static uint32_t g_terminate_num = ~0u;   // NtTerminateProcess's number, from the 32-bit ntdll's stub
+
+// [esp] return address into the stub, [esp + 4] the stub's caller, the arguments from esp + 8
+// (FEX's Wow64SystemServiceEx call).
 static void system_call(wow_thread *t) {
     Fx32Cpu *c = t->cpu;
     uint32_t num = fx32_wow_reg(c, FX32_EAX), esp = fx32_wow_reg(c, FX32_ESP);
     store(t);
     t->syscalls++;
+    uint32_t slot = t->ring_n++ & 31;
+    t->ring[slot].num = num;
+    t->ring[slot].stub = guest32(t, esp);
+    t->ring[slot].caller = guest32(t, esp + 4);
+    t->ring[slot].status = ~0u;
+    if (g_terminate_num == ~0u) find_terminate(t, t->ring[slot].stub);
+    if (num == g_terminate_num) exit_report(t, guest32(t, esp + 8), guest32(t, esp + 12));
     if (t->proc->pending_items) call(t, t->proc->pending_items, 0, 0, 0);
     uint32_t status = (uint32_t)call(t, t->proc->system_service, num, (long long)(t->proc->base + esp + 8), 0);
+    t->ring[slot].status = status;
     if (trace_call())
         mid_log("[fxi-wow] syscall %#x from %#x -> %08x", num, guest32(t, esp), status);
     finish_call(t, status, 0);
@@ -170,6 +186,275 @@ static void cpu_exception(wow_thread *t) {
     }
     if (reset_requested(t)) reload(t);
     else fatal(t, "an x86 exception was not dispatched (wow64 set no new context)");
+}
+
+// ---- Diagnostics: which 32-bit module and function an address belongs to ----
+// Guest memory is read with vm_read_overwrite: a broken list or an unmapped address is reported,
+// not faulted on. The 32-bit loader's list: TEB32+0x30 PEB32, +0x0c Ldr, +0x0c
+// InLoadOrderModuleList; an entry: DllBase +0x18, SizeOfImage +0x20, BaseDllName +0x2c
+// {Length, MaximumLength, Buffer}.
+typedef struct { uint32_t base, size; char name[40]; } wow_module;
+
+static int rd_guest(uint64_t base, uint32_t a, void *out, size_t n) {
+    vm_size_t got = 0;
+    return vm_read_overwrite(mach_task_self(), (vm_address_t)(base + a), n, (vm_address_t)out, &got) == KERN_SUCCESS &&
+           got == n;
+}
+static uint32_t rd_guest32(uint64_t base, uint32_t a) { uint32_t v = 0; return rd_guest(base, a, &v, 4) ? v : 0; }
+static uint16_t rd_guest16(uint64_t base, uint32_t a) { uint16_t v = 0; return rd_guest(base, a, &v, 2) ? v : 0; }
+
+static int wow_modules(uint64_t base, uint32_t teb32, wow_module *m, int max) {
+    uint32_t peb = rd_guest32(base, teb32 + 0x30), ldr = peb ? rd_guest32(base, peb + 0x0c) : 0;
+    if (!ldr) return 0;
+    uint32_t head = ldr + 0x0c, e = rd_guest32(base, head);
+    int n = 0;
+    for (int guard = 0; e && e != head && n < max && guard < 1024; guard++, e = rd_guest32(base, e)) {
+        m[n].base = rd_guest32(base, e + 0x18);
+        m[n].size = rd_guest32(base, e + 0x20);
+        uint16_t len = rd_guest16(base, e + 0x2c), w[39];
+        uint32_t buf = rd_guest32(base, e + 0x30);
+        unsigned k = len / 2 < 39 ? len / 2 : 39;
+        if (!buf || !rd_guest(base, buf, w, k * 2)) k = 0;
+        for (unsigned i = 0; i < k; i++) m[n].name[i] = w[i] < 0x80 ? (char)w[i] : '?';
+        m[n].name[k] = 0;
+        n++;
+    }
+    return n;
+}
+
+// A PE32 image at img: its SizeOfImage (0: not an image).
+static uint32_t pe_size(uint64_t base, uint32_t img) {
+    if (rd_guest16(base, img) != 0x5a4d) return 0;
+    uint32_t pe = img + rd_guest32(base, img + 0x3c);
+    if (rd_guest32(base, pe) != 0x4550 || rd_guest16(base, pe + 0x18) != 0x10b) return 0;
+    return rd_guest32(base, pe + 0x18 + 56);
+}
+// The image containing a (images start on 64 KB boundaries): one no longer on the loader's list.
+static uint32_t pe_find(uint64_t base, uint32_t a) {
+    for (uint32_t img = a & ~0xffffu, i = 0; i < 1024; i++, img -= 0x10000) {
+        uint32_t size = pe_size(base, img);
+        if (size && a - img < size) return img;
+        if (!img) break;
+    }
+    return 0;
+}
+
+// The image's export directory, read whole (the name, function, ordinal arrays and the strings
+// are inside it as linkers lay it out).
+typedef struct { uint8_t *d; uint32_t rva, size; } pe_exp;
+static int exp_load(uint64_t base, uint32_t img, pe_exp *e) {
+    e->d = NULL;
+    if (!pe_size(base, img)) return 0;
+    uint32_t opt = img + rd_guest32(base, img + 0x3c) + 0x18;
+    e->rva = rd_guest32(base, opt + 96);
+    e->size = rd_guest32(base, opt + 100);
+    if (!e->rva || e->size < 0x28 || e->size > (8u << 20)) return 0;
+    e->d = malloc(e->size);
+    if (e->d && rd_guest(base, img + e->rva, e->d, e->size)) return 1;
+    free(e->d);
+    e->d = NULL;
+    return 0;
+}
+static const uint8_t *exp_at(const pe_exp *e, uint32_t rva, uint32_t n) {
+    return rva >= e->rva && rva - e->rva <= e->size && n <= e->size - (rva - e->rva) ? e->d + (rva - e->rva) : NULL;
+}
+static uint32_t exp_u32(const pe_exp *e, uint32_t off) { uint32_t v = 0; memcpy(&v, e->d + off, 4); return v; }
+static const char *exp_str(const pe_exp *e, uint32_t rva) {
+    const uint8_t *s = exp_at(e, rva, 1);
+    return s && memchr(s, 0, e->size - (rva - e->rva)) ? (const char *)s : NULL;
+}
+// The export at or below rva within max bytes: "name" or "name+off".
+static int exp_near(const pe_exp *e, uint32_t rva, uint32_t max, int with_off, char *out, size_t len) {
+    uint32_t nfunc = exp_u32(e, 0x14), nname = exp_u32(e, 0x18);
+    const uint8_t *funcs = exp_at(e, exp_u32(e, 0x1c), nfunc * 4), *names = exp_at(e, exp_u32(e, 0x20), nname * 4),
+                  *ords = exp_at(e, exp_u32(e, 0x24), nname * 2);
+    if (!funcs || !names || !ords || nfunc > 65536 || nname > 65536) return 0;
+    int best = -1;
+    uint32_t best_rva = 0;
+    for (uint32_t i = 0; i < nname; i++) {
+        uint16_t o; uint32_t f;
+        memcpy(&o, ords + 2 * i, 2);
+        if (o >= nfunc) continue;
+        memcpy(&f, funcs + 4 * o, 4);
+        if (f <= rva && rva - f <= max && (best < 0 || f > best_rva)) { best = (int)i; best_rva = f; }
+    }
+    if (best < 0) return 0;
+    uint32_t name_rva;
+    memcpy(&name_rva, names + 4 * (uint32_t)best, 4);
+    const char *name = exp_str(e, name_rva);
+    if (!name) return 0;
+    if (!with_off || rva == best_rva) snprintf(out, len, "%s", name);
+    else snprintf(out, len, "%s+%#x", name, rva - best_rva);
+    return 1;
+}
+static uint32_t exp_find(const pe_exp *e, const char *want) {
+    uint32_t nfunc = exp_u32(e, 0x14), nname = exp_u32(e, 0x18);
+    const uint8_t *funcs = exp_at(e, exp_u32(e, 0x1c), nfunc * 4), *names = exp_at(e, exp_u32(e, 0x20), nname * 4),
+                  *ords = exp_at(e, exp_u32(e, 0x24), nname * 2);
+    if (!funcs || !names || !ords || nfunc > 65536 || nname > 65536) return 0;
+    for (uint32_t i = 0; i < nname; i++) {
+        uint32_t name_rva, f;
+        uint16_t o;
+        memcpy(&name_rva, names + 4 * i, 4);
+        const char *name = exp_str(e, name_rva);
+        if (!name || strcmp(name, want)) continue;
+        memcpy(&o, ords + 2 * i, 2);
+        if (o >= nfunc) return 0;
+        memcpy(&f, funcs + 4 * o, 4);
+        return f;
+    }
+    return 0;
+}
+
+// "module+offset (export+off)" for a guest address; images off the loader's list by their
+// export directory's name.
+static const char *describe(uint64_t base, const wow_module *m, int n, uint32_t a, char *buf, size_t len) {
+    uint32_t img = 0;
+    const char *mod = NULL;
+    for (int i = 0; i < n && !mod; i++)
+        if (a >= m[i].base && a - m[i].base < m[i].size) { img = m[i].base; mod = m[i].name; }
+    char own[48] = "", fn[64] = "";
+    pe_exp e;
+    if (!mod && (img = pe_find(base, a))) mod = own;
+    if (!mod) { snprintf(buf, len, "outside every module"); return buf; }
+    if (exp_load(base, img, &e)) {
+        if (mod == own) { const char *s = exp_str(&e, exp_u32(&e, 0x0c)); snprintf(own, sizeof own, "%s", s ? s : "?"); }
+        exp_near(&e, a - img, 0x1000, 1, fn, sizeof fn);
+        free(e.d);
+    }
+    if (mod == own && !own[0]) snprintf(own, sizeof own, "image@%08x", img);
+    if (fn[0]) snprintf(buf, len, "%s+%#x (%s)", mod, a - img, fn);
+    else snprintf(buf, len, "%s+%#x", mod, a - img);
+    return buf;
+}
+
+// Return addresses on the x86 stack: values inside a module just after a call (e8 rel32, or
+// ff /2 in its register and memory forms).
+static int after_call(uint64_t base, uint32_t v) {
+    uint8_t b[7];   // b[k] is at v - 7 + k
+    if (v < 7 || !rd_guest(base, v - 7, b, 7)) return 0;
+    if (b[2] == 0xe8) return 1;
+    if (b[5] == 0xff && (b[6] & 0x38) == 0x10 && (b[6] >> 6 == 3 || (b[6] >> 6 == 0 && (b[6] & 7) != 4 && (b[6] & 7) != 5)))
+        return 1;   // call reg / [reg]
+    if (b[4] == 0xff && (b[5] & 0x38) == 0x10 && b[5] >> 6 == 1 && (b[5] & 7) != 4) return 1;   // [reg + disp8]
+    if (b[3] == 0xff && (b[4] & 0x38) == 0x10 && b[4] >> 6 == 1 && (b[4] & 7) == 4) return 1;   // [sib + disp8]
+    if (b[1] == 0xff && (b[2] & 0x38) == 0x10 && ((b[2] >> 6 == 0 && (b[2] & 7) == 5) || (b[2] >> 6 == 2 && (b[2] & 7) != 4)))
+        return 1;   // [disp32] / [reg + disp32]
+    if (b[0] == 0xff && (b[1] & 0x38) == 0x10 && b[1] >> 6 == 2 && (b[1] & 7) == 4) return 1;   // [sib + disp32]
+    return 0;
+}
+
+static void stack_report(wow_thread *t, const wow_module *m, int n, int max) {
+    uint64_t base = t->proc->base;
+    uint32_t esp = fx32_wow_reg(t->cpu, FX32_ESP);
+    static uint32_t words[0x1000];
+    size_t sz = sizeof words;
+    while (sz >= 0x100 && !rd_guest(base, esp, words, sz)) sz /= 2;
+    if (sz < 0x100) { mid_log("[fxi-wow]   (the x86 stack at %#x is unreadable)", esp); return; }
+    int shown = 0;
+    for (size_t i = 0; i < sz / 4 && shown < max; i++) {
+        uint32_t v = words[i];
+        int in = 0;
+        for (int k = 0; k < n && !in; k++) in = v >= m[k].base && v - m[k].base < m[k].size;
+        if (!in || !after_call(base, v)) continue;
+        char where[128];
+        mid_log("[fxi-wow]   esp+%#05zx: return to %08x %s", i * 4, v, describe(base, m, n, v, where, sizeof where));
+        shown++;
+    }
+    if (!shown) mid_log("[fxi-wow]   (no return addresses into modules in %#zx bytes from esp %#x)", sz, esp);
+}
+
+static void syscall_report(wow_thread *t, const wow_module *m, int n) {
+    uint64_t base = t->proc->base;
+    uint32_t count = t->ring_n < 32 ? t->ring_n : 32;
+    for (uint32_t i = 0; i < count; i++) {
+        const uint32_t k = (t->ring_n - count + i) & 31;
+        char fn[64] = "", where[128], st[16];
+        uint32_t img = 0;
+        for (int j = 0; j < n && !img; j++)
+            if (t->ring[k].stub - m[j].base < m[j].size) img = m[j].base;
+        if (!img) img = pe_find(base, t->ring[k].stub);
+        pe_exp e;
+        if (img && exp_load(base, img, &e)) {
+            exp_near(&e, t->ring[k].stub - img, 0x40, 0, fn, sizeof fn);   // the stub's export
+            free(e.d);
+        }
+        if (t->ring[k].status == ~0u) snprintf(st, sizeof st, "(running)");
+        else snprintf(st, sizeof st, "%08x", t->ring[k].status);
+        mid_log("[fxi-wow]   syscall %#05x %-32s -> %s from %s", t->ring[k].num, fn[0] ? fn : "?", st,
+                describe(base, m, n, t->ring[k].caller, where, sizeof where));
+    }
+}
+
+static void module_report(const wow_module *m, int n) {
+    for (int i = 0; i < n; i++) mid_log("[fxi-wow]   module %08x-%08x %s", m[i].base, m[i].base + m[i].size, m[i].name);
+}
+
+static void fatal_report(wow_thread *t) {
+    Fx32Cpu *c = t->cpu;
+    uint64_t base = t->proc->base;
+    static wow_module mods[160];
+    int nm = wow_modules(base, t->teb32, mods, 160);
+    char where[128];
+    mid_log("[fxi-wow]   eip %08x is %s", fx32_wow_eip(c), describe(base, mods, nm, fx32_wow_eip(c), where, sizeof where));
+    uint32_t trail[16];
+    int nt = fx32_wow_trail(c, trail, 16);
+    for (int i = 0; i < nt; i++) {
+        uint8_t code[12] = { 0 };
+        rd_guest(base, trail[i], code, sizeof code);
+        char hex[3 * sizeof code + 1];
+        for (unsigned k = 0; k < sizeof code; k++) snprintf(hex + 3 * k, 4, "%02x ", code[k]);
+        mid_log("[fxi-wow]   jump %2d/%d to %08x (%s): %s", i + 1, nt, trail[i], describe(base, mods, nm, trail[i], where, sizeof where), hex);
+    }
+    mid_log("[fxi-wow]   the last system calls on this thread, oldest first:");
+    syscall_report(t, mods, nm);
+    module_report(mods, nm);
+}
+
+// NtTerminateProcess's number: the 32-bit ntdll's export starts "mov eax, imm32" (b8), the number
+// (through one jmp if it has one). Found from the image the first system calls return into.
+static void find_terminate(wow_thread *t, uint32_t stub_ret) {
+    static int tries;
+    if (__atomic_fetch_add(&tries, 1, __ATOMIC_RELAXED) >= 8) return;
+    uint64_t base = t->proc->base;
+    uint32_t img = pe_find(base, stub_ret), rva = 0;
+    pe_exp e;
+    if (!img || !exp_load(base, img, &e)) return;
+    rva = exp_find(&e, "NtTerminateProcess");
+    free(e.d);
+    uint8_t stub[5] = { 0 };
+    uint32_t at = img + rva;
+    if (rva && rd_guest(base, at, stub, 5) && stub[0] == 0xe9) {
+        int32_t rel;
+        memcpy(&rel, stub + 1, 4);
+        at = at + 5 + (uint32_t)rel;
+        if (!rd_guest(base, at, stub, 5)) return;
+    }
+    if (rva && stub[0] == 0xb8) {
+        uint32_t num;
+        memcpy(&num, stub + 1, 4);
+        __atomic_store_n(&g_terminate_num, num, __ATOMIC_RELAXED);
+        mid_log("[fxi-wow] NtTerminateProcess is system call %#x (32-bit ntdll at guest %#x)", num, img);
+    }
+}
+
+// The 32-bit program ends itself (NtTerminateProcess(0 or -1)): why is in its last steps. Once
+// per run: who called it (return addresses on the stack), its last system calls, its modules.
+static void exit_report(wow_thread *t, uint32_t handle, uint32_t code) {
+    if (handle && handle != 0xffffffffu) return;   // another process
+    static int reported;
+    if (__atomic_exchange_n(&reported, 1, __ATOMIC_ACQ_REL)) return;
+    uint64_t base = t->proc->base;
+    mid_log("[fxi-wow] the 32-bit program ends itself: NtTerminateProcess(%s, exit code %#x = %u), %llu system calls and "
+            "%llu unix calls on this thread", handle ? "self" : "0", code, code, (unsigned long long)t->syscalls,
+            (unsigned long long)t->unixcalls);
+    static wow_module mods[160];
+    int nm = wow_modules(base, t->teb32, mods, 160);
+    mid_log("[fxi-wow]   who called it (return addresses on the x86 stack, innermost first):");
+    stack_report(t, mods, nm, 24);
+    mid_log("[fxi-wow]   the last system calls on this thread, oldest first:");
+    syscall_report(t, mods, nm);
+    module_report(mods, nm);
 }
 
 // ---- The module's calls ----
@@ -284,9 +569,30 @@ static long host_invalidate(uint64_t addr, uint64_t size) {
     unsigned dropped = fx32_wow_invalidate(base, start, len);
     static uint64_t n, n_dropped;
     n++;
-    if (dropped && (++n_dropped <= 16 || !(n_dropped & (n_dropped - 1))))
-        mid_log("[fxi-wow] code changed at guest %#x+%#x: %u decoded blocks dropped (change #%llu)", start, len, dropped,
-                (unsigned long long)n);
+    if (dropped && (++n_dropped <= 16 || !(n_dropped & (n_dropped - 1)))) {
+        // A view unmapped at an image's base (a DLL unloaded: already off the loader's list, still
+        // mapped): named by its export directory.
+        char what[64] = "";
+        pe_exp e;
+        if (len && !(start & 0xffff) && exp_load(base, start, &e)) {
+            const char *s = exp_str(&e, exp_u32(&e, 0x0c));
+            snprintf(what, sizeof what, " (the image %s)", s ? s : "?");
+            free(e.d);
+        } else if (len && !(start & 0xffff) && pe_size(base, start)) {
+            snprintf(what, sizeof what, " (an image without exports)");
+        }
+        mid_log("[fxi-wow] code changed at guest %#x+%#x%s: %u decoded blocks dropped (change #%llu)", start, len, what,
+                dropped, (unsigned long long)n);
+    }
+    return 0;
+}
+
+// wow64's NtTerminateProcess(0, code), the first step of ExitProcess (BTCpuProcessTerm): the exit
+// report, if the system-call number did not already give it.
+static long host_process_term(uint64_t handle, long after) {
+    wow_thread *t = thread_now();
+    if (after || handle || !t || !t->proc || !t->cpu) return 0;
+    exit_report(t, 0, guest32(t, fx32_wow_reg(t->cpu, FX32_ESP) + 12));
     return 0;
 }
 
@@ -317,6 +623,7 @@ void *mid_fxi_wow_host_table(int tsd_offset) {
     static void *table[] = {
         (void *)host_process_init, (void *)host_thread_init, (void *)host_thread_term, (void *)host_simulate,
         (void *)host_reset,        (void *)host_invalidate,  (void *)host_feature,     (void *)host_cpu_info,
+        (void *)host_process_term,
     };
     if (tsd_offset) fxi_win_tsd_offset = tsd_offset;
     mid_log("[fxi-wow] WoW64 CPU module ready (FXI32)");
@@ -326,69 +633,6 @@ void *mid_fxi_wow_host_table(int tsd_offset) {
 #if MYIOSDECK_WITH_WINE
 long NtTerminateProcess(void *handle, long status);   // Wine's unix side
 #endif
-
-// ---- Diagnostics: which 32-bit module an address belongs to ----
-// The 32-bit loader's list (TEB32+0x30 PEB32, +0x0c Ldr, +0x0c InLoadOrderModuleList; an entry:
-// DllBase +0x18, SizeOfImage +0x20, BaseDllName +0x2c {Length, MaximumLength, Buffer}), read
-// with vm_read_overwrite: a broken list is reported, not faulted on.
-typedef struct { uint32_t base, size; char name[40]; } wow_module;
-
-static int rd_guest(wow_thread *t, uint32_t a, void *out, size_t n) {
-    vm_size_t got = 0;
-    return vm_read_overwrite(mach_task_self(), (vm_address_t)(t->proc->base + a), n, (vm_address_t)out, &got) == KERN_SUCCESS &&
-           got == n;
-}
-static uint32_t rd_guest32(wow_thread *t, uint32_t a) { uint32_t v = 0; return rd_guest(t, a, &v, 4) ? v : 0; }
-
-static int wow_modules(wow_thread *t, wow_module *m, int max) {
-    uint32_t peb = rd_guest32(t, t->teb32 + 0x30), ldr = peb ? rd_guest32(t, peb + 0x0c) : 0;
-    if (!ldr) return 0;
-    uint32_t head = ldr + 0x0c, e = rd_guest32(t, head);
-    int n = 0;
-    for (int guard = 0; e && e != head && n < max && guard < 1024; guard++, e = rd_guest32(t, e)) {
-        m[n].base = rd_guest32(t, e + 0x18);
-        m[n].size = rd_guest32(t, e + 0x20);
-        uint16_t len = 0;
-        rd_guest(t, e + 0x2c, &len, 2);
-        uint32_t buf = rd_guest32(t, e + 0x30);
-        uint16_t w[39];
-        unsigned k = len / 2 < 39 ? len / 2 : 39;
-        if (!buf || !rd_guest(t, buf, w, k * 2)) k = 0;
-        for (unsigned i = 0; i < k; i++) m[n].name[i] = w[i] < 0x80 ? (char)w[i] : '?';
-        m[n].name[k] = 0;
-        n++;
-    }
-    return n;
-}
-
-static const char *describe(const wow_module *m, int n, uint32_t a, char *buf, size_t len) {
-    for (int i = 0; i < n; i++)
-        if (a >= m[i].base && a - m[i].base < m[i].size) {
-            snprintf(buf, len, "%s+%#x", m[i].name, a - m[i].base);
-            return buf;
-        }
-    snprintf(buf, len, "outside every module");
-    return buf;
-}
-
-static void fatal_report(wow_thread *t) {
-    Fx32Cpu *c = t->cpu;
-    static wow_module mods[160];
-    int nm = wow_modules(t, mods, 160);
-    char where[64];
-    mid_log("[fxi-wow]   eip %08x is %s", fx32_wow_eip(c), describe(mods, nm, fx32_wow_eip(c), where, sizeof where));
-    uint32_t trail[16];
-    int nt = fx32_wow_trail(c, trail, 16);
-    for (int i = 0; i < nt; i++) {
-        uint8_t code[12] = { 0 };
-        rd_guest(t, trail[i], code, sizeof code);
-        char hex[3 * sizeof code + 1];
-        for (unsigned k = 0; k < sizeof code; k++) snprintf(hex + 3 * k, 4, "%02x ", code[k]);
-        mid_log("[fxi-wow]   jump %2d/%d to %08x (%s): %s", i + 1, nt, trail[i], describe(mods, nm, trail[i], where, sizeof where), hex);
-    }
-    for (int i = 0; i < nm; i++)
-        mid_log("[fxi-wow]   module %08x-%08x %s", mods[i].base, mods[i].base + mods[i].size, mods[i].name);
-}
 
 static void __attribute__((noreturn)) fatal(wow_thread *t, const char *what) {
     mid_log("[fxi-wow] STOP: %s", what);

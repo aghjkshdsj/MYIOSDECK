@@ -47,7 +47,8 @@ __declspec(dllimport) NTSTATUS LdrGetProcedureAddress(void *, const ANSI_STRING 
 // Filled by the map hook: mid_fxi_wow_host_table (fxi_wow_host.c).
 EXPORT void **MyiosdeckWowHost;
 
-enum { H_PROCESS_INIT, H_THREAD_INIT, H_THREAD_TERM, H_SIMULATE, H_RESET, H_INVALIDATE, H_FEATURE, H_CPU_INFO };
+enum { H_PROCESS_INIT, H_THREAD_INIT, H_THREAD_TERM, H_SIMULATE, H_RESET, H_INVALIDATE, H_FEATURE, H_CPU_INFO,
+       H_PROCESS_TERM };
 
 // What the app needs from Windows, handed over once (H_PROCESS_INIT). Layout shared with
 // fxi_wow_host.c (struct wow_process).
@@ -177,7 +178,12 @@ EXPORT void WINAPI BTCpuProcessInit(void) {
     if (host_call(H_PROCESS_INIT, (hostarg)&g_proc)) fatal("the app refused the process", 0);
 }
 
-EXPORT void WINAPI BTCpuProcessTerm(HANDLE handle, int after, NTSTATUS status) { (void)handle; (void)after; (void)status; }
+// wow64 calls it around NtTerminateProcess(0, code), the first step of ExitProcess: the app logs
+// how the 32-bit program got there.
+EXPORT void WINAPI BTCpuProcessTerm(HANDLE handle, int after, NTSTATUS status) {
+    (void)status;
+    host_call3(H_PROCESS_TERM, (hostarg)handle, after, 0);
+}
 
 // The thread's CPU area (WOW64_CPURESERVED + I386_CONTEXT) is the hand-over: Wine's unix side
 // put the thread's initial context there.

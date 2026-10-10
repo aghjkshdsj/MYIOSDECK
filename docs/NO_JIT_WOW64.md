@@ -318,6 +318,13 @@ kernelbase, user32, DXMT d3d11/dxgi/winemetal and hello-x86.exe decode 100%.
   blocks when code changes (2.7), raises single-step traps (2.8), and a STOP now names the
   module, the offset and the last 16 jumps. Only running the code faithfully: no protection or
   license check is bypassed or patched.
+- **Run 2 (build 127):** no STOP and no x86 exception: 4.8 s in, the window's first messages
+  (15 nested simulations), one DLL unloaded (guest 0x79160000, 0x2e000 bytes), then the program
+  ended itself with exit code 0xc021, a black screen meanwhile. Build 128 logs why a 32-bit
+  program ends itself: NtTerminateProcess (its number read from the 32-bit ntdll's stub, and
+  BTCpuProcessTerm) prints the return addresses on the x86 stack as module+offset (nearest
+  export), the thread's last 32 system calls by name with caller and status, and the module
+  list; an unloaded DLL is named by its export directory.
 
 ### Stage 6: speed
 - FXR32 (guest registers pinned, as FXR), native fast paths for hot 32-bit system functions
