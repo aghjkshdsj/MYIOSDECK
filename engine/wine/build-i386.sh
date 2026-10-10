@@ -141,7 +141,9 @@ step_extras() {
 # The WoW64 host side's wow64win.dll (aarch64), rebuilt from the same Wine fork with
 # engine/wine/patches/wow64win_atoms.py: atoms and resource IDs pass its thunks unchanged
 # (Madeira's prebuilt copy turns the dialog class 0x8002 into a pointer, and win32u faults on
-# it). 16 KB sections, so pe2dylib converts it like the rest of the aarch64 farm; build-ipa.yml
+# it). winegcc links ARM64 PE files with 64 KB sections and file alignment by itself, as
+# Madeira's (a separate --section-alignment conflicts with its file alignment: lld then rejects
+# misaligned loads), so pe2dylib converts it like the rest of the aarch64 farm; build-ipa.yml
 # puts it over Madeira's copy. Its exports and imports must equal the prebuilt one's.
 A="$W/build-a64"
 A64_OUT="$OUT/aarch64-windows"
@@ -151,8 +153,7 @@ step_a64() {
     cd "$A"
     if [ ! -f config.status ]; then
         ../configure --enable-archs=aarch64 --with-wine-tools="$B" --without-x --without-vulkan --without-freetype \
-            --without-gnutls --disable-tests aarch64_LDFLAGS="-Wl,--section-alignment=0x4000" \
-            > configure.log 2>&1 || { tail -60 configure.log; return 1; }
+            --without-gnutls --disable-tests > configure.log 2>&1 || { tail -60 configure.log; return 1; }
     fi
     local t=dlls/wow64win/aarch64-windows/wow64win.dll
     make -j"$JOBS" "$t" > make-a64.log 2>&1 || { grep -E 'error:|Error [0-9]' make-a64.log | head -40; return 1; }

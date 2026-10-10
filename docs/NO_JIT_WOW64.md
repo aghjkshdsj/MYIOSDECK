@@ -342,7 +342,7 @@ kernelbase, user32, DXMT d3d11/dxgi/winemetal and hello-x86.exe decode 100%.
   every value; upstream's is the identity, so `IS_INTRESOURCE()` works downstream). Madeira's
   latest fork has the same code. `engine/wine/patches/wow64win_atoms.py` keeps values below 64 KB
   (never pointers in Windows) unchanged both ways, fixing class, window, menu and icon names in
-  every thunk; wine-i386.yml rebuilds `wow64win.dll` for aarch64 from the pinned fork (16 KB
+  every thunk; wine-i386.yml rebuilds `wow64win.dll` for aarch64 from the pinned fork (64 KB
   sections, exports and imports checked against Madeira's), and build-ipa.yml puts it over the
   prebuilt copy before the aarch64 farm becomes dylibs. Only 32-bit processes load wow64win.dll.
 
