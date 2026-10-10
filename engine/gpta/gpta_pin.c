@@ -258,7 +258,7 @@ static void rmap_init(void) {
     RMAP(t_xst_movhps); RMAP(t_xst_movx); RMAP(t_xg); RMAP(t_xgt); RMAP(t_gx);
     RMAP(t_xmemi); RMAP(t_xmemb);
     for (size_t i = 0; i < gpta_n_xops; i++) {
-        rmap_tab(&gpta_xops[i].rr[0][0], &gpta_xops_r1[i].rr[0][0], 81);
+        rmap_tab(&gpta_xops[i].rr[0][0], &gpta_xops_r1[i].rr[0][0], 256);
         rmap_tab(gpta_xops[i].rt, gpta_xops_r1[i].rt, 9);
     }
     for (size_t i = 0; i < gpta_n_xshift; i++) rmap_tab(gpta_xshift[i].h, gpta_xshift_r1[i].h, 9);
@@ -266,7 +266,6 @@ static void rmap_init(void) {
     RMAP(t_ldi); RMAP(t_ldz8s); RMAP(t_stx); RMAP(t_sri); RMAP(t_sii); RMAP(t_3op);
     // gpta_pin_br.c, gpta_pin_step1.c, gpta_pin_step2.c: the branches that most often close a loop
     RMAP(t_fjc_rr); RMAP(t_fjc_ri); RMAP(t_fjt_ri); RMAP(t_fjt_rr); RMAP(t_fjt_rrx); RMAP(t_sic); RMAP(t_sicr);
-    RMAP(t_jresult);
 }
 // u: `copies` copies of M uops (a block: one copy). A handler at several places in a copy takes
 // the replica at every second place. When every handler of the copy has a replica, those at a
@@ -536,7 +535,7 @@ static void lower_one(Out *o, const Uop *u) {
         Uop *y;
         if (!d->b) {
             if (d->d && !fl) return;   // (u)comis of registers whose flags nothing reads
-            y = put_uop(o, u, x->rr[dc][xcls(u->src)]);
+            y = put_uop(o, u, x->rr[u->dst][u->src]);
         } else {
             if (!ea_ok(u)) break;      // fs/gs operand: FXI's handler
             if (!strcmp(x->name, "movx")) { put_uop(o, u, (lean(u) ? t_xl_movxz : t_xl_movx)[dc][u->base][u->index]); return; }
@@ -820,45 +819,6 @@ static void bound(Out *o, int start, int np, uint64_t rip, int nobound) {
     }
 }
 
-// Conservative local constant propagation of the flag result's width. Unknown
-// instructions, raw flag writers and variable/zero-count shifts end the proof.
-// This does not match pairs or loop shapes, and uses no program-specific data.
-static int result_size_before(const Block *b, uint32_t at) {
-    while (at) {
-        const Uop *u = &b->u[--at];
-        const Desc *d = find(u->fn);
-        if (!d) return -1;
-        switch (d->fam) {
-        case FAM_ALU: return d->c2;
-        case FAM_UNARY:
-            if (d->a != U_NOT) return d->c2;
-            break;
-        case FAM_SHIFT:
-            if (d->a >= SH_SHL && u->src != 0xffff &&
-                ((unsigned)u->imm & (d->c2 == 3 ? 63u : 31u))) return d->c2;
-            return -1;
-        case FAM_MOV: case FAM_LEA: case FAM_EXT: case FAM_CMOV:
-        case FAM_SETCC: case FAM_XI: case FAM_XS: break;
-        case FAM_X: if (d->d) return -1; break;
-        case FAM_NAMED:
-            if (d->a != N_NOP && d->a != N_PUSH_R && d->a != N_POP_R) return -1;
-            break;
-        default: return -1;
-        }
-    }
-    return -1;
-}
-static void specialize_result_branch(Out *o, const Block *b, uint32_t at) {
-    const Uop *u = &b->u[at];
-    const Desc *d = find(u->fn);
-    if (!d || d->fam != FAM_NAMED || d->a != N_JCC) return;
-    unsigned cc = u->cc;
-    int condition = cc == 4 || cc == 5 ? (int)cc - 4 : cc >= 8 && cc <= 11 ? (int)cc - 6 : -1;
-    if (condition < 0) return;
-    int si = result_size_before(b, at);
-    if (si >= 0) o->out[o->n - 1].p = t_jresult[si][condition];
-}
-
 static void lower_block(Out *o, const Block *b) {
     for (uint32_t i = 0; i < b->n; i++) {
         int start = o->n, np = o->np;
@@ -891,7 +851,6 @@ static void lower_block(Out *o, const Block *b) {
         }
         if (try_fuse(o, &b->u[i], b->n - i)) { bound(o, start, np, b->u[i].rip, 0); i++; continue; }
         lower_one(o, &b->u[i]);
-        specialize_result_branch(o, b, i);
         bound(o, start, np, 0, 0);
     }
 }
@@ -1114,7 +1073,7 @@ static void hidx_build(void) {
 #define HIDX_TAB(NAME, DIMS) hidx_tab((const PFn *)gpta_##NAME, sizeof gpta_##NAME / sizeof(PFn));
     GPTA_TABLES(HIDX_TAB)
     for (size_t i = 0; i < RMAP_SLOTS; i++) hidx_add(g_rmap[i].r);
-    for (size_t i = 0; i < gpta_n_xops; i++) { hidx_tab(&gpta_xops[i].rr[0][0], 81); hidx_tab(gpta_xops[i].rt, 9); }
+    for (size_t i = 0; i < gpta_n_xops; i++) { hidx_tab(&gpta_xops[i].rr[0][0], 256); hidx_tab(gpta_xops[i].rt, 9); }
     for (size_t i = 0; i < gpta_n_xshift; i++) hidx_tab(gpta_xshift[i].h, 9);
     hidx_tab(t_push, 16); hidx_tab(t_pop, 16); hidx_tab(t_call_R, 16); hidx_tab(t_jmp_R, 16); hidx_tab(t_jcc, 16);
     static const PFn one[] = { p_stop, p_nop, p_jmp, p_goto, p_call, p_ret, p_call_T, p_jmp_T, p_call_M, p_jmp_M, p_syscall,

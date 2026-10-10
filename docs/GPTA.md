@@ -9,12 +9,20 @@ executable code.
 
 Both suites remain below the 50% target. These are ARM64 Linux arithmetic means
 of exact native/engine median ratios; displayed values are truncated. All
-required Linux, Windows-state and iOS compile gates passed on both runs.
+required Linux, Windows-state and iOS compile gates passed on the first two runs.
 
 | Commit | CI run | Standard GPTA | Held-out GPTA | Standard FXI | Held-out FXI |
 |---|---|---:|---:|---:|---:|
 | 750038f | [37978872152](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/37978872152) | 22.73% | 23.59% | 8.27% | 13.99% |
 | 850e583 | [37980142939](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/37980142939) | 24.44% | 23.87% | 8.27% | 14.01% |
+| 56d9267 | [38008077789](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38008077789) | 22.42% | 23.66% | 8.20% | 13.99% |
+
+The third trial (result-width branches and simplified floating comparisons)
+regressed. Its ARM64 gates passed; x86 and iOS were pending when this entry
+was written. That trial is rolled back in the next iteration. The branch
+specialization also enabled cross-copy handler replication, so the trial
+does not isolate the effect of the flag check. Its standard integer perf
+evidence shows increased front-end stalls despite fewer retired instructions.
 
 Raw per-sample nanoseconds, checksums, commands and return codes are in each
 run's `gpta-evidence-ubuntu-24.04-arm` artifact (`gpta-results.json`). The first

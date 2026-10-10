@@ -292,6 +292,14 @@ typedef int8_t VS16 __attribute__((vector_size(16)));
 #define XD_5 x5
 #define XD_6 x6
 #define XD_7 x7
+#define XD_8 xld(&c->xmm[8])
+#define XD_9 xld(&c->xmm[9])
+#define XD_10 xld(&c->xmm[10])
+#define XD_11 xld(&c->xmm[11])
+#define XD_12 xld(&c->xmm[12])
+#define XD_13 xld(&c->xmm[13])
+#define XD_14 xld(&c->xmm[14])
+#define XD_15 xld(&c->xmm[15])
 #define XD_M xld(&c->xmm[u->dst])
 #define XS_0 x0
 #define XS_1 x1
@@ -301,6 +309,14 @@ typedef int8_t VS16 __attribute__((vector_size(16)));
 #define XS_5 x5
 #define XS_6 x6
 #define XS_7 x7
+#define XS_8 XD_8
+#define XS_9 XD_9
+#define XS_10 XD_10
+#define XS_11 XD_11
+#define XS_12 XD_12
+#define XS_13 XD_13
+#define XS_14 XD_14
+#define XS_15 XD_15
 #define XS_M xld(&c->xmm[u->src])
 #define XW_0(v) (x0 = (v))
 #define XW_1(v) (x1 = (v))
@@ -310,6 +326,14 @@ typedef int8_t VS16 __attribute__((vector_size(16)));
 #define XW_5(v) (x5 = (v))
 #define XW_6(v) (x6 = (v))
 #define XW_7(v) (x7 = (v))
+#define XW_8(v) xst(&c->xmm[8], (v))
+#define XW_9(v) xst(&c->xmm[9], (v))
+#define XW_10(v) xst(&c->xmm[10], (v))
+#define XW_11(v) xst(&c->xmm[11], (v))
+#define XW_12(v) xst(&c->xmm[12], (v))
+#define XW_13(v) xst(&c->xmm[13], (v))
+#define XW_14(v) xst(&c->xmm[14], (v))
+#define XW_15(v) xst(&c->xmm[15], (v))
 #define XW_M(v) xst(&c->xmm[u->dst], (v))
 // Exact faults (gpta_win_host_state): after a guest memory access, these keep a pinned value the
 // handler is about to overwrite (the flag words, an XMM destination) in its register until there,
@@ -462,7 +486,9 @@ enum { XG_SI2SS32, XG_SI2SS64, XG_SI2SD32, XG_SI2SD64, XG_MOVD32, XG_MOVD64, XG_
 enum { GX_TSS32, GX_SS32, GX_TSD32, GX_SD32, GX_TSS64, GX_SS64, GX_TSD64, GX_SD64, GX_MOVD32, GX_MOVD64,
        GX_PMOVMSKB, GX_MOVMSKPS, GX_MOVMSKPD, GX_COUNT };
 enum { FL_LD32, FL_LD64, FL_LDZ8 };   // t_ldi kinds; t_stx: 8, 32, 64-bit stores
-typedef struct { const char *name; PFn rr[9][9]; PFn rt[9]; } XOp;
+// Register-register operations also specialize memory-backed XMM8-15: their
+// offsets are constants, so no runtime operand-index loads are needed.
+typedef struct { const char *name; PFn rr[16][16]; PFn rt[9]; } XOp;
 typedef struct { const char *name; PFn h[9]; } XShift;
 #define GPTA_TABLES(X) \
     X(t_setcc, [16][16]) X(t_alu_rr, [2][ALU_COUNT][2][16][16]) X(t_alu_ri, [2][ALU_COUNT][2][16]) \
@@ -489,11 +515,10 @@ typedef struct { const char *name; PFn h[9]; } XShift;
     X(t_fs_addr, [4][16]) X(t_fs_subr, [4][16]) X(t_fs_comis, [2][9][9]) \
     X(t_fs_addrr, [4][16][16]) X(t_fs_subrr, [4][16][16]) \
     X(t_x3, [20][9][9][9]) X(t_arj, [5][2][8][16][16]) X(t_lcj, [2][16][17][16]) \
-    X(t_xmemi, [12][9][17][17]) X(t_xmemb, [12][9][17]) X(t_jresult, [4][6])
+    X(t_xmemi, [12][9][17][17]) X(t_xmemb, [12][9][17])
 #define GPTA_DECL_TABLE(NAME, DIMS) extern const PFn GPTA_T(NAME) DIMS; extern const PFn gpta_##NAME##_r1 DIMS;
 GPTA_TABLES(GPTA_DECL_TABLE)
 #define t_setcc GPTA_T(t_setcc)
-#define t_jresult GPTA_T(t_jresult)
 #define t_xmemi GPTA_T(t_xmemi)
 #define t_xmemb GPTA_T(t_xmemb)
 #define t_alu_rr GPTA_T(t_alu_rr)

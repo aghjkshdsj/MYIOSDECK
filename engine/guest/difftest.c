@@ -668,6 +668,35 @@ static void gpta_result_flags(void) {
     out("gpta_result_flags", h);
 }
 
+#define XHIGH_CASE(OP, D, S) do { \
+    v2 result; \
+    __asm__ volatile("movdqu %[a], %%" D "\n\tmovdqu %[b], %%" S \
+        "\n\t" OP " %%" S ", %%" D "\n\tmovdqu %%" D ", %[r]" \
+        : [r] "=m"(result) : [a] "m"(a), [b] "m"(b) : D, S, "memory"); \
+    h = vmix(h, result); \
+} while (0)
+#define XHIGH_FORMS(OP) do { \
+    XHIGH_CASE(OP, "xmm8", "xmm15"); \
+    XHIGH_CASE(OP, "xmm0", "xmm14"); \
+    XHIGH_CASE(OP, "xmm13", "xmm7"); \
+    XHIGH_CASE(OP, "xmm9", "xmm12"); \
+    XHIGH_CASE(OP, "xmm10", "xmm11"); \
+} while (0)
+static void gpta_xhigh(void) {
+    u64 h = 14695981039346656037ull;
+    for (int i = 0; i < N; i++) {
+        v2 a = vfloat(0), b = vfloat(1);
+        XHIGH_FORMS("addps"); XHIGH_FORMS("subss"); XHIGH_FORMS("mulps");
+        XHIGH_FORMS("movss"); XHIGH_FORMS("minps"); XHIGH_FORMS("maxss");
+        a = vdouble(0); b = vdouble(1);
+        XHIGH_FORMS("addpd"); XHIGH_FORMS("subsd"); XHIGH_FORMS("mulpd");
+        XHIGH_FORMS("movsd"); XHIGH_FORMS("minpd"); XHIGH_FORMS("maxsd");
+        a = vrand(); b = vrand();
+        XHIGH_FORMS("paddd"); XHIGH_FORMS("punpckhqdq"); XHIGH_FORMS("pxor");
+    }
+    out("gpta_xhigh", h);
+}
+
 typedef void (*test_fn)(void);
 #define ALU_LIST(OP) OP##_q, OP##_l, OP##_w, OP##_b, OP##_mr_q, OP##_rm_l, OP##_mr_b,
 static const test_fn kTests[] = {
@@ -697,7 +726,7 @@ static const test_fn kTests[] = {
     x_movsd_rr, x_movss_rr, x_movhlps, x_movlhps, x_movq_rr, x_unpcklps, x_pinsrw, x_togpr,
     fz_o, fz_no, fz_b, fz_ae, fz_e, fz_ne, fz_be, fz_a, fz_s, fz_ns, fz_p, fz_np, fz_l, fz_ge, fz_le, fz_g,
     fc_o, fc_no, fc_b, fc_ae, fc_e, fc_ne, fc_be, fc_a, fc_s, fc_ns, fc_p, fc_np, fc_l, fc_ge, fc_le, fc_g,
-    fz_call, fz_index, fz_xindex, fz_3op, fz_3gap, fz_x3, fz_hoist, gpta_xmem, gpta_result_flags,
+    fz_call, fz_index, fz_xindex, fz_3op, fz_3gap, fz_x3, fz_hoist, gpta_xmem, gpta_result_flags, gpta_xhigh,
 };
 
 int guest_main(int argc, char **argv) {

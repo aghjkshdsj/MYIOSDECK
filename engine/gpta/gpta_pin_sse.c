@@ -113,11 +113,11 @@
 #define XRLIST(X) X(movss) X(movsd) X(movq) X(movhlps) X(movlhps)
 
 #define DEF_XRR(S, D, OP) PH xr_##OP##_##D##_##S(GPTA_PARAMS) { GptaV d_ = XD_##D, s_ = XS_##S; (void)d_; XW_##D(XO_##OP(d_, s_)); PNEXT(); }
-#define DEF_XRR_ROW(D, OP) X9B(DEF_XRR, D, OP)
+#define DEF_XRR_ROW(D, OP) R16B(DEF_XRR, D, OP)
 #define DEF_XRT(D, OP, W) PH xt_##OP##_##D(GPTA_PARAMS) { GptaV s_ = xldn(T, W); XKEEP_##D; GptaV d_ = XD_##D; (void)d_; XW_##D(XO_##OP(d_, s_)); PNEXT(); }
-#define DEF_XOP(OP, W) X9(DEF_XRR_ROW, OP) X9(DEF_XRT, OP, W)
+#define DEF_XOP(OP, W) R16(DEF_XRR_ROW, OP) X9(DEF_XRT, OP, W)
 XLIST(DEF_XOP)
-#define DEF_XRONLY(OP) X9(DEF_XRR_ROW, OP)
+#define DEF_XRONLY(OP) R16(DEF_XRR_ROW, OP)
 XRLIST(DEF_XRONLY)
 // (u)comiss / (u)comisd: ZF PF CF, the others clear, as raw lazy flags
 #define XCOMIS(F, a, b) do { double a_ = (a), b_ = (b);                                    \
@@ -126,16 +126,18 @@ XRLIST(DEF_XRONLY)
 #define DEF_XCOM(S, D)                                                                     \
     PH xr_comiss_##D##_##S(GPTA_PARAMS) { XCOMIS(F0, LF0(XD_##D), LF0(XS_##S)); PNEXT(); }  \
     PH xr_comisd_##D##_##S(GPTA_PARAMS) { XCOMIS(F0, LD0(XD_##D), LD0(XS_##S)); PNEXT(); }
-#define DEF_XCOM_ROW(D, _) X9B(DEF_XCOM, D)                                                \
+#define DEF_XCOM_REG_ROW(D, _) R16B(DEF_XCOM, D)
+R16(DEF_XCOM_REG_ROW, _)
+#define DEF_XCOM_ROW(D, _)                                                               \
     PH xt_comiss_##D(GPTA_PARAMS) { GptaV s_ = xldn(T, 4); KEEP_F(); XCOMIS(F0, LF0(XD_##D), LF0(s_)); PNEXT(); } \
     PH xt_comisd_##D(GPTA_PARAMS) { GptaV s_ = xldn(T, 8); KEEP_F(); XCOMIS(F0, LD0(XD_##D), LD0(s_)); PNEXT(); }
 X9(DEF_XCOM_ROW, _)
 
 #define E_XRR(S, D, OP) xr_##OP##_##D##_##S,
-#define ROW_XRR(D, OP) { X9B(E_XRR, D, OP) },
+#define ROW_XRR(D, OP) { R16B(E_XRR, D, OP) },
 #define E_XRT(D, OP) xt_##OP##_##D,
-#define XOP_ENTRY(OP, W) { #OP, { X9(ROW_XRR, OP) }, { X9(E_XRT, OP) } },
-#define XROP_ENTRY(OP) { #OP, { X9(ROW_XRR, OP) }, { 0 } },
+#define XOP_ENTRY(OP, W) { #OP, { R16(ROW_XRR, OP) }, { X9(E_XRT, OP) } },
+#define XROP_ENTRY(OP) { #OP, { R16(ROW_XRR, OP) }, { 0 } },
 const XOp gpta_xops[] = { XLIST(XOP_ENTRY) XRLIST(XROP_ENTRY) XOP_ENTRY(comiss, 4) XOP_ENTRY(comisd, 8) };
 const size_t gpta_n_xops = sizeof gpta_xops / sizeof gpta_xops[0];
 
