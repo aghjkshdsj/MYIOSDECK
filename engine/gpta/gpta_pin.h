@@ -500,7 +500,7 @@ typedef struct { const char *name; PFn h[9]; } XShift;
     X(t_imul3t, [2][2][16]) X(t_cmov, [2][16][16]) X(t_cmovt, [2][16]) \
     X(t_fjc_rr, [2][16][16][16]) X(t_fjc_ri, [2][16][16]) X(t_fjt_ri, [2][16][16]) X(t_fjt_rr, [2][16][16]) \
     X(t_fjt_rrx, [2][16][16]) \
-    X(t_xl_movx, [9][17][17]) X(t_xs_movx, [9][17][17]) X(t_xl_movxz, [9][17][17]) X(t_xs_movxz, [9][17][17]) X(t_xl_movss, [9][17]) X(t_xl_movsd, [9][17]) \
+    X(t_xl_movx, [4][9][17][17]) X(t_xs_movx, [4][9][17][17]) X(t_xl_movxz, [9][17][17]) X(t_xs_movxz, [9][17][17]) X(t_xl_movss, [9][17]) X(t_xl_movsd, [9][17]) \
     X(t_xs_movss, [9][17]) X(t_xs_movsd, [9][17]) X(t_xlt_movss, [9]) X(t_xlt_movsd, [9]) X(t_xlt_movlps, [9]) \
     X(t_xlt_movhps, [9]) X(t_xst_movss, [9]) X(t_xst_movsd, [9]) X(t_xst_movhps, [9]) X(t_xst_movx, [9]) \
     X(t_xg, [XG_COUNT][9][16]) X(t_xgt, [4][9]) X(t_gx, [GX_COUNT][9][16]) \

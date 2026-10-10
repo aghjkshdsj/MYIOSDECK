@@ -163,13 +163,15 @@ const size_t gpta_n_xshift = sizeof gpta_xshift / sizeof gpta_xshift[0];
 
 // ---- loads and stores. 16 bytes with [base + index*scale + disp] in one uop; movss/movsd/movq
 // with [base + disp] (else the address comes through T) ----
-#define XEA(B, I) (g##B + (g##I << u->scale) + (uint64_t)u->disp)
-#define DEF_XLS(I, B, X)                                                                   \
-    PH xl_movx_##B##_##I##_##X(GPTA_PARAMS) { XW_##X(xld((const void *)(uintptr_t)XEA(B, I))); PNEXT(); } \
-    PH xs_movx_##B##_##I##_##X(GPTA_PARAMS) { xst((void *)(uintptr_t)XEA(B, I), XS_##X); PNEXT(); }
-#define DEF_XLS_B(B, X) R17B(DEF_XLS, B, X)
-#define DEF_XLS_X(X, _) R17(DEF_XLS_B, X)
-X9(DEF_XLS_X, _)
+// Each x86 addressing scale has a static handler. ARM64 can fold this shift
+// into its address add; the hot path need not fetch the scale from the uop.
+#define XEA(B, I, S) (g##B + (g##I << (S)) + (uint64_t)u->disp)
+#define DEF_XLS(I, B, X, S) \
+    PH xl_movx##S##_##B##_##I##_##X(GPTA_PARAMS) { XW_##X(xld((const void *)(uintptr_t)XEA(B, I, S))); PNEXT(); } \
+    PH xs_movx##S##_##B##_##I##_##X(GPTA_PARAMS) { xst((void *)(uintptr_t)XEA(B, I, S), XS_##X); PNEXT(); }
+#define DEF_XLS_B(B, X, S) R17B(DEF_XLS, B, X, S)
+#define DEF_XLS_X(X, S) R17(DEF_XLS_B, X, S)
+X9(DEF_XLS_X, 0) X9(DEF_XLS_X, 1) X9(DEF_XLS_X, 2) X9(DEF_XLS_X, 3)
 // [base + index] with no scale and no displacement (two thirds of the corpus's indexed moves have
 // no displacement): one ARM64 load or store with a register offset, nothing read from the uop
 #define DEF_XLSZ(I, B, X)                                                                  \
@@ -198,7 +200,8 @@ X9(DEF_XLST, _)
 #define E_XLS(I, B, X, NAME) NAME##_##B##_##I##_##X,
 #define ROW_XLS(B, X, NAME) { R17B(E_XLS, B, X, NAME) },
 #define X_XLS(X, NAME) { R17(ROW_XLS, X, NAME) },
-const PFn t_xl_movx[9][17][17] = { X9(X_XLS, xl_movx) }, t_xs_movx[9][17][17] = { X9(X_XLS, xs_movx) };   // [xmm][base][index]
+const PFn t_xl_movx[4][9][17][17] = { { X9(X_XLS, xl_movx0) }, { X9(X_XLS, xl_movx1) }, { X9(X_XLS, xl_movx2) }, { X9(X_XLS, xl_movx3) } };
+const PFn t_xs_movx[4][9][17][17] = { { X9(X_XLS, xs_movx0) }, { X9(X_XLS, xs_movx1) }, { X9(X_XLS, xs_movx2) }, { X9(X_XLS, xs_movx3) } };
 const PFn t_xl_movxz[9][17][17] = { X9(X_XLS, xl_movxz) }, t_xs_movxz[9][17][17] = { X9(X_XLS, xs_movxz) };
 #define E_XLS1(B, X, NAME) NAME##_##B##_##X,
 #define X_XLS1(X, NAME) { R17(E_XLS1, X, NAME) },

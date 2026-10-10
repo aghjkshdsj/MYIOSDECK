@@ -729,6 +729,23 @@ static void gpta_cf_flow(void) {
     out("gpta_cf_flow", h);
 }
 
+#define SCALE_MOVE(SCALE, REG) do { \
+    __asm__ volatile("movdqu -7(%[p],%[k]," #SCALE "), %%" REG \
+        "\n\tmovdqu %%" REG ", 137(%[p],%[k]," #SCALE ")" \
+        : : [p] "r"(arr), [k] "r"((u64)17) : REG, "memory"); \
+    for (int q = 0; q < 48; q++) h = mix(h, arr[q]); \
+} while (0)
+static void gpta_scaled_moves(void) {
+    static u64 arr[48] __attribute__((aligned(16)));
+    u64 h = 14695981039346656037ull;
+    for (int i = 0; i < N; i++) {
+        for (int q = 0; q < 48; q++) arr[q] = val();
+        SCALE_MOVE(1, "xmm0"); SCALE_MOVE(2, "xmm7");
+        SCALE_MOVE(4, "xmm8"); SCALE_MOVE(8, "xmm15");
+    }
+    out("gpta_scaled_moves", h);
+}
+
 typedef void (*test_fn)(void);
 #define ALU_LIST(OP) OP##_q, OP##_l, OP##_w, OP##_b, OP##_mr_q, OP##_rm_l, OP##_mr_b,
 static const test_fn kTests[] = {
@@ -759,6 +776,7 @@ static const test_fn kTests[] = {
     fz_o, fz_no, fz_b, fz_ae, fz_e, fz_ne, fz_be, fz_a, fz_s, fz_ns, fz_p, fz_np, fz_l, fz_ge, fz_le, fz_g,
     fc_o, fc_no, fc_b, fc_ae, fc_e, fc_ne, fc_be, fc_a, fc_s, fc_ns, fc_p, fc_np, fc_l, fc_ge, fc_le, fc_g,
     fz_call, fz_index, fz_xindex, fz_3op, fz_3gap, fz_x3, fz_hoist, gpta_xmem, gpta_result_flags, gpta_xhigh, gpta_cf_flow,
+    gpta_scaled_moves,
 };
 
 int guest_main(int argc, char **argv) {

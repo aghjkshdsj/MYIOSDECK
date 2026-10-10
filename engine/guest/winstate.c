@@ -84,8 +84,15 @@ FAULT(f_callm, "", "call *(%%rbx)")                           // 10: call throug
 FAULT(f_xstore, "", "movaps %%xmm3, 16(%%rbx)")               // 11: a 16-byte store
 FAULT(f_xarith_index, "", "addps (%%rbx,%%rsi), %%xmm0")      // 12: indexed SSE arithmetic
 FAULT(f_xarith_base, "", "mulsd 16(%%rbx), %%xmm7")           // 13: scalar SSE arithmetic
+FAULT(f_xload2, "", "movdqu 16(%%rbx,%%rsi,2), %%xmm0")     // 14
+FAULT(f_xload4, "", "movdqu 16(%%rbx,%%rsi,4), %%xmm7")     // 15
+FAULT(f_xload8, "", "movdqu -16(%%rbx,%%rsi,8), %%xmm3")    // 16
+FAULT(f_xstore2, "", "movdqu %%xmm0, 16(%%rbx,%%rsi,2)")    // 17
+FAULT(f_xstore4, "", "movdqu %%xmm7, 16(%%rbx,%%rsi,4)")    // 18
+FAULT(f_xstore8, "", "movdqu %%xmm3, -16(%%rbx,%%rsi,8)")   // 19
 static void (*const k_faults[])(void) = { f_load, f_store, f_xload, f_push, f_call, f_cmpj, f_ltj, f_pop, f_ret,
-                                          f_rmw, f_callm, f_xstore, f_xarith_index, f_xarith_base };
+                                          f_rmw, f_callm, f_xstore, f_xarith_index, f_xarith_base,
+                                          f_xload2, f_xload4, f_xload8, f_xstore2, f_xstore4, f_xstore8 };
 
 int guest_main(int argc, char **argv) {
     if (argc >= 3 && g_streq(argv[1], "loop")) { loop(g_atou(argv[2])); g_puts("loop done\n"); return 0; }

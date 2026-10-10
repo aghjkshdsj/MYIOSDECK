@@ -544,7 +544,7 @@ static void lower_one(Out *o, const Uop *u) {
             y = put_uop(o, u, x->rr[u->dst][u->src]);
         } else {
             if (!ea_ok(u)) break;      // fs/gs operand: FXI's handler
-            if (!strcmp(x->name, "movx")) { put_uop(o, u, (lean(u) ? t_xl_movxz : t_xl_movx)[dc][u->base][u->index]); return; }
+            if (!strcmp(x->name, "movx")) { put_uop(o, u, (lean(u) ? t_xl_movxz : t_xl_movx[u->scale])[dc][u->base][u->index]); return; }
             int xm = xmem_index(x->name);
             if (xm >= 0 && simple_mem(u)) { put_uop(o, u, t_xmemb[xm][dc][u->base]); return; }
             if (xm >= 0) { put_uop(o, u, t_xmemi[xm][dc][u->base][u->index]); return; }
@@ -569,7 +569,7 @@ static void lower_one(Out *o, const Uop *u) {
         if (id >= XS_XG) { if (S < 0) break; put_uop(o, u, t_xg[id - XS_XG][dc][S]); return; }
         if (!ea_ok(u)) break;
         switch (id) {
-        case XS_MOVX_MR: put_uop(o, u, (lean(u) ? t_xs_movxz : t_xs_movx)[sc][u->base][u->index]); return;
+        case XS_MOVX_MR: put_uop(o, u, (lean(u) ? t_xs_movxz : t_xs_movx[u->scale])[sc][u->base][u->index]); return;
         case XS_MOVSS_RM: if (simple_mem(u)) put_uop(o, u, t_xl_movss[dc][u->base]); else with_ea(o, u, t_xlt_movss[dc]); return;
         case XS_MOVSD_RM: if (simple_mem(u)) put_uop(o, u, t_xl_movsd[dc][u->base]); else with_ea(o, u, t_xlt_movsd[dc]); return;
         case XS_MOVSS_MR: if (simple_mem(u)) put_uop(o, u, t_xs_movss[sc][u->base]); else with_ea(o, u, t_xst_movss[sc]); return;
