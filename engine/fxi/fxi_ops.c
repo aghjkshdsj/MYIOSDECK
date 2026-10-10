@@ -476,6 +476,7 @@ static void op_trap(FxiCpu *c, Uop *u) {
     case 3: case 0x2d: fxi_raise(c, u->rip, 0x80000003, 0, 1, 0, 0); break;              // EXCEPTION_BREAKPOINT
     case 0x106: fxi_raise(c, u->rip, 0xC000001D, 0, 0, 0, 0); break;                     // ILLEGAL_INSTRUCTION
     case 0x100: fxi_raise(c, u->rip, 0xC0000096, 0, 0, 0, 0); break;                     // PRIVILEGED_INSTRUCTION
+    case 0x101: fxi_raise(c, u->rip + 1, 0x80000004, 0, 0, 0, 0); break;                 // icebp (i386): SINGLE_STEP after it
     case 0x29: fxi_raise(c, u->rip, 0xC0000409, 1, 1, c->r[R_CX], 0); break;             // __fastfail: STACK_BUFFER_OVERRUN, noncontinuable
     case 0x2c: fxi_raise(c, u->rip, 0xC0000420, 0, 0, 0, 0); break;                      // ASSERTION_FAILURE
     default: fxi_raise(c, u->rip, 0xC0000005, 0, 2, 0, ~0ull); break;                    // int n: #GP -> ACCESS_VIOLATION
@@ -695,9 +696,16 @@ static void op_leave(FxiCpu *c, Uop *u) {
 static void op_pushf(FxiCpu *c, Uop *u) { PUSH64(c, u, fxi_rflags(c)); FXI_NEXT(c, u); }
 static void op_popf(FxiCpu *c, Uop *u) {
     FXI_TOUCH(c, u);
-    fxi_set_rflags(c, ldw(GPTR(c, c->r[R_SP])));
+    uint64_t f = ldw(GPTR(c, c->r[R_SP]));
+    fxi_set_rflags(c, f);
     if (c->df) { c->df_rip = u->rip; c->df_how = 2; }
     POPW(c);
+#if FXI_I386
+    // TF set: a single-step trap (32-bit code that looks for a debugger sets it and expects its
+    // handler to run). Raised before the next instruction instead of after it, with TF clear
+    // as Windows hands it over; the handler sees the same state and resumes at that instruction.
+    if ((f & 0x100) && c->vm->windows) { fxi_raise(c, u->aux, 0x80000004, 0, 0, 0, 0); return; }
+#endif
     FXI_NEXT(c, u);
 }
 static void op_nop(FxiCpu *c, Uop *u) { FXI_NEXT(c, u); }

@@ -210,6 +210,24 @@ int main(void) {
     check("changed code after invalidation", eax[0] == 1 && eax[1] == 1 && eax[2] == 2 && eax[3] == 3 && dropped == 1 &&
           missed == 0 && all >= 2 && why == FX32_RUN_EXCEPTION && e.eip == CODE + 0x105, d);
 
+    // 8. Single-step traps: popfd with TF set (pushfd; or dword [esp], 0x100; popfd) stops with
+    //    EXCEPTION_SINGLE_STEP at the next instruction, esp balanced; icebp (f1) after itself.
+    const uint8_t tf[] = { 0x9c, 0x81, 0x0c, 0x24, 0x00, 0x01, 0x00, 0x00, 0x9d, 0x90, 0xf1, 0x0f, 0x0b };
+    put(CODE + 0x300, tf, sizeof tf);
+    uint32_t esp0 = fx32_wow_reg(c, FX32_ESP);
+    fx32_wow_set_eip(c, CODE + 0x300);
+    why = fx32_wow_run(c);
+    fx32_wow_exc e1, e2;
+    if (why == FX32_RUN_EXCEPTION) fx32_wow_exception(c, &e1); else memset(&e1, 0, sizeof e1);
+    uint32_t esp1 = fx32_wow_reg(c, FX32_ESP);
+    fx32_wow_set_eip(c, e1.eip);
+    int why2 = fx32_wow_run(c);
+    if (why2 == FX32_RUN_EXCEPTION) fx32_wow_exception(c, &e2); else memset(&e2, 0, sizeof e2);
+    snprintf(d, sizeof d, "popfd: code %#x eip %#x esp %+d; icebp: code %#x eip %#x", e1.code, e1.eip, (int)(esp1 - esp0),
+             e2.code, e2.eip);
+    check("single-step traps (TF, icebp)", why == FX32_RUN_EXCEPTION && e1.code == 0x80000004 && e1.eip == CODE + 0x309 &&
+          esp1 == esp0 && why2 == FX32_RUN_EXCEPTION && e2.code == 0x80000004 && e2.eip == CODE + 0x30b, d);
+
     printf("wow_test: %s\n", g_fail ? "FAILED" : "all checks passed");
     return g_fail;
 }

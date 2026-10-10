@@ -186,15 +186,20 @@ invalidated, then through the old chained jump.
 ### 2.8 FXI32: the interpreter's i386 mode
 
 engine/fxi compiled a second time with `-DFXI_I386=1` and a rename header (`fx32_*`, like
-engine/fxr/fxr_rename.h): the x64 FXI and FXR objects stay byte-identical. Differences:
+engine/fxr/fxr_rename.h): every i386 path is under `FXI_I386`, so the x64 FXI behaves as before
+(shared additions: a block records its code length, and `fxi_invalidate` exists, unused by x64)
+and FXR is untouched. Differences:
 - **Memory**: every access goes to `B + (uint32_t)ea`, stack (push/pop/call/ret, 4 bytes),
   strings (esi/edi, ecx), code fetch (`B + eip`). `B` is a field of the CPU (per process).
 - **Decoder**: operand and address size 32 by default; `66` -> 16-bit operand, `67` -> 16-bit
   addressing (ModRM 16-bit forms); no REX: `40-4F` are inc/dec r32; `mod=00 rm=101` is
   `[disp32]` (absolute, not RIP-relative); `push/pop` of segment registers, `pushad/popad`,
-  `pushfd/popfd`, `enter/leave`, `daa/das/aaa/aas/aam/aad`, `bound`, `into`, `arpl` (63), far
+  `pushfd/popfd`, `enter/leave`, `daa/das/aaa/aas`, `aam/aad` with any base, `salc`, `xlat`,
+  `loop/loope/loopne/jecxz`, `82` (the `80` group), `bound`, `into`, `icebp`, `arpl` (63), far
   `call/jmp/ret` (only to stop with a clear error: Win32 code never uses them), `lds/les`.
-  `fs:` adds the TEB32 guest address; other segment bases are 0.
+  `fs:` adds the TEB32 guest address; other segment bases are 0. `popfd` that sets TF raises
+  EXCEPTION_SINGLE_STEP before the next instruction (hardware: after it), so code that checks for
+  a debugger that way sees its handler run.
 - **Registers**: 8 GPRs; 32-bit results zero the upper half of the 64-bit slot (FXI's register
   file stays 64-bit, only the low 32 bits are architectural).
 - **x87** as FXI's (values as double; 32-bit code uses x87 for all float math), SSE/SSE2 as FXI's.

@@ -478,6 +478,7 @@ static int decode_one_inner(Dec *d) {
         return 1;
     }
     case 0xce: { Uop *u = emit(d, named("into")); u->aux = next_rip(d); meta(d)->reads = 1; return 0; }
+    case 0xf1: emit(d, named("trap"))->imm = 0x101; return 1;          // icebp: a single-step trap after it
     case 0x62: {                                                      // bound r32, m32&32
         modrm(d);
         if (!d->is_mem || d->opsize16) return unimplemented(d, "bound");
@@ -593,7 +594,11 @@ static int decode_one_inner(Dec *d) {
     case 0x98: emit(d, named(d->rexw ? "cdqe" : d->opsize16 ? "cbw" : "cwde")); return 0;
     case 0x99: emit(d, named(d->rexw ? "cqo" : d->opsize16 ? "cwd" : "cdq")); return 0;
     case 0x9c: emit(d, named("pushf")); meta(d)->reads = 1; return 0;
+#if FXI_I386
+    case 0x9d: { Uop *u = emit(d, named("popf")); u->aux = next_rip(d); meta(d)->kill = 1; return 0; }   // aux: for TF
+#else
     case 0x9d: emit(d, named("popf")); meta(d)->kill = 1; return 0;
+#endif
     case 0x9e: emit(d, named("sahf")); meta(d)->reads = 1; return 0;
     case 0x9f: emit(d, named("lahf")); meta(d)->reads = 1; return 0;
     case 0xa8: emit_alu(d, ALU_TEST, F_RI, 8, 0, 0, (uint64_t)rd_s8(d)); return 0;
