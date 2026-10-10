@@ -167,15 +167,20 @@ final class GameSurfacePlaceholder: UIView {
         let host = GameHostView.shared
         guard let w = window else {
             host.isHidden = true
+            mid_game_overlay_show(0, nil)
             return
         }
         if host.superview !== w {
             host.removeFromSuperview()
             w.addSubview(host)
+        } else {
+            w.bringSubviewToFront(host)   // above a full-screen cover presented after it was added
         }
         host.isHidden = false
         GameHostView.register()
         applyLayout()
+        // A launcher's or dialog's GDI windows (Winios's overlay) go above the game view.
+        mid_game_overlay_show(1, Unmanaged.passUnretained(w).toOpaque())
     }
 
     override func layoutSubviews() {
@@ -204,5 +209,6 @@ struct GameSurfaceView: UIViewRepresentable {
     func updateUIView(_ view: GameSurfacePlaceholder, context: Context) { view.setNeedsLayout() }
     static func dismantleUIView(_ view: GameSurfacePlaceholder, coordinator: ()) {
         GameHostView.shared.isHidden = true
+        mid_game_overlay_show(0, nil)
     }
 }

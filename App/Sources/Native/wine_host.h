@@ -69,6 +69,11 @@ void mid_post_pointer(int x, int y, unsigned int flags, int data);
 /// No-op without Wine.
 void mid_post_touch(int phase, int x, int y);
 
+/// A game session's GDI windows (a launcher, a dialog: Winios's overlay) above the game view in
+/// `window` while it is shown (shown=1), hidden while it is not. Main thread; no-op without Wine
+/// or before the first such window.
+void mid_game_overlay_show(int shown, void *window);
+
 /// The guest's virtual monitor in pixels (1024x768 unless a program changes it).
 void mid_display_screen_size(int *w, int *h);
 

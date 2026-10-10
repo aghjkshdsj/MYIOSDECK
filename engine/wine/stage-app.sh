@@ -73,6 +73,33 @@ if mark not in s:
     open(p, "w").write(s)
 PY
 
+# Game-mode GDI windows (a launcher's dialog) are drawn in Winios's overlay view, added to the
+# app window when the first one appears. The app's game view (GameHostView, black, under a
+# SwiftUI full-screen cover) then went above it: the launcher was drawn but hidden behind black
+# (Steins;Gate). winios_game_overlay_show(shown, window) puts the overlay in the game view's
+# window above it (touches still fall through to the game view: it takes none), or hides it.
+python3 - "$A/Winios/Winios.m" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+mark = "winios_game_overlay_show"
+if mark not in s:
+    assert "static UIView *g_compositor_view;" in s and "static BOOL g_comp_game;" in s, "Winios.m statics"
+    s += r'''
+
+/* MYIOSDECK (engine/wine/stage-app.sh): the game-mode window overlay above the app's game view
+ * while it is shown (moved into `window` when given), hidden while it is not. Main thread. */
+void winios_game_overlay_show(int shown, void *window) {
+    if (!g_compositor_view || !g_comp_game) return;
+    UIWindow *w = (__bridge UIWindow *)window;
+    if (shown && w && g_compositor_view.superview != w) [w addSubview:g_compositor_view];
+    g_compositor_view.hidden = shown ? NO : YES;
+    if (shown && g_compositor_view.superview) [g_compositor_view.superview bringSubviewToFront:g_compositor_view];
+}
+'''
+    open(p, "w").write(s)
+PY
+
 LINK=""
 for f in "$LIBS"/*.a; do LINK="$LINK \$(SRCROOT)/${f#"$ROOT/"}"; done
 mkdir -p "$ROOT/Config" "$ROOT/App/Generated"
