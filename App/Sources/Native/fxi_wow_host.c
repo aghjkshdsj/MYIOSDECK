@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include <mach/mach.h>
 #include <pthread.h>
@@ -113,6 +114,7 @@ static int trace_call(void) {
 
 static void find_terminate(wow_thread *t, uint32_t stub_ret);
 static void exit_report(wow_thread *t, uint32_t handle, uint32_t code);
+static void note_call(wow_thread *t, int unix_call, uint32_t num, uint32_t esp, uint32_t caller, uint32_t status);
 static uint32_t g_terminate_num = ~0u;   // NtTerminateProcess's number, from the 32-bit ntdll's stub
 
 // [esp] return address into the stub, [esp + 4] the stub's caller, the arguments from esp + 8
@@ -125,13 +127,15 @@ static void system_call(wow_thread *t) {
     uint32_t slot = t->ring_n++ & 31;
     t->ring[slot].num = num;
     t->ring[slot].stub = guest32(t, esp);
-    t->ring[slot].caller = guest32(t, esp + 4);
+    uint32_t caller = guest32(t, esp + 4);
+    t->ring[slot].caller = caller;
     t->ring[slot].status = ~0u;
     if (g_terminate_num == ~0u) find_terminate(t, t->ring[slot].stub);
     if (num == g_terminate_num) exit_report(t, guest32(t, esp + 8), guest32(t, esp + 12));
     if (t->proc->pending_items) call(t, t->proc->pending_items, 0, 0, 0);
     uint32_t status = (uint32_t)call(t, t->proc->system_service, num, (long long)(t->proc->base + esp + 8), 0);
     t->ring[slot].status = status;
+    note_call(t, 0, num, esp, caller, status);
     if (trace_call())
         mid_log("[fxi-wow] syscall %#x from %#x -> %08x", num, guest32(t, esp), status);
     finish_call(t, status, 0, (uint32_t)t->proc->bop);
@@ -150,6 +154,7 @@ static void unix_call(wow_thread *t) {
                                      args ? (long long)(t->proc->base + args) : 0);
     if (trace_call())
         mid_log("[fxi-wow] unix call %#llx/%u from %#x -> %08x", (unsigned long long)handle, code, guest32(t, esp), status);
+    note_call(t, 1, code, esp, guest32(t, esp), status);
     finish_call(t, status, 16, (uint32_t)t->proc->bop + 2);
 }
 
@@ -458,6 +463,113 @@ static void exit_report(wow_thread *t, uint32_t handle, uint32_t code) {
     mid_log("[fxi-wow]   the last system calls on this thread, oldest first:");
     syscall_report(t, mods, nm);
     module_report(mods, nm);
+}
+
+// ---- Diagnostics: failed calls by name, and every process start ----
+// The 32-bit ntdll's and win32u's Nt* exports start "mov eax, imm32" (b8): that number is the
+// system call's. The table is filled once each image is loaded.
+enum { SYSNAMES = 0x2000 };
+static const char *g_sysname[SYSNAMES];
+static int g_sysnames_ntdll, g_sysnames_win32u;
+static uint32_t g_create_num = ~0u;   // NtCreateUserProcess
+
+static void sysnames_from(uint64_t base, uint32_t img) {
+    pe_exp e;
+    if (!exp_load(base, img, &e)) return;
+    uint32_t nfunc = exp_u32(&e, 0x14), nname = exp_u32(&e, 0x18);
+    const uint8_t *funcs = exp_at(&e, exp_u32(&e, 0x1c), nfunc * 4), *names = exp_at(&e, exp_u32(&e, 0x20), nname * 4),
+                  *ords = exp_at(&e, exp_u32(&e, 0x24), nname * 2);
+    for (uint32_t i = 0; funcs && names && ords && nfunc <= 65536 && i < nname && nname <= 65536; i++) {
+        uint32_t name_rva, f, num;
+        uint16_t o;
+        uint8_t stub[5];
+        memcpy(&name_rva, names + 4 * i, 4);
+        const char *name = exp_str(&e, name_rva);
+        if (!name || strncmp(name, "Nt", 2)) continue;
+        memcpy(&o, ords + 2 * i, 2);
+        if (o >= nfunc) continue;
+        memcpy(&f, funcs + 4 * o, 4);
+        if (!rd_guest(base, img + f, stub, 5) || stub[0] != 0xb8) continue;
+        memcpy(&num, stub + 1, 4);
+        if (num >= SYSNAMES || g_sysname[num]) continue;
+        g_sysname[num] = strdup(name);
+        if (!strcmp(name, "NtCreateUserProcess")) g_create_num = num;
+    }
+    free(e.d);
+}
+
+static const char *sysname(wow_thread *t, uint32_t num) {
+    if (!g_sysnames_ntdll || !g_sysnames_win32u) {
+        static wow_module mods[160];
+        int n = wow_modules(t->proc->base, t->teb32, mods, 160);
+        for (int i = 0; i < n; i++) {
+            if (!g_sysnames_ntdll && !strcasecmp(mods[i].name, "ntdll.dll")) {
+                g_sysnames_ntdll = 1;
+                sysnames_from(t->proc->base, mods[i].base);
+            }
+            if (!g_sysnames_win32u && !strcasecmp(mods[i].name, "win32u.dll")) {
+                g_sysnames_win32u = 1;
+                sysnames_from(t->proc->base, mods[i].base);
+            }
+        }
+    }
+    return num < SYSNAMES ? g_sysname[num] : NULL;
+}
+
+// A UNICODE_STRING32 of RTL_USER_PROCESS_PARAMETERS (Buffer relative to the block unless it is
+// normalized, Flags bit 0) as ASCII, '?' for the rest.
+static void params_string(uint64_t base, uint32_t params, uint32_t off, char *out, size_t len) {
+    uint16_t n = rd_guest16(base, params + off), w[260];
+    uint32_t buf = rd_guest32(base, params + off + 4);
+    if (!(rd_guest32(base, params + 8) & 1)) buf += params;
+    unsigned k = n / 2 < 260 ? n / 2 : 260;
+    if (k >= len) k = (unsigned)len - 1;
+    if (!buf || !rd_guest(base, buf, w, k * 2)) k = 0;
+    for (unsigned i = 0; i < k; i++) out[i] = w[i] && w[i] < 0x80 ? (char)w[i] : '?';
+    out[k] = 0;
+}
+
+// After a system or unix call. A failure (an NTSTATUS error) is logged by name with its caller,
+// once per (call, status, caller), the first 400 of a run: what a program tried and could not do
+// before it stopped or did nothing. Every process start is logged with its image and command
+// line, whatever the result (a launcher whose button does nothing).
+static void note_call(wow_thread *t, int unix_call, uint32_t num, uint32_t esp, uint32_t caller, uint32_t status) {
+    int create = !unix_call && num == g_create_num;
+    if (status < 0xC0000000u && !create) return;
+    static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+    static uint64_t seen[1024];
+    static unsigned distinct;
+    uint64_t key = ((uint64_t)unix_call << 63) ^ ((uint64_t)num << 40) ^ ((uint64_t)caller << 8) ^ (status & 0xff) ^
+                   ((uint64_t)(status >> 8 & 0xff) << 32);
+    if (!key) key = 1;
+    pthread_mutex_lock(&lock);
+    if (!create) {
+        unsigned h = (unsigned)((key * 0x9E3779B97F4A7C15ull) >> 54);
+        while (seen[h] && seen[h] != key) h = (h + 1) & 1023;
+        if (seen[h] || distinct >= 400) { pthread_mutex_unlock(&lock); return; }
+        seen[h] = key;
+        distinct++;
+    }
+    uint64_t base = t->proc->base;
+    static wow_module mods[160];
+    int nm = wow_modules(base, t->teb32, mods, 160);
+    char where[128];
+    describe(base, mods, nm, caller, where, sizeof where);
+    if (create) {
+        // NtCreateUserProcess(..., RTL_USER_PROCESS_PARAMETERS *params (9th), ...): ImagePathName
+        // at 0x38, CommandLine at 0x40 of the 32-bit block.
+        uint32_t params = rd_guest32(base, esp + 8 + 8 * 4);
+        char image[200] = "", cmd[200] = "";
+        if (params) { params_string(base, params, 0x38, image, sizeof image); params_string(base, params, 0x40, cmd, sizeof cmd); }
+        mid_log("[fxi-wow] start process \"%s\" (command line \"%s\") -> %08x from %s", image, cmd, status, where);
+    } else if (unix_call) {
+        mid_log("[fxi-wow] failed: unix call %u -> %08x from %s", num, status, where);
+    } else {
+        const char *name = sysname(t, num);
+        if (name) mid_log("[fxi-wow] failed: %s -> %08x from %s", name, status, where);
+        else mid_log("[fxi-wow] failed: system call %#x -> %08x from %s", num, status, where);
+    }
+    pthread_mutex_unlock(&lock);
 }
 
 // ---- The module's calls ----

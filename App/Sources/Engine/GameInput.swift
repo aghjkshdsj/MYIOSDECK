@@ -6,9 +6,9 @@ import UIKit
 /// Keyboard and mouse for Windows programs (launchers, menus, games without controller
 /// support), on the game view (GameHostView). Ported in part from Madeira's
 /// HardwareInput.swift and ContentView.swift (GPL-3.0-or-later):
-/// - Touch: a tap is a left click where the finger is; holding (0.25 s) or moving presses
-///   the left button there and drags; a two-finger tap is a right click, a two-finger drag
-///   the scroll wheel.
+/// - Touch, as a trackpad (default: a drawn cursor that one finger moves, a tap clicks where it
+///   is, a tap then hold drags) or direct (a tap is a left click where the finger is; holding
+///   or moving drags); in both a two-finger tap is a right click, a two-finger drag the wheel.
 /// - Hardware keyboard (GCKeyboard: raw HID usages, modifiers as keys, no repeat) and mouse
 ///   (GCMouse: deltas posted relative, buttons, wheel), only while the game view is shown and
 ///   the app is active; losing that releases everything that was posted down.
@@ -93,6 +93,132 @@ final class GameInput {
 
     // MARK: - touch (called by GameHostView)
 
+    /// How a finger drives the mouse (the game menu switches it; remembered):
+    /// - trackpad: a drawn cursor; one finger moves it, a tap clicks where it is, a
+    ///   two-finger tap right-clicks, a tap then hold drags, two fingers scroll;
+    /// - direct: the finger is the pointer (tap where you click, hold or drag to drag).
+    enum TouchMode: String { case trackpad, direct }
+    var touchMode = TouchMode(rawValue: UserDefaults.standard.string(forKey: "touchMode") ?? "") ?? .trackpad {
+        didSet {
+            UserDefaults.standard.set(touchMode.rawValue, forKey: "touchMode")
+            resetGesture(); resetTrackpad()
+            GameHostView.shared.showCursor(nil)
+            surfaceShown()
+        }
+    }
+    private var cursorPlaced = false
+
+    /// The game view is on screen: in trackpad mode the cursor is drawn (the first time at the
+    /// desktop's centre, which the program is told too).
+    func surfaceShown() {
+        guard touchMode == .trackpad else { return }
+        let d = Self.desktop()
+        if !cursorPlaced { cursorPlaced = true; cursor = CGPoint(x: d.w / 2, y: d.h / 2) }
+        moveCursor(to: cursor, showArrow: true)
+    }
+
+    func touchesBegan(_ touches: Set<UITouch>, _ event: UIEvent?, in view: UIView) {
+        if touchMode == .trackpad { trackpadBegan(fingers(touches), event, in: view) } else { directBegan(touches, in: view) }
+    }
+    func touchesMoved(_ touches: Set<UITouch>, _ event: UIEvent?, in view: UIView) {
+        if touchMode == .trackpad { trackpadMoved(fingers(touches), event, in: view) } else { directMoved(touches, event, in: view) }
+    }
+    func touchesEnded(_ touches: Set<UITouch>, _ event: UIEvent?, in view: UIView) {
+        if touchMode == .trackpad { trackpadEnded(event) } else { directEnded(touches, event, in: view) }
+    }
+    func touchesCancelled(_ touches: Set<UITouch>, in view: UIView) {
+        if touchMode == .trackpad { trackpadCancelled() } else { directCancelled(touches, in: view) }
+    }
+
+    // Trackpad: Madeira's desktop-session trackpad (ContentView.swift), with a tap then hold as
+    // the drag (a double tap stays two clicks, so Windows sees its double click).
+    private var tpTouch: UITouch?
+    private var tpLast = CGPoint.zero, tpStart = CGPoint.zero
+    private var tpStartTime: TimeInterval = 0, tpLastTap: TimeInterval = 0
+    private var tpPeak = 0, tpMoved = false, tpDragging = false
+    private var tpTwoY: CGFloat = 0, tpScroll: CGFloat = 0
+    private static let tapTime: TimeInterval = 0.3, dragAfterTap: TimeInterval = 0.35
+    private static let leftDown: UInt32 = 0x0002, leftUp: UInt32 = 0x0004
+
+    private func resetTrackpad() {
+        tpTouch = nil; tpPeak = 0; tpMoved = false; tpTwoY = 0; tpScroll = 0
+    }
+
+    /// A click at the cursor (button down and up at its position).
+    private func clickAtCursor(_ down: UInt32, _ up: UInt32) {
+        let x = Int32(cursor.x), y = Int32(cursor.y)
+        mid_post_pointer(x, y, down | Self.absolute, 0)
+        mid_post_pointer(x, y, up | Self.absolute, 0)
+    }
+
+    private func trackpadBegan(_ touches: Set<UITouch>, _ event: UIEvent?, in view: UIView) {
+        guard let t = touches.first else { return }
+        let live = liveTouches(event)
+        if tpTouch == nil {
+            let now = ProcessInfo.processInfo.systemUptime
+            tpTouch = t
+            tpStart = t.location(in: view); tpLast = tpStart
+            tpStartTime = now
+            tpPeak = 1; tpMoved = false
+            if !cursorPlaced { surfaceShown() }
+            if now - tpLastTap < Self.dragAfterTap {   // tap, then hold: drag from the cursor
+                tpDragging = true
+                mid_post_pointer(Int32(cursor.x), Int32(cursor.y), Self.leftDown | Self.absolute, 0)
+            }
+        }
+        tpPeak = max(tpPeak, live.count)
+        if live.count >= 2 { tpTwoY = live.reduce(0) { $0 + $1.location(in: view).y } / CGFloat(live.count); tpScroll = 0 }
+    }
+
+    private func trackpadMoved(_ touches: Set<UITouch>, _ event: UIEvent?, in view: UIView) {
+        let live = liveTouches(event)
+        if live.count >= 2, !tpDragging {
+            // Two fingers: the wheel, 14 points per notch, content following the fingers.
+            let y = live.reduce(0) { $0 + $1.location(in: view).y } / CGFloat(live.count)
+            if tpTwoY == 0 { tpTwoY = y }
+            tpScroll += y - tpTwoY
+            if abs(y - tpTwoY) > 2 { tpMoved = true }
+            tpTwoY = y
+            while tpScroll <= -14 { tpScroll += 14; mid_post_pointer(Int32(cursor.x), Int32(cursor.y), Self.wheel, -120) }
+            while tpScroll >= 14 { tpScroll -= 14; mid_post_pointer(Int32(cursor.x), Int32(cursor.y), Self.wheel, 120) }
+            return
+        }
+        guard let t = tpTouch, touches.contains(t) else { return }
+        let p = t.location(in: view)
+        if hypot(p.x - tpStart.x, p.y - tpStart.y) > Self.slop { tpMoved = true }
+        // About 1.3 desktop widths for a swipe across the view.
+        let d = Self.desktop(), gain = d.w / max(view.bounds.width, 1) * 1.3
+        let dx = (p.x - tpLast.x) * gain, dy = (p.y - tpLast.y) * gain
+        tpLast = p
+        if dx != 0 || dy != 0 { moveCursor(to: CGPoint(x: cursor.x + dx, y: cursor.y + dy), showArrow: true) }
+    }
+
+    private func trackpadEnded(_ event: UIEvent?) {
+        guard liveTouches(event).isEmpty, tpTouch != nil else { return }   // wait for every finger
+        let now = ProcessInfo.processInfo.systemUptime
+        if tpDragging {
+            tpDragging = false
+            mid_post_pointer(Int32(cursor.x), Int32(cursor.y), Self.leftUp | Self.absolute, 0)
+        } else if !tpMoved, now - tpStartTime < Self.tapTime {
+            if tpPeak >= 2 {
+                clickAtCursor(Self.rightDown, Self.rightUp)
+            } else {
+                clickAtCursor(Self.leftDown, Self.leftUp)
+                tpLastTap = now
+            }
+        }
+        resetTrackpad()
+    }
+
+    private func trackpadCancelled() {
+        if tpDragging {
+            tpDragging = false
+            mid_post_pointer(Int32(cursor.x), Int32(cursor.y), Self.leftUp | Self.absolute, 0)   // never leave it held
+        }
+        resetTrackpad()
+    }
+
+    // Direct: the finger is the pointer.
     private var downPoints: [ObjectIdentifier: CGPoint] = [:]
     private var gestureStart = CGPoint.zero
     private var peak = 0
@@ -143,7 +269,7 @@ final class GameInput {
         return touches.filter { $0.type != .indirectPointer }
     }
 
-    func touchesBegan(_ all: Set<UITouch>, in view: UIView) {
+    private func directBegan(_ all: Set<UITouch>, in view: UIView) {
         let touches = fingers(all)
         guard !touches.isEmpty, !resolved else { return }   // a finger joining a drag changes nothing
         GameHostView.shared.showCursor(nil)   // the finger is the pointer now
@@ -164,7 +290,7 @@ final class GameInput {
         }
     }
 
-    func touchesMoved(_ all: Set<UITouch>, _ event: UIEvent?, in view: UIView) {
+    private func directMoved(_ all: Set<UITouch>, _ event: UIEvent?, in view: UIView) {
         let touches = fingers(all), live = liveTouches(event)
         if !resolved, downPoints.count == 2, live.count == 2 {
             // Two fingers: the wheel, 14 points of travel per notch, content following the fingers.
@@ -200,7 +326,7 @@ final class GameInput {
         }
     }
 
-    func touchesEnded(_ all: Set<UITouch>, _ event: UIEvent?, in view: UIView) {
+    private func directEnded(_ all: Set<UITouch>, _ event: UIEvent?, in view: UIView) {
         let touches = fingers(all)
         if resolved, let d = dragTouch, touches.contains(d) {
             let p = desktopPoint(d.location(in: view), in: view)
@@ -224,7 +350,7 @@ final class GameInput {
         }
     }
 
-    func touchesCancelled(_ touches: Set<UITouch>, in view: UIView) {
+    private func directCancelled(_ touches: Set<UITouch>, in view: UIView) {
         if resolved, let d = dragTouch, touches.contains(d) {
             let p = desktopPoint(d.location(in: view), in: view)
             mid_post_touch(2, Int32(p.x), Int32(p.y))   // never leave the button held

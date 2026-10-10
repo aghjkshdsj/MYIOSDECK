@@ -103,7 +103,7 @@ final class GameHostView: UIView, UIKeyInput {
     // MARK: - touches: the program's mouse (GameInput); the buttons keep theirs
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        GameInput.shared.touchesBegan(touches, in: self)
+        GameInput.shared.touchesBegan(touches, event, in: self)
     }
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
         GameInput.shared.touchesMoved(touches, event, in: self)
@@ -181,6 +181,7 @@ final class GameSurfacePlaceholder: UIView {
         applyLayout()
         // A launcher's or dialog's GDI windows (Winios's overlay) go above the game view.
         mid_game_overlay_show(1, Unmanaged.passUnretained(w).toOpaque())
+        GameInput.shared.surfaceShown()   // trackpad mode: the cursor appears
     }
 
     override func layoutSubviews() {

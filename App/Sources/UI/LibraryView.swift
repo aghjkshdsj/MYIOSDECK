@@ -116,6 +116,11 @@ struct LibraryView: View {
                     openingControllerMenu = true
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { showControllerMenu = true }
                 }
+                Button(GameInput.shared.touchMode == .trackpad
+                       ? "Touch: trackpad with cursor (switch to tap where you click)"
+                       : "Touch: tap where you click (switch to trackpad with cursor)") {
+                    GameInput.shared.touchMode = GameInput.shared.touchMode == .trackpad ? .direct : .trackpad
+                }
                 Button("Hide game (keeps running)") { showSurface = false }
                 Button("Quit game and close MYIOSDECK", role: .destructive) { CrashReporter.shared.quitApp() }
             } message: {
