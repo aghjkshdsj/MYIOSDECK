@@ -41,8 +41,11 @@ void fx32_wow_exception(Fx32Cpu *c, fx32_wow_exc *e);
 /// as before it), *is_fetch = 1 when it happened fetching code.
 uint32_t fx32_wow_fault_eip(Fx32Cpu *c, int *is_fetch);
 
-/// Code in [start, start + len) of the process at gbase changed (len 0: every block).
-void fx32_wow_invalidate(uint64_t gbase, uint32_t start, uint32_t len);
+/// Code in [start, start + len) of the process at gbase changed (len 0: every block): the
+/// decoded blocks there are dropped. Returns how many.
+unsigned fx32_wow_invalidate(uint64_t gbase, uint32_t start, uint32_t len);
+/// Diagnostics: the guest addresses of the last first-time control-flow edges, oldest first.
+int fx32_wow_trail(Fx32Cpu *c, uint32_t *eips, int max);
 
 #ifdef __cplusplus
 }

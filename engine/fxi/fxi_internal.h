@@ -100,6 +100,7 @@ struct Uop {
 struct Block {
     uint64_t rip;
     uint32_t n;              // uops (including the terminator)
+    uint32_t len;            // guest code bytes it was decoded from (0: a synthetic exit block)
     Uop u[];                 // flexible array
 };
 
@@ -208,6 +209,9 @@ int fxi_cond(FxiCpu *c, unsigned cc);        // x86 condition code 0-15
 extern Block *fxi_stop;                         // one "stop" uop: leaves the dispatch chain
 Block *fxi_lookup(FxiCpu *c, uint64_t rip);     // translate on miss; fxi_stop on error
 Block *fxi_translate(struct Fxi *vm, uint64_t rip);
+// Code changed: blocks decoded from [lo, hi) (every block when lo == hi) are dropped. Returns
+// how many (fxi_core.c).
+unsigned fxi_invalidate(struct Fxi *vm, uint64_t lo, uint64_t hi);
 int fxi_insn_length(const uint8_t *p, int *op_end);   // x86-64 length (0: invalid)
 int fxi_probe(const uint8_t *p, uint64_t rip, char *why, size_t why_len);   // 1: FXI decodes it
 // x87 (fxi_x87.c)

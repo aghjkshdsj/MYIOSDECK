@@ -1075,6 +1075,7 @@ Block *fxi_translate(struct Fxi *vm, uint64_t rip) {
     Block *b = malloc(sizeof(Block) + (size_t)d->n * sizeof(Uop));
     b->rip = rip;
     b->n = (uint32_t)d->n;
+    b->len = (uint32_t)((uintptr_t)d->p - (uintptr_t)(d->gbase + rip));
     memcpy(b->u, d->u, (size_t)d->n * sizeof(Uop));
     free(d);
     vm->blocks++;

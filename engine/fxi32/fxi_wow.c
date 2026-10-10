@@ -151,6 +151,22 @@ uint32_t fx32_wow_fault_eip(Fx32Cpu *c, int *is_fetch) {
     return (uint32_t)(c->cur ? c->cur->rip : c->rip);
 }
 
-// Not yet: FXI keeps decoded blocks for good (docs/NO_JIT_WOW64.md 2.7, stage 3 follow-up). The
-// host counts and logs the requests so a program that reloads code is recognisable.
-void fx32_wow_invalidate(uint64_t gbase, uint32_t start, uint32_t len) { (void)gbase; (void)start; (void)len; }
+// Code changed in a process's window (a section unmapped, memory freed or re-protected, a file
+// read into it): its decoded blocks there are dropped (fxi_invalidate). len 0: every block.
+unsigned fx32_wow_invalidate(uint64_t gbase, uint32_t start, uint32_t len) {
+    struct Fxi *vm = NULL;
+    pthread_mutex_lock(&g_procs_lock);
+    for (int i = 0; i < MAX_PROCESSES && !vm; i++)
+        if (g_procs[i].vm && g_procs[i].gbase == gbase) vm = g_procs[i].vm;
+    pthread_mutex_unlock(&g_procs_lock);
+    if (!vm) return 0;
+    return len ? fxi_invalidate(vm, start, (uint64_t)start + len) : fxi_invalidate(vm, 0, 0);
+}
+
+// Diagnostics: the last first-time control-flow edges (block lookups), oldest first.
+int fx32_wow_trail(Fx32Cpu *c, uint32_t *eips, int max) {
+    int n = c->trail_n < 16 ? (int)c->trail_n : 16;
+    if (n > max) n = max;
+    for (int i = 0; i < n; i++) eips[i] = (uint32_t)c->trail[(c->trail_n - (uint32_t)n + (uint32_t)i) & 15];
+    return n;
+}

@@ -3,7 +3,8 @@
 // drives it (docs/NO_JIT_WOW64.md, stage 3): a 4 GB guest window at a 4 GB-aligned host address,
 // a TEB32 for fs:, a BOP page, and hand-assembled i386 code that makes a system call and a unix
 // call, raises int3 and a divide error, faults on an unmapped guest address, and runs on
-// after each. Each check prints one line; any failure exits 1.
+// after each, then runs code that changes under an invalidation. Each check prints one line;
+// any failure exits 1.
 //   wow_test        (built by engine/fxi32/build.sh, run by fxi.yml)
 #define _GNU_SOURCE
 #include <setjmp.h>
@@ -177,6 +178,37 @@ int main(void) {
     if (why == FX32_RUN_EXCEPTION) fx32_wow_exception(c, &e); else memset(&e, 0, sizeof e);
     snprintf(d, sizeof d, "why %d code %#x eip %#x", why, e.code, e.eip);
     check("ud2", why == FX32_RUN_EXCEPTION && e.code == 0xC000001D && e.eip == CODE + 77, d);
+
+    // 7. Code that changes (a DLL unloaded and another loaded at its address): a jmp at +0x200
+    //    to "mov eax, 1; ud2" at +0x100. Rewritten to "mov eax, 2", the old block runs on until
+    //    fx32_wow_invalidate drops it; then the jmp's chained link re-translates the new code.
+    const uint8_t mov1[] = { 0xb8, 0x01, 0x00, 0x00, 0x00, 0x0f, 0x0b };
+    const uint8_t jmp[] = { 0xe9, 0xfb, 0xfe, 0xff, 0xff };   // jmp CODE + 0x100
+    put(CODE + 0x100, mov1, sizeof mov1);
+    put(CODE + 0x200, jmp, sizeof jmp);
+    uint32_t eax[4];
+    fx32_wow_set_eip(c, CODE + 0x200);
+    fx32_wow_run(c);
+    eax[0] = fx32_wow_reg(c, FX32_EAX);
+    G(CODE + 0x101)[0] = 2;
+    fx32_wow_set_eip(c, CODE + 0x200);
+    fx32_wow_run(c);
+    eax[1] = fx32_wow_reg(c, FX32_EAX);
+    unsigned missed = fx32_wow_invalidate((uint64_t)(uintptr_t)g_base, CODE + 0x300, 0x100);
+    unsigned dropped = fx32_wow_invalidate((uint64_t)(uintptr_t)g_base, CODE + 0x104, 1);
+    fx32_wow_set_eip(c, CODE + 0x200);
+    why = fx32_wow_run(c);
+    if (why == FX32_RUN_EXCEPTION) fx32_wow_exception(c, &e); else memset(&e, 0, sizeof e);
+    eax[2] = fx32_wow_reg(c, FX32_EAX);
+    G(CODE + 0x101)[0] = 3;
+    unsigned all = fx32_wow_invalidate((uint64_t)(uintptr_t)g_base, 0, 0);
+    fx32_wow_set_eip(c, CODE + 0x200);
+    fx32_wow_run(c);
+    eax[3] = fx32_wow_reg(c, FX32_EAX);
+    snprintf(d, sizeof d, "eax %u %u %u %u, dropped %u (unrelated range %u, all %u), ud2 at %#x", eax[0], eax[1], eax[2],
+             eax[3], dropped, missed, all, e.eip);
+    check("changed code after invalidation", eax[0] == 1 && eax[1] == 1 && eax[2] == 2 && eax[3] == 3 && dropped == 1 &&
+          missed == 0 && all >= 2 && why == FX32_RUN_EXCEPTION && e.eip == CODE + 0x105, d);
 
     printf("wow_test: %s\n", g_fail ? "FAILED" : "all checks passed");
     return g_fail;

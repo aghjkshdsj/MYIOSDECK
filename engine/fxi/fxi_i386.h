@@ -25,6 +25,7 @@
 #define fxi_imul2_tab fx32_imul2_tab
 #define fxi_imul3_tab fx32_imul3_tab
 #define fxi_insn_length fx32_insn_length
+#define fxi_invalidate fx32_invalidate
 #define fxi_lea_tab fx32_lea_tab
 #define fxi_lookup fx32_lookup
 #define fxi_mov_tab fx32_mov_tab

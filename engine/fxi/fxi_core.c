@@ -129,6 +129,44 @@ Block *fxi_lookup(FxiCpu *c, uint64_t rip) {
     return b;
 }
 
+// ---- Code that changed ----
+// Blocks decoded from [lo, hi) leave the table (a new table without them replaces it, like a
+// grown one: readers holding the old table keep valid memory), and each one's first uop becomes
+// a re-lookup, so chained links, inline caches and return-address slots that still lead to it
+// translate the code again. A thread inside such a block finishes it (as a CPU running code
+// that another thread rewrites may). Blocks are never freed: another thread may be running one.
+static void op_relookup(FxiCpu *c, Uop *u) {
+    Block *b = fxi_lookup(c, u->rip);
+    FXI_GOTO_BLOCK(c, b);
+}
+
+unsigned fxi_invalidate(struct Fxi *vm, uint64_t lo, uint64_t hi) {
+    pthread_mutex_lock(&g_translate_lock);
+    BlockTable *t = vm->table;
+    int all = lo == hi;
+    unsigned dead = 0;
+    for (uint64_t i = 0; i <= t->mask; i++) {
+        Block *b = t->slot[i];
+        if (b && b->len && (all || (b->rip < hi && b->rip + b->len > lo))) dead++;
+    }
+    if (dead) {
+        BlockTable *n = table_new(t->mask + 1);
+        for (uint64_t i = 0; i <= t->mask; i++) {
+            Block *b = t->slot[i];
+            if (!b) continue;
+            if (b->len && (all || (b->rip < hi && b->rip + b->len > lo))) {
+                // (the first uop's rip is the block's: op_relookup translates from there)
+                __atomic_store_n(&b->u[0].fn, (OpFn)op_relookup, __ATOMIC_RELEASE);
+            } else {
+                table_put(n, b);
+            }
+        }
+        __atomic_store_n(&vm->table, n, __ATOMIC_RELEASE);
+    }
+    pthread_mutex_unlock(&g_translate_lock);
+    return dead;
+}
+
 // ---- Linux syscalls the guest test programs use ----
 static void capture(struct Fxi *vm, const void *buf, size_t len) {
     fxi_result *o = vm->out;

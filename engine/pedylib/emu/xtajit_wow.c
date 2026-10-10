@@ -36,6 +36,7 @@ __declspec(dllimport) NTSTATUS NtQueryInformationProcess(HANDLE, ULONG, void *, 
 __declspec(dllimport) NTSTATUS NtAllocateVirtualMemory(HANDLE, void **, ULONG_PTR, SIZE_T *, ULONG, ULONG);
 __declspec(dllimport) NTSTATUS NtTerminateProcess(HANDLE, NTSTATUS);
 __declspec(dllimport) NTSTATUS NtSuspendThread(HANDLE, ULONG *);
+__declspec(dllimport) NTSTATUS NtQueryVirtualMemory(HANDLE, const void *, int, void *, SIZE_T, SIZE_T *);
 __declspec(dllimport) NTSTATUS RtlWow64GetThreadContext(HANDLE, void *);
 __declspec(dllimport) NTSTATUS RtlWow64SetThreadContext(HANDLE, const void *);
 __declspec(dllimport) NTSTATUS RtlWow64GetCurrentCpuArea(USHORT *, void **, void **);
@@ -268,8 +269,26 @@ EXPORT NTSTATUS WINAPI BTCpuNotifyMapViewOfSection(void *unk1, void *addr, void 
     (void)unk1; (void)addr; (void)unk2; (void)size; (void)alloc; (void)prot;
     return 0;
 }
+// The extent of the view at addr: its regions share addr as AllocationBase
+// (MEMORY_BASIC_INFORMATION: AllocationBase at 8, RegionSize at 0x18).
+static SIZE_T view_size(void *addr) {
+    uint8_t mbi[0x30];
+    char *p = addr;
+    SIZE_T total = 0;
+    for (int i = 0; i < 4096; i++) {
+        void *alloc_base;
+        SIZE_T region;
+        if (NtQueryVirtualMemory(CURRENT_PROCESS, p, 0 /* MemoryBasicInformation */, mbi, sizeof mbi, 0)) break;
+        __builtin_memcpy(&alloc_base, mbi + 8, 8);
+        __builtin_memcpy(&region, mbi + 0x18, 8);
+        if (alloc_base != addr || !region) break;
+        total += region;
+        p += region;
+    }
+    return total;
+}
 EXPORT void WINAPI BTCpuNotifyUnmapViewOfSection(void *addr, int after, NTSTATUS st) {
-    if (!after) invalidate(addr, 0);   // size 0: the whole view containing addr
+    if (!after) invalidate(addr, view_size(addr));   // size 0 (unknown): every block
     (void)st;
 }
 EXPORT void WINAPI BTCpuNotifyReadFile(HANDLE file, void *addr, SIZE_T size, int after, NTSTATUS st) {

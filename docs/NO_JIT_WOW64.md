@@ -171,10 +171,17 @@ no locks across a system call) and the outer system call returns into a reloaded
 
 ### 2.7 Code invalidation
 
-FXI32 caches decoded blocks by guest EIP. Unmapping, freeing, re-protecting, flushing or
-ReadFile into a range drops the blocks that start in it (a generation per 64 KB page; a block
-records the generations of the pages it covers). Self-modifying code without any of those calls
-(a game patching its own code in place) is not detected yet; GameMaker's runner does not do it.
+FXI32 caches decoded blocks by guest EIP; each block records how many code bytes it was decoded
+from. Unmapping a view, freeing, re-protecting, flushing or ReadFile into a range drops the
+blocks that overlap it (`fxi_invalidate`, engine/fxi/fxi_core.c): a new block table without them
+replaces the old one (as a grown table does: readers holding the old one keep valid memory), and
+each dropped block's first uop becomes a re-lookup, so chained links, inline caches and return
+predictions that still lead to it translate the code again. Blocks are never freed (another
+thread may be inside one). An unmapped view's extent comes from NtQueryVirtualMemory (its
+regions share the view's AllocationBase); a size of 0 drops every block. Self-modifying code
+without any of those calls (a game patching its own code in place) is not detected yet;
+GameMaker's runner does not do it. wow_test checks it: a rewritten target runs stale until
+invalidated, then through the old chained jump.
 
 ### 2.8 FXI32: the interpreter's i386 mode
 
@@ -277,7 +284,8 @@ kernelbase, user32, DXMT d3d11/dxgi/winemetal and hello-x86.exe decode 100%.
   `engine/fxi32/wow_test.c` (fxi.yml) drives FXI32's WoW64 API as the host does, in a real
   4 GB window: the system-call and unix-call stops with Wine's stack layouts, the context round
   trip, `fs:` to the TEB32, int3, #DE, a fault at the exact EIP, ud2. **All pass (run
-  37995496475).** Not covered yet: nested simulation (a callback), invalidation.
+  37995496475).** Not covered yet: nested simulation (a callback). Invalidation was added after
+  the first Forager run (check 7).
 - **Phone**: Library > "Windows Hello (x86 32-bit, no JIT)" (hello-i386.exe): the log shows
   `PE probe: machine=0x14c (i386: WoW64)`, `[nojit] xtajit.dll: host table ... (FXI32 is the x86
   CPU)`, `[fxi-wow] first x86 code`, the `[program]` lines ("Hello from Windows (x86, 32-bit)")

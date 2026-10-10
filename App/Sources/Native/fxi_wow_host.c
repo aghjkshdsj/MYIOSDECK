@@ -51,6 +51,8 @@ typedef struct {
     uint64_t syscalls, unixcalls;
 } wow_thread;
 
+static uint64_t g_last_base;   // the newest 32-bit process's window (a notice before any thread runs)
+
 #define TLS_SLOT(teb, i) (((void **)((teb) + 0x1480))[i])
 enum { WOW64_TLS_CPURESERVED = 1, WOW_THREAD_SLOT = 14 };
 #define RESET_STATE 1
@@ -175,6 +177,7 @@ static long host_process_init(const wow_process *p) {
     mid_log("[fxi-wow] FXI32 is the x86 CPU of this 32-bit process (no JIT): window B=%#llx, BOP page at guest %#llx, "
             "TEB slot %#x", (unsigned long long)p->base, (unsigned long long)p->bop, p->tsd_offset);
     if (!fxi_win_tsd_offset) fxi_win_tsd_offset = (int)p->tsd_offset;
+    g_last_base = p->base;
     return 0;
 }
 
@@ -265,12 +268,25 @@ static long host_reset(uint8_t **ptrs) {
     return 0;
 }
 
-// Code changed in the window: FXI32 does not drop decoded blocks yet (docs/NO_JIT_WOW64.md 2.7).
+// Code changed in the window (a view unmapped, memory freed or re-protected, a file read into it,
+// another process's write): FXI32 drops its decoded blocks there (docs/NO_JIT_WOW64.md 2.7).
+// Addresses arrive as host addresses; size 0 (an unmapped view, a full flush) drops every block.
 static long host_invalidate(uint64_t addr, uint64_t size) {
-    static uint64_t n;
-    if (++n <= 8 || !(n & (n - 1)))
-        mid_log("[fxi-wow] code change notice #%llu at %#llx+%#llx (not acted on yet)", (unsigned long long)n,
-                (unsigned long long)addr, (unsigned long long)size);
+    wow_thread *t = thread_now();
+    uint64_t base = t && t->proc ? t->proc->base : g_last_base;
+    if (!base) return 0;
+    uint32_t start = 0, len = 0;
+    if (size) {
+        if (addr < base || addr - base >= (1ull << 32)) return 0;   // not in this process's window
+        start = (uint32_t)(addr - base);
+        len = size > 0xffffffffull - start ? 0xffffffffu - start : (uint32_t)size;
+    }
+    unsigned dropped = fx32_wow_invalidate(base, start, len);
+    static uint64_t n, n_dropped;
+    n++;
+    if (dropped && (++n_dropped <= 16 || !(n_dropped & (n_dropped - 1))))
+        mid_log("[fxi-wow] code changed at guest %#x+%#x: %u decoded blocks dropped (change #%llu)", start, len, dropped,
+                (unsigned long long)n);
     return 0;
 }
 
@@ -311,6 +327,69 @@ void *mid_fxi_wow_host_table(int tsd_offset) {
 long NtTerminateProcess(void *handle, long status);   // Wine's unix side
 #endif
 
+// ---- Diagnostics: which 32-bit module an address belongs to ----
+// The 32-bit loader's list (TEB32+0x30 PEB32, +0x0c Ldr, +0x0c InLoadOrderModuleList; an entry:
+// DllBase +0x18, SizeOfImage +0x20, BaseDllName +0x2c {Length, MaximumLength, Buffer}), read
+// with vm_read_overwrite: a broken list is reported, not faulted on.
+typedef struct { uint32_t base, size; char name[40]; } wow_module;
+
+static int rd_guest(wow_thread *t, uint32_t a, void *out, size_t n) {
+    vm_size_t got = 0;
+    return vm_read_overwrite(mach_task_self(), (vm_address_t)(t->proc->base + a), n, (vm_address_t)out, &got) == KERN_SUCCESS &&
+           got == n;
+}
+static uint32_t rd_guest32(wow_thread *t, uint32_t a) { uint32_t v = 0; return rd_guest(t, a, &v, 4) ? v : 0; }
+
+static int wow_modules(wow_thread *t, wow_module *m, int max) {
+    uint32_t peb = rd_guest32(t, t->teb32 + 0x30), ldr = peb ? rd_guest32(t, peb + 0x0c) : 0;
+    if (!ldr) return 0;
+    uint32_t head = ldr + 0x0c, e = rd_guest32(t, head);
+    int n = 0;
+    for (int guard = 0; e && e != head && n < max && guard < 1024; guard++, e = rd_guest32(t, e)) {
+        m[n].base = rd_guest32(t, e + 0x18);
+        m[n].size = rd_guest32(t, e + 0x20);
+        uint16_t len = 0;
+        rd_guest(t, e + 0x2c, &len, 2);
+        uint32_t buf = rd_guest32(t, e + 0x30);
+        uint16_t w[39];
+        unsigned k = len / 2 < 39 ? len / 2 : 39;
+        if (!buf || !rd_guest(t, buf, w, k * 2)) k = 0;
+        for (unsigned i = 0; i < k; i++) m[n].name[i] = w[i] < 0x80 ? (char)w[i] : '?';
+        m[n].name[k] = 0;
+        n++;
+    }
+    return n;
+}
+
+static const char *describe(const wow_module *m, int n, uint32_t a, char *buf, size_t len) {
+    for (int i = 0; i < n; i++)
+        if (a >= m[i].base && a - m[i].base < m[i].size) {
+            snprintf(buf, len, "%s+%#x", m[i].name, a - m[i].base);
+            return buf;
+        }
+    snprintf(buf, len, "outside every module");
+    return buf;
+}
+
+static void fatal_report(wow_thread *t) {
+    Fx32Cpu *c = t->cpu;
+    static wow_module mods[160];
+    int nm = wow_modules(t, mods, 160);
+    char where[64];
+    mid_log("[fxi-wow]   eip %08x is %s", fx32_wow_eip(c), describe(mods, nm, fx32_wow_eip(c), where, sizeof where));
+    uint32_t trail[16];
+    int nt = fx32_wow_trail(c, trail, 16);
+    for (int i = 0; i < nt; i++) {
+        uint8_t code[12] = { 0 };
+        rd_guest(t, trail[i], code, sizeof code);
+        char hex[3 * sizeof code + 1];
+        for (unsigned k = 0; k < sizeof code; k++) snprintf(hex + 3 * k, 4, "%02x ", code[k]);
+        mid_log("[fxi-wow]   jump %2d/%d to %08x (%s): %s", i + 1, nt, trail[i], describe(mods, nm, trail[i], where, sizeof where), hex);
+    }
+    for (int i = 0; i < nm; i++)
+        mid_log("[fxi-wow]   module %08x-%08x %s", mods[i].base, mods[i].base + mods[i].size, mods[i].name);
+}
+
 static void __attribute__((noreturn)) fatal(wow_thread *t, const char *what) {
     mid_log("[fxi-wow] STOP: %s", what);
     if (t && t->cpu) {
@@ -330,6 +409,7 @@ static void __attribute__((noreturn)) fatal(wow_thread *t, const char *what) {
         }
         mid_log("[fxi-wow]   %llu system calls, %llu unix calls on this thread", (unsigned long long)t->syscalls,
                 (unsigned long long)t->unixcalls);
+        if (t->proc) fatal_report(t);
     }
 #if MYIOSDECK_WITH_WINE
     NtTerminateProcess((void *)(intptr_t)-1, (long)0xE0F0F001);   // ends the Windows program, not the app
