@@ -117,11 +117,11 @@ context is per thread and per nesting level (saved and restored around each call
   `*_unix_call_wow64_funcs` table converts pointers inside `args` (Madeira, WOW64.md section 4).
   Then `eax = status, eip = [esp], esp += 4 + 16`.
 - **Around each call**, as wow64cpu and Madeira's FEX module do: the thread's whole 32-bit state
-  goes to the CPU area (2.4) with `eip = g` (or `g + 2`); after the call, if `BTCpuSetContext`
-  ran or the CPU area carries `WOW64_CPURESERVED_FLAG_RESET_STATE`, the state is reloaded from
-  the CPU area; if `eip` is still `g` / `g + 2` the call returns normally as above, otherwise
-  (NtContinue, an exception or APC dispatched, a callback returned by longjmp) execution goes on
-  at the reloaded `eip`. `Wow64ProcessPendingCrossProcessItems()` runs before each system call.
+  goes to the CPU area (2.4) with `eip = g` (or `g + 2`); after the call the state is always
+  reloaded from the CPU area (wow64cpu restores from it after every call; the flag alone is not
+  enough, see 2.6); if `eip` is still `g` / `g + 2` the call returns normally as above, otherwise
+  (NtContinue, an exception or APC dispatched) execution goes on at the reloaded `eip`.
+  `Wow64ProcessPendingCrossProcessItems()` runs before each system call.
 
 ### 2.4 Thread state: the CPU area
 
@@ -168,6 +168,12 @@ thread, using the same `FxiCpu`. A callback ends with `NtCallbackReturn`, a syst
 wow64 side `longjmp`s back into `Wow64KiUserCallbackDispatcher`, which restores the original
 context with `BTCpuSetContext`. So the inner run's C frames are abandoned (allowed: FXI32 holds
 no locks across a system call) and the outer system call returns into a reloaded state (2.3).
+That restore sets `RESET_STATE`, but `Wow64KiUserCallbackDispatcher` then writes back the
+`Flags` it saved on entry (0), clearing it: the `FxiCpu` still holds the callback's registers,
+so the outer call must reload unconditionally. (Builds 125-128 reloaded only on the flag: the
+callback's code ran on after `NtCallbackReturn`, and the program died with
+`STATUS_NO_CALLBACK_ACTIVE` or with the outer call's status raised by `KiUserCallbackDispatcher`:
+Steins;Gate 0xc0000258, Forager 0xc021.)
 
 ### 2.7 Code invalidation
 
@@ -325,6 +331,11 @@ kernelbase, user32, DXMT d3d11/dxgi/winemetal and hello-x86.exe decode 100%.
   BTCpuProcessTerm) prints the return addresses on the x86 stack as module+offset (nearest
   export), the thread's last 32 system calls by name with caller and status, and the module
   list; an unloaded DLL is named by its export directory.
+- **Run 3 (build 128):** the report named the cause in both Forager and Steins;Gate: the first
+  window callbacks (2.6) returned into the callback's own registers. Fixed in build 129 (2.3).
+  Forager's `steam_api.dll` is 13 MB and holds the VM-protected code from run 1 (Valve's is a few
+  hundred KB and unprotected), i.e. not Valve's library; per the project rules (no Steam
+  emulators, no license-check bypasses) nothing targets it: test with copies run from Steam.
 
 ### Stage 6: speed
 - FXR32 (guest registers pinned, as FXR), native fast paths for hot 32-bit system functions

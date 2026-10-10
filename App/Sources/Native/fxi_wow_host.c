@@ -87,15 +87,18 @@ static int reset_requested(wow_thread *t) {
 }
 static uint32_t guest32(wow_thread *t, uint32_t a) { return *(const uint32_t *)(uintptr_t)(t->proc->base + a); }
 
-// After a system or unix call: a new context (an exception, an APC, NtContinue, a callback that
-// returned through longjmp) is reloaded; otherwise the call returns to its caller.
-static void finish_call(wow_thread *t, uint32_t status, uint32_t pop) {
+// After a system or unix call the CPU area is the state, reloaded every time (as wow64cpu
+// restores from it after every call): a callback during the call ran x86 code on this same CPU,
+// and wow64 put the caller's state back into the CPU area with BTCpuSetContext, then cleared
+// RESET_STATE again as it restored the flags it saved on entry (Wow64KiUserCallbackDispatcher).
+// Trusting the flag alone resumed the callback's registers: its code ran on after NtCallbackReturn
+// and the next NtCallbackReturn failed (STATUS_NO_CALLBACK_ACTIVE) or KiUserCallbackDispatcher
+// raised the outer call's status. A new context (an exception, an APC, NtContinue) goes on at
+// its own EIP; otherwise the call returns to its caller.
+static void finish_call(wow_thread *t, uint32_t status, uint32_t pop, uint32_t stop) {
     Fx32Cpu *c = t->cpu;
-    uint32_t bop = fx32_wow_eip(c);
-    if (reset_requested(t)) {
-        reload(t);
-        if (fx32_wow_eip(c) != bop) return;   // the context was replaced: go on there
-    }
+    reload(t);
+    if (fx32_wow_eip(c) != stop) return;   // the context was replaced: go on there
     uint32_t esp = fx32_wow_reg(c, FX32_ESP);
     fx32_wow_set_reg(c, FX32_EAX, status);
     fx32_wow_set_eip(c, guest32(t, esp));
@@ -131,7 +134,7 @@ static void system_call(wow_thread *t) {
     t->ring[slot].status = status;
     if (trace_call())
         mid_log("[fxi-wow] syscall %#x from %#x -> %08x", num, guest32(t, esp), status);
-    finish_call(t, status, 0);
+    finish_call(t, status, 0, (uint32_t)t->proc->bop);
 }
 
 // [esp] return address, then { u64 handle; u32 code; u32 args } (popped by the callee).
@@ -147,7 +150,7 @@ static void unix_call(wow_thread *t) {
                                      args ? (long long)(t->proc->base + args) : 0);
     if (trace_call())
         mid_log("[fxi-wow] unix call %#llx/%u from %#x -> %08x", (unsigned long long)handle, code, guest32(t, esp), status);
-    finish_call(t, status, 16);
+    finish_call(t, status, 16, (uint32_t)t->proc->bop + 2);
 }
 
 // An instruction raised an exception (int3, ud2, int n, a divide error): wow64 builds the 32-bit
