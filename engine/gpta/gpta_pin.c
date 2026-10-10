@@ -250,7 +250,7 @@ static void rmap_init(void) {
     // gpta_pin_alu.c
     RMAP(t_alu_rr); RMAP(t_alu_ri); RMAP(t_alu_rt); RMAP(t_alu_tr); RMAP(t_alu_ti); RMAP(t_stti); RMAP(t_ld);
     RMAP(t_st); RMAP(t_lea); RMAP(t_sti); RMAP(t_sti_bi); RMAP(t_ea); RMAP(t_eaz); RMAP(t_mov_rr); RMAP(t_mov_ri); RMAP(t_movt);
-    RMAP(t_ldt); RMAP(t_stt); RMAP(t_ext); RMAP(t_sh); RMAP(t_un); RMAP(t_imul2); RMAP(t_imul3); RMAP(t_imul2t);
+    RMAP(t_ldt); RMAP(t_stt); RMAP(t_ext); RMAP(t_sh); RMAP(t_un); RMAP(t_uncf); RMAP(t_imul2); RMAP(t_imul3); RMAP(t_imul2t);
     RMAP(t_imul3t); RMAP(t_cmov); RMAP(t_cmovt);
     // gpta_pin_sse.c
     RMAP(t_xl_movx); RMAP(t_xs_movx); RMAP(t_xl_movxz); RMAP(t_xs_movxz); RMAP(t_xl_movss); RMAP(t_xl_movsd); RMAP(t_xs_movss); RMAP(t_xs_movsd);
@@ -471,7 +471,12 @@ static void lower_one(Out *o, const Uop *u) {
         return;
     }
     case FAM_UNARY:
-        if (!d->b && d->c2 >= 2 && D >= 0) { put_uop(o, u, t_un[fl][d->c2 - 2][d->a][D]); return; }
+        if (!d->b && d->c2 >= 2 && D >= 0) {
+            PFn p = t_un[fl][d->c2 - 2][d->a][D];
+            if (!g_win && fl && u->cfdead && (d->a == U_INC || d->a == U_DEC))
+                p = t_uncf[d->c2 - 2][d->a][D];
+            put_uop(o, u, p); return;
+        }
         break;
     case FAM_IMUL2: case FAM_IMUL3: {
         int rm = d->a, si = d->b;

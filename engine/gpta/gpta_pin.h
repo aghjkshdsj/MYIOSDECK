@@ -496,7 +496,7 @@ typedef struct { const char *name; PFn h[9]; } XShift;
     X(t_stti, [4]) X(t_ld, [2][17][16]) X(t_st, [4][17][16]) X(t_lea, [2][17][16]) X(t_sti, [4][17]) \
     X(t_sti_bi, [4][17][17]) X(t_ea, [17][17]) X(t_eaz, [17][17]) X(t_mov_rr, [2][16][16]) X(t_mov_ri, [2][16]) X(t_movt, [2][16]) \
     X(t_ldt, [K_COUNT][16]) X(t_stt, [4][16]) X(t_ext, [K_COUNT][16][16]) X(t_sh, [2][5][2][2][16]) \
-    X(t_un, [2][2][4][16]) X(t_imul2, [2][2][16][16]) X(t_imul3, [2][2][16][16]) X(t_imul2t, [2][2][16]) \
+    X(t_un, [2][2][4][16]) X(t_uncf, [2][2][16]) X(t_imul2, [2][2][16][16]) X(t_imul3, [2][2][16][16]) X(t_imul2t, [2][2][16]) \
     X(t_imul3t, [2][2][16]) X(t_cmov, [2][16][16]) X(t_cmovt, [2][16]) \
     X(t_fjc_rr, [2][16][16][16]) X(t_fjc_ri, [2][16][16]) X(t_fjt_ri, [2][16][16]) X(t_fjt_rr, [2][16][16]) \
     X(t_fjt_rrx, [2][16][16]) \
@@ -542,6 +542,7 @@ GPTA_TABLES(GPTA_DECL_TABLE)
 #define t_ext GPTA_T(t_ext)
 #define t_sh GPTA_T(t_sh)
 #define t_un GPTA_T(t_un)
+#define t_uncf GPTA_T(t_uncf)
 #define t_imul2 GPTA_T(t_imul2)
 #define t_imul3 GPTA_T(t_imul3)
 #define t_imul2t GPTA_T(t_imul2t)

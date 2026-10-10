@@ -9,7 +9,7 @@ executable code.
 
 Both suites remain below the 50% target. These are ARM64 Linux arithmetic means
 of exact native/engine median ratios; displayed values are truncated. All
-required Linux, Windows-state and iOS compile gates passed on the first two runs.
+required Linux, Windows-state and iOS compile gates passed on all three runs.
 
 | Commit | CI run | Standard GPTA | Held-out GPTA | Standard FXI | Held-out FXI |
 |---|---|---:|---:|---:|---:|
@@ -18,8 +18,8 @@ required Linux, Windows-state and iOS compile gates passed on the first two runs
 | 56d9267 | [38008077789](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38008077789) | 22.42% | 23.66% | 8.20% | 13.99% |
 
 The third trial (result-width branches and simplified floating comparisons)
-regressed. Its ARM64 gates passed; x86 and iOS were pending when this entry
-was written. That trial is rolled back in the next iteration. The branch
+regressed. Its ARM64, x86 and iOS gates passed. That trial is rolled back in
+the next iteration. The branch
 specialization also enabled cross-copy handler replication, so the trial
 does not isolate the effect of the flag check. Its standard integer perf
 evidence shows increased front-end stalls despite fewer retired instructions.

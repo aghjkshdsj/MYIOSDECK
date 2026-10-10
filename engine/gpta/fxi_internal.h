@@ -140,6 +140,7 @@ struct Uop {
     uint8_t flive;           // GPTA: arithmetic flags live after this uop (decoder liveness, across blocks)
     uint8_t fdir;            // GPTA: a block-ending branch: flags live at its target (bit 0), fallthrough (bit 1);
                              // GPTA_NOBOUND: no x64 instruction boundary at this uop's start (gpta_pin.c)
+    uint8_t cfdead;          // GPTA: carry is overwritten before a later read (ELF-only optimization)
     int32_t fimm;            // GPTA: a fused uop's second immediate (imm and disp are taken)
 #ifdef GPTA_PROFILE
     uint64_t prof;           // GPTA diagnostic build: times this uop was dispatched (gpta_profile_dump)

@@ -697,6 +697,38 @@ static void gpta_xhigh(void) {
     out("gpta_xhigh", h);
 }
 
+// Carry must survive INC/DEC if any later reader needs it, including across
+// a non-carry condition. When carry is dead, the other result flags still count.
+#define CF_FLOW_CASE(OP, CC, TAIL) do { \
+    u64 r = val(), fi = flags_in(), extra = val(); unsigned char condition; \
+    __asm__ volatile(PRE OP "\n\tset" #CC " %[condition]\n\t" TAIL \
+        : [r] "+r"(r), [extra] "+r"(extra), [condition] "=&q"(condition) \
+        : [fi] "r"(fi) : "cc", "memory"); \
+    h = mix(mix(mix(h, r), condition), extra); \
+} while (0)
+#define CF_FLOW_CONDS(OP, TAIL) \
+    CF_FLOW_CASE(OP, e, TAIL); CF_FLOW_CASE(OP, ne, TAIL); \
+    CF_FLOW_CASE(OP, s, TAIL); CF_FLOW_CASE(OP, ns, TAIL); \
+    CF_FLOW_CASE(OP, o, TAIL); CF_FLOW_CASE(OP, no, TAIL); \
+    CF_FLOW_CASE(OP, p, TAIL); CF_FLOW_CASE(OP, np, TAIL); \
+    CF_FLOW_CASE(OP, l, TAIL); CF_FLOW_CASE(OP, ge, TAIL); \
+    CF_FLOW_CASE(OP, le, TAIL); CF_FLOW_CASE(OP, g, TAIL); \
+    CF_FLOW_CASE(OP, b, TAIL); CF_FLOW_CASE(OP, ae, TAIL); \
+    CF_FLOW_CASE(OP, be, TAIL); CF_FLOW_CASE(OP, a, TAIL)
+#define CF_FLOW_OP(OP) \
+    CF_FLOW_CONDS(OP, "addq $7, %[extra]"); \
+    CF_FLOW_CONDS(OP, "adcq $7, %[extra]"); \
+    CF_FLOW_CONDS(OP, "jnz 1f\n\taddq $7, %[extra]\n\tjmp 2f\n1:\taddq $5, %[extra]\n2:"); \
+    CF_FLOW_CONDS(OP, "jnz 1f\n\tadcq $7, %[extra]\n\tjmp 2f\n1:\tadcq $5, %[extra]\n2:")
+static void gpta_cf_flow(void) {
+    u64 h = 14695981039346656037ull;
+    for (int i = 0; i < N; i++) {
+        CF_FLOW_OP("incq %[r]"); CF_FLOW_OP("decq %[r]");
+        CF_FLOW_OP("incl %k[r]"); CF_FLOW_OP("decl %k[r]");
+    }
+    out("gpta_cf_flow", h);
+}
+
 typedef void (*test_fn)(void);
 #define ALU_LIST(OP) OP##_q, OP##_l, OP##_w, OP##_b, OP##_mr_q, OP##_rm_l, OP##_mr_b,
 static const test_fn kTests[] = {
@@ -726,7 +758,7 @@ static const test_fn kTests[] = {
     x_movsd_rr, x_movss_rr, x_movhlps, x_movlhps, x_movq_rr, x_unpcklps, x_pinsrw, x_togpr,
     fz_o, fz_no, fz_b, fz_ae, fz_e, fz_ne, fz_be, fz_a, fz_s, fz_ns, fz_p, fz_np, fz_l, fz_ge, fz_le, fz_g,
     fc_o, fc_no, fc_b, fc_ae, fc_e, fc_ne, fc_be, fc_a, fc_s, fc_ns, fc_p, fc_np, fc_l, fc_ge, fc_le, fc_g,
-    fz_call, fz_index, fz_xindex, fz_3op, fz_3gap, fz_x3, fz_hoist, gpta_xmem, gpta_result_flags, gpta_xhigh,
+    fz_call, fz_index, fz_xindex, fz_3op, fz_3gap, fz_x3, fz_hoist, gpta_xmem, gpta_result_flags, gpta_xhigh, gpta_cf_flow,
 };
 
 int guest_main(int argc, char **argv) {

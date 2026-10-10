@@ -18,6 +18,7 @@ typedef struct {
     uint8_t kill;              // writes every arithmetic flag
     uint8_t reads;             // reads flags (or needs the old CF)
     uint8_t cc_live;           // set u->cc = flags-live-after (rotates, inc/dec/neg)
+    uint8_t cf_ignore;         // GPTA: this condition reads flags, but not carry
 } Meta;
 
 typedef struct {
@@ -50,6 +51,12 @@ static Uop *emit(Dec *d, OpFn fn) {
     return u;
 }
 static Meta *meta(Dec *d) { return &d->m[d->n - 1]; }
+
+// GPTA: only below/above conditions read CF. Other readers remain conservative.
+static int condition_ignores_cf(unsigned cc) { return cc != 2 && cc != 3 && cc != 6 && cc != 7; }
+static int cf_before(const Meta *m, int live) {
+    return (m->reads && !m->cf_ignore) || (live && !m->kill);
+}
 
 static OpFn named(const char *name) {
     OpFn f = fxi_named(name);
@@ -177,6 +184,7 @@ static void emit_jcc(Dec *d, unsigned cc, uint64_t target) {
     Uop *u = emit(d, named("jcc"));
     u->cc = (uint8_t)cc; u->imm = target; u->aux = fall;
     meta(d)->reads = 1;
+    meta(d)->cf_ignore = (uint8_t)condition_ignores_cf(cc);   // GPTA
 }
 
 // ---- SSE helpers ----
@@ -666,6 +674,7 @@ static int decode_one_inner(Dec *d) {
         u->dst = gpr(d, d->reg, bits); u->src = gpr(d, d->rm, bits); u->cc = op & 15;
         if (d->is_mem) set_mem(d, u);
         meta(d)->reads = 1;
+        meta(d)->cf_ignore = (uint8_t)condition_ignores_cf(u->cc);   // GPTA
         return 0;
     }
     if (op >= 0x90 && op <= 0x9f) {
@@ -674,6 +683,7 @@ static int decode_one_inner(Dec *d) {
         u->dst = gpr(d, d->rm, 8); u->cc = op & 15;
         if (d->is_mem) set_mem(d, u);
         meta(d)->reads = 1;
+        meta(d)->cf_ignore = (uint8_t)condition_ignores_cf(u->cc);   // GPTA
         return 0;
     }
     if (op >= 0xc8 && op <= 0xcf) {
@@ -916,11 +926,11 @@ int fxi_probe(const uint8_t *p, uint64_t rip, char *why, size_t why_len) {
 }
 
 // GPTA: are the arithmetic flags live where control enters rip? Decodes the block there (no
-// further lookahead) and runs the liveness pass with the flags live at its end; 1 when unsure.
+// further lookahead). Returns bit 0: any flags live, bit 1: CF live; both when unsure.
 // ELF mode only: in a Windows process the target may be native code or unmapped.
 static int gpta_live_in(struct Fxi *vm, uint64_t rip) {
     if (vm->windows || rip < (uint64_t)(uintptr_t)vm->image ||
-        rip >= (uint64_t)(uintptr_t)vm->image + vm->image_size) return 1;
+        rip >= (uint64_t)(uintptr_t)vm->image + vm->image_size) return 3;
     Dec *d = malloc(sizeof *d);
     d->p = (const uint8_t *)(uintptr_t)rip;
     d->n = 0;
@@ -932,15 +942,16 @@ static int gpta_live_in(struct Fxi *vm, uint64_t rip) {
         ended = decode_one(d);
     }
     OpFn ud = named("fail_ud");
-    int live = 1;
+    int live = 1, cflive = 1;   // GPTA: track carry independently, before cc_live changes reads
     for (int i = d->n - 1; i >= 0; i--) {
         Meta *m = &d->m[i];
         if (d->u[i].fn == ud) free((char *)(uintptr_t)d->u[i].imm);
+        cflive = cf_before(m, cflive);   // GPTA
         if (m->cc_live) m->reads = (uint8_t)live;
         live = m->reads || (live && !m->kill);
     }
     free(d);
-    return live;
+    return live | (cflive << 1);   // GPTA
 }
 
 Block *gpta_decode(struct Fxi *vm, uint64_t rip) {   // GPTA: fxi_translate without the lowering
@@ -958,12 +969,18 @@ Block *gpta_decode(struct Fxi *vm, uint64_t rip) {   // GPTA: fxi_translate with
 
     // Flag liveness, backward. GPTA: flags at the block end are live only if a direct successor
     // reads them before writing them (FXI assumes they are live there).
-    int live = d->nxt == 0, ldir = 0;
-    for (int k = 0; k < d->nxt; k++) if (gpta_live_in(vm, d->xt[k])) { live = 1; ldir |= 1 << k; }
+    int live = d->nxt == 0, cflive = live, ldir = 0;   // GPTA
+    for (int k = 0; k < d->nxt; k++) {   // GPTA
+        int in = gpta_live_in(vm, d->xt[k]);
+        if (in & 1) { live = 1; ldir |= 1 << k; }
+        if (in & 2) cflive = 1;
+    }
     if (d->n) d->u[d->n - 1].fdir = (uint8_t)ldir;   // GPTA: per edge (jcc: target, fallthrough)
     for (int i = d->n - 1; i >= 0; i--) {
         Meta *m = &d->m[i];
         d->u[i].flive = (uint8_t)live;   // GPTA: flags live after this uop
+        d->u[i].cfdead = (uint8_t)!cflive;   // GPTA
+        cflive = cf_before(m, cflive);      // GPTA: before cc_live rewrites reads
         if (m->cc_live) { d->u[i].cc = (uint8_t)live; m->reads = (uint8_t)live; }
         if (m->kill && !live && m->alt) d->u[i].fn = m->alt;
         live = m->reads || (live && !m->kill);

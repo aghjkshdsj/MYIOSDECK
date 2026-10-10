@@ -285,6 +285,19 @@ R16(DEF_UN, 32, F) R16(DEF_UN, 64, F) R16(DEF_UN, 32, N) R16(DEF_UN, 64, N)
 #define T_UN(SZF) { { R16(E1, inc_##SZF) }, { R16(E1, dec_##SZF) }, { R16(E1, not_##SZF) }, { R16(E1, neg_##SZF) } }
 const PFn t_un[2][2][4][16] = { { T_UN(32N), T_UN(64N) }, { T_UN(32F), T_UN(64F) } };   // [flags live][64?][op][D]
 
+// The decoder proves CF dead independently of ZF/SF/OF/PF/AF. Preserve the
+// remaining arithmetic flags without materializing the incoming carry.
+#define DEF_UNCF(D, SZ) \
+    PH p_inc_cfdead_##SZ##_##D(GPTA_PARAMS) { \
+        uint64_t a = g##D & M##SZ, r = (a + 1) & M##SZ; g##D = r; \
+        SETF(LF_INC, SI##SZ, a, 1, r, 0); PNEXT(); } \
+    PH p_dec_cfdead_##SZ##_##D(GPTA_PARAMS) { \
+        uint64_t a = g##D & M##SZ, r = (a - 1) & M##SZ; g##D = r; \
+        SETF(LF_DEC, SI##SZ, a, 1, r, 0); PNEXT(); }
+R16(DEF_UNCF, 32) R16(DEF_UNCF, 64)
+#define T_UNCF(SZ) { { R16(E1, inc_cfdead_##SZ) }, { R16(E1, dec_cfdead_##SZ) } }
+const PFn t_uncf[2][2][16] = { T_UNCF(32), T_UNCF(64) };
+
 // ---- imul (two/three operand), cmov ----
 // The low half is all a flags-dead imul needs; CF/OF (the high half) only when recorded.
 #define IMUL_BODY(SZ, A, B, FL)                                                            \
