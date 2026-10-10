@@ -42,6 +42,7 @@ struct MYIOSDECKApp: App {
                     crashes.sceneActive(true)
                     crashes.offerPreviousCrash()
                     ControllerBridge.shared.start()
+                    GameInput.shared.start()
                     jit.resumeIfDebugged(poolMB: settings.jitPoolMB) { engine.start(settings: settings) }
                 }
         }

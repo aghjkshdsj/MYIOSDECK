@@ -61,6 +61,14 @@ void mid_hidpad_set(int connected, uint16_t buttons, uint8_t lt, uint8_t rt,
 void mid_post_key(int vk, int down);
 void mid_post_mouse_button(unsigned int flags);
 
+/// The mouse (GameInput.swift): MOUSEEVENTF_* flags; with ABSOLUTE (0x8000) x, y are guest
+/// desktop pixels, with MOVE alone a relative delta; data is the wheel delta or XBUTTON.
+/// No-op without Wine.
+void mid_post_pointer(int x, int y, unsigned int flags, int data);
+/// A finger as the left mouse button at guest desktop pixels: phase 0 down, 1 move, 2 up.
+/// No-op without Wine.
+void mid_post_touch(int phase, int x, int y);
+
 /// The guest's virtual monitor in pixels (1024x768 unless a program changes it).
 void mid_display_screen_size(int *w, int *h);
 

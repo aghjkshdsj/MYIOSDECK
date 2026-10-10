@@ -9,7 +9,7 @@ import UIKit
 /// - XInput (also "+ DirectInput", which only adds a DirectInput view in Wine);
 /// - HID: the virtual HID gamepad, leaving XInput as a HID pad on Windows does;
 /// - Keyboard: keys and mouse buttons, for games whose controller support fails
-///   (Madeira's PadKeyboardMouse defaults, without the right-stick mouse).
+///   (Madeira's PadKeyboardMouse defaults); the right stick moves the cursor (GameInput).
 /// Players 2-4 stay XInput. The XInput mapping is Madeira's (GamepadInput.swift).
 /// While the app is inactive, pads stay connected with everything released.
 final class ControllerBridge: @unchecked Sendable {
@@ -56,14 +56,36 @@ final class ControllerBridge: @unchecked Sendable {
         heldMouse = mouse
     }
 
-    private func keyboard(_ b: UInt16, _ lt: UInt8, _ rt: UInt8, _ lx: Int16, _ ly: Int16) {
+    private func keyboard(_ b: UInt16, _ lt: UInt8, _ rt: UInt8, _ lx: Int16, _ ly: Int16, _ rx: Int16, _ ry: Int16) {
         var keys = Set<Int32>()
         for (mask, vk) in Self.keyMap where b & mask != 0 { keys.insert(vk) }
         if ly > 16384 { keys.insert(0x57) }    // left stick: W
         if ly < -16384 { keys.insert(0x53) }   // S
         if lx < -16384 { keys.insert(0x41) }   // A
         if lx > 16384 { keys.insert(0x44) }    // D
+        stickMouse(rx, ry)   // before the buttons: a click lands where the cursor went
         applyKeyboard(keys: keys, mouse: (rt > 128 ? 1 : 0) | (lt > 128 ? 2 : 0))
+    }
+
+    // Keyboard mode: the right stick moves the cursor (Madeira's PadStickMouse), up to
+    // 1400 desktop pixels a second at full tilt on a quadratic curve past a 15% dead zone,
+    // so menus and launchers can be clicked with the triggers. Fractions carry over.
+    private var stickCarry = (x: 0.0, y: 0.0)
+    private func stickMouse(_ rx: Int16, _ ry: Int16) {
+        func speed(_ v: Int16) -> Double {
+            let f = max(-1, min(1, Double(v) / 32767)), dead = 0.15
+            guard abs(f) > dead else { return 0 }
+            let t = (abs(f) - dead) / (1 - dead)
+            return (f < 0 ? -1 : 1) * t * t * 1400
+        }
+        stickCarry.x += speed(rx) * 0.004
+        stickCarry.y -= speed(ry) * 0.004   // stick up (+y) moves the cursor up the screen
+        let dx = stickCarry.x.rounded(.towardZero), dy = stickCarry.y.rounded(.towardZero)
+        guard dx != 0 || dy != 0 else { return }
+        stickCarry.x -= dx; stickCarry.y -= dy
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated { GameInput.shared.stickMoved(dx: CGFloat(dx), dy: CGFloat(dy)) }
+        }
     }
     private var timer: DispatchSourceTimer?
     private var started = false
@@ -153,7 +175,7 @@ final class ControllerBridge: @unchecked Sendable {
                     mid_hidpad_set(connected, b, lt, rt, lx, ly, rx, ry)
                 case .keyboard:
                     mid_pad_set(Int32(i), 0, 0, 0, 0, 0, 0, 0, 0)
-                    keyboard(b, lt, rt, lx, ly)
+                    keyboard(b, lt, rt, lx, ly, rx, ry)
                 }
             }
             guard let pad = pads[i] else { publish(0, 0, 0, 0, 0, 0, 0, 0); continue }

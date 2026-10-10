@@ -33,7 +33,7 @@ process, the way Madeira proved works.
 | 2 | Wine ARM64EC: build `ntdll_unix`, `win32u_unix`, `wineserver` for iOS and the ARM64EC PE modules + `xtajit64.dll` (FEX ARM64EC) in CI; boot a prefix and run a console `.exe` | Done: hello-x64.exe runs on device (build 20) |
 | 3 | DXMT (D3D9–11 → Metal) and the D3D12 path; present into the Metal stage; first 3D game | Done: D3D11 (DXMT) and D3D12 (runtime DXIL conversion) cubes render at 60 fps on iPhone 15 Pro Max (builds 21-22); first real game moves to stage 4 |
 | 4 | Steam: native sign-in (QR / password + Steam Guard), owned library with artwork, depot downloads, cloud saves; launch through Valve's Windows client | Next |
-| 5 | Deck UX: controller-driven Big Picture-style UI, per-game presets, touch controls, keyboard/mouse | Planned |
+| 5 | Deck UX: controller-driven Big Picture-style UI, per-game presets, touch controls, keyboard/mouse | Started: touch as mouse, hardware keyboard and mouse, the on-screen keyboard and the right-stick cursor (`App/Sources/Engine/GameInput.swift`, build 131); the rest planned |
 | 6 | Performance: AOT code cache (persist FEX translations between runs), Metal shader cache, efficiency-core management, 40 Hz / 30 Hz caps | Planned |
 
 Stages 2–4 port Madeira's working components (their build scripts are documented in Madeira's

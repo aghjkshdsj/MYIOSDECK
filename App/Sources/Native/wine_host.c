@@ -153,6 +153,15 @@ extern void winios_post_key(int vk, int down);
 extern void winios_pointer(int x, int y, unsigned int flags, unsigned int data);
 void mid_post_key(int vk, int down) { winios_post_key(vk, down); }
 void mid_post_mouse_button(unsigned int flags) { winios_pointer(0, 0, flags, 0); }
+void mid_post_pointer(int x, int y, unsigned int flags, int data) { winios_pointer(x, y, flags, (unsigned int)data); }
+extern void winios_post_touch_down(int x, int y);
+extern void winios_post_touch_move(int x, int y);
+extern void winios_post_touch_up(int x, int y);
+void mid_post_touch(int phase, int x, int y) {
+    if (phase == 0) winios_post_touch_down(x, y);
+    else if (phase == 1) winios_post_touch_move(x, y);
+    else winios_post_touch_up(x, y);
+}
 
 extern void madeira_seed_prefix_if_needed(const char *prefix_path);
 void mid_wine_seed_prefix(const char *prefix) { madeira_seed_prefix_if_needed(prefix); }
@@ -249,6 +258,8 @@ bool mid_wine_boot(const char *prefix, const char *exe, const char *args, char *
 void mid_wine_seed_prefix(const char *prefix) { (void)prefix; }
 void mid_post_key(int vk, int down) { (void)vk; (void)down; }
 void mid_post_mouse_button(unsigned int flags) { (void)flags; }
+void mid_post_pointer(int x, int y, unsigned int flags, int data) { (void)x; (void)y; (void)flags; (void)data; }
+void mid_post_touch(int phase, int x, int y) { (void)phase; (void)x; (void)y; }
 void mid_pad_set(int slot, int connected, uint16_t buttons, uint8_t lt, uint8_t rt,
                  int16_t lx, int16_t ly, int16_t rx, int16_t ry) {
     (void)slot; (void)connected; (void)buttons; (void)lt; (void)rt; (void)lx; (void)ly; (void)rx; (void)ry;

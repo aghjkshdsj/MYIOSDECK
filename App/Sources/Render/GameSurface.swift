@@ -10,7 +10,7 @@ import Metal
 /// to the UIWindow: a SwiftUI-hosted backing layer can have direct Metal
 /// presents silently dropped on iOS 26/27. One host, one layer, for the whole
 /// process (DXMT keeps the layer it was given), so only its frame changes.
-final class GameHostView: UIView {
+final class GameHostView: UIView, UIKeyInput {
     static let shared = GameHostView(frame: CGRect(x: 0, y: 0, width: 800, height: 600))
     private static var registered = false
 
@@ -21,16 +21,38 @@ final class GameHostView: UIView {
     /// can be above it; the app sets what it does.
     static var onMenu: (() -> Void)?
     private let menuButton = UIButton(type: .system)
+    /// Opens the iOS keyboard; what is typed reaches the program as key presses.
+    private let keyboardButton = UIButton(type: .system)
+    /// The program's mouse cursor while the right stick or a mouse moves it (a finger is
+    /// its own pointer, so a touch hides it). Its tip is the image's top left.
+    private let cursorView = UIImageView(image: UIImage(systemName: "cursorarrow",
+                                                        withConfiguration: UIImage.SymbolConfiguration(pointSize: 18)))
+    private var cursorUnit: CGPoint?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         isHidden = true
+        isMultipleTouchEnabled = true
         menuButton.setImage(UIImage(systemName: "ellipsis.circle.fill",
                                     withConfiguration: UIImage.SymbolConfiguration(pointSize: 26)), for: .normal)
         menuButton.tintColor = UIColor.white.withAlphaComponent(0.55)
         menuButton.frame = CGRect(x: 6, y: 6, width: 44, height: 44)
         menuButton.addAction(UIAction { _ in GameHostView.onMenu?() }, for: .touchUpInside)
         addSubview(menuButton)
+        keyboardButton.setImage(UIImage(systemName: "keyboard",
+                                        withConfiguration: UIImage.SymbolConfiguration(pointSize: 22)), for: .normal)
+        keyboardButton.tintColor = UIColor.white.withAlphaComponent(0.55)
+        keyboardButton.frame = CGRect(x: 52, y: 6, width: 44, height: 44)
+        keyboardButton.addAction(UIAction { _ in GameHostView.shared.toggleKeyboard() }, for: .touchUpInside)
+        addSubview(keyboardButton)
+        cursorView.tintColor = .white
+        cursorView.layer.shadowColor = UIColor.black.cgColor
+        cursorView.layer.shadowOpacity = 0.9
+        cursorView.layer.shadowRadius = 1.5
+        cursorView.layer.shadowOffset = .zero
+        cursorView.isUserInteractionEnabled = false
+        cursorView.isHidden = true
+        addSubview(cursorView)
         statusLabel.font = .preferredFont(forTextStyle: .subheadline)
         statusLabel.textColor = UIColor.white.withAlphaComponent(0.8)
         statusLabel.backgroundColor = UIColor.black.withAlphaComponent(0.55)
@@ -67,17 +89,60 @@ final class GameHostView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        placeCursor()
         guard !statusLabel.isHidden else { return }
         let size = statusLabel.sizeThatFits(CGSize(width: bounds.width - 40, height: 80))
         statusLabel.frame = CGRect(x: (bounds.width - min(size.width, bounds.width - 40)) / 2, y: bounds.height - size.height - 24,
                                    width: min(size.width, bounds.width - 40), height: size.height + 8)
     }
 
-    /// Only the menu button takes touches; the rest fall through to the views below.
-    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        let hit = super.hitTest(point, with: event)
-        return hit === self ? nil : hit
+    override var isHidden: Bool {
+        didSet { if isHidden { _ = resignFirstResponder() } }   // the game menu took over
     }
+
+    // MARK: - touches: the program's mouse (GameInput); the buttons keep theirs
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        GameInput.shared.touchesBegan(touches, in: self)
+    }
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        GameInput.shared.touchesMoved(touches, event, in: self)
+    }
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        GameInput.shared.touchesEnded(touches, event, in: self)
+    }
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        GameInput.shared.touchesCancelled(touches, in: self)
+    }
+
+    /// The drawn cursor at a position given as a fraction of the desktop; nil hides it.
+    func showCursor(_ unit: CGPoint?) {
+        cursorUnit = unit
+        placeCursor()
+    }
+    private func placeCursor() {
+        guard let u = cursorUnit else { cursorView.isHidden = true; return }
+        let size = cursorView.intrinsicContentSize
+        cursorView.frame = CGRect(x: u.x * bounds.width - 2, y: u.y * bounds.height - 2, width: size.width, height: size.height)
+        cursorView.isHidden = false
+    }
+
+    // MARK: - on-screen keyboard (UIKeyInput): typed text becomes key presses
+
+    func toggleKeyboard() {
+        if isFirstResponder { _ = resignFirstResponder() } else { _ = becomeFirstResponder() }
+    }
+    override var canBecomeFirstResponder: Bool { true }
+    var hasText: Bool { true }
+    func insertText(_ text: String) { GameInput.shared.type(text) }
+    func deleteBackward() { GameInput.shared.backspace() }
+    var autocorrectionType: UITextAutocorrectionType = .no
+    var autocapitalizationType: UITextAutocapitalizationType = .none
+    var spellCheckingType: UITextSpellCheckingType = .no
+    var smartQuotesType: UITextSmartQuotesType = .no
+    var smartDashesType: UITextSmartDashesType = .no
+    var smartInsertDeleteType: UITextSmartInsertDeleteType = .no
+    var keyboardType: UIKeyboardType = .asciiCapable
 
     /// Hand the layer to DXMT. Must happen before a Direct3D program starts.
     static func register() {
