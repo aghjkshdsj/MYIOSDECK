@@ -7,7 +7,8 @@ name: Stage 2b - Wine i386 farm (WoW64)
 on:
   push:
     branches: ["main", "claude/**"]
-    paths: ["engine/wine/build-i386.sh", "engine/wine/PIN", "engine/dxmt/PIN", ".github/workflows/wine-i386.yml"]
+    paths: ["engine/wine/build-i386.sh", "engine/wine/PIN", "engine/dxmt/PIN", "engine/wine/patches/wow64win_atoms.py",
+            ".github/workflows/wine-i386.yml"]
   workflow_dispatch:
 
 permissions:
@@ -55,6 +56,14 @@ jobs:
       - name: hello-x86.exe
         run: bash engine/wine/build-i386.sh extras
 
+      # The WoW64 host side's wow64win.dll (aarch64) with atoms and resource IDs kept
+      # (engine/wine/patches/wow64win_atoms.py); build-ipa.yml puts it over Madeira's copy.
+      - name: wow64win.dll (aarch64, atoms kept)
+        run: |
+          set -o pipefail
+          bash engine/wine/build-i386.sh a64 2>&1 | tee a64.log
+          grep -E '^== ' a64.log | sed 's/^== /- /; s/ ==$//' >> "$GITHUB_STEP_SUMMARY"
+
       # Fails on a missing import: a 32-bit program that imports one missing DLL never starts.
       - name: Collect and check imports
         run: |
@@ -73,10 +82,17 @@ jobs:
           retention-days: 90
 
       - uses: actions/upload-artifact@v5
+        with:
+          name: wine-a64-overrides
+          path: engine/wine/out-i386/aarch64-windows
+          retention-days: 90
+
+      - uses: actions/upload-artifact@v5
         if: always()
         with:
           name: wine-i386-logs
           path: |
             engine/wine/madeira/wine/build-i386/*.log
+            engine/wine/madeira/wine/build-a64/*.log
             engine/wine/madeira/dxmt/build-pe-i386-v1/meson-logs/*.txt
           if-no-files-found: ignore

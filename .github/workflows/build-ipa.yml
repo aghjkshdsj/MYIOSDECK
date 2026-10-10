@@ -171,6 +171,14 @@ jobs:
         run: |
           A64=engine/wine/madeira/app/Madeira/aarch64-windows
           mkdir -p App/Generated/pedylib/wine-a64
+          I386_RUN=$(bash tools/latest-run.sh wine-i386.yml || true)
+          # Our rebuilds of aarch64 modules (wine-i386.yml: wow64win.dll with atoms kept) replace
+          # Madeira's copies before they become dylibs.
+          if [ -n "$I386_RUN" ] && gh run download "$I386_RUN" -R "$GITHUB_REPOSITORY" -n wine-a64-overrides -D a64-overrides; then
+            for f in a64-overrides/*; do
+              [ -f "$f" ] && cp -f "$f" "$A64/" && echo "- WoW64 host side: $(basename "$f") from run $I386_RUN (patched rebuild)" | tee -a "$GITHUB_STEP_SUMMARY"
+            done
+          fi
           ok=0; skip=0
           for f in "$A64"/*; do
             [ -f "$f" ] || continue
@@ -185,7 +193,6 @@ jobs:
           echo "- WoW64 host side: $ok aarch64 PE files as signed dylibs, $skip not converted ($(du -sh "$A64" | cut -f1) farm)" | tee -a "$GITHUB_STEP_SUMMARY"
           I386=engine/wine/madeira/app/Madeira/i386-windows
           mkdir -p "$I386"
-          I386_RUN=$(bash tools/latest-run.sh wine-i386.yml || true)
           if [ -n "$I386_RUN" ] && gh run download "$I386_RUN" -R "$GITHUB_REPOSITORY" -n wine-i386-farm -D "$I386"; then
             # The 32-bit test programs (engine/pedylib/build-spike.sh): C:\windows\syswow64\*.exe
             cp App/Generated/pedylib/winepe-x86/*.exe "$I386/" 2>/dev/null || true

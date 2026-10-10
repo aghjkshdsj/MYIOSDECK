@@ -336,6 +336,15 @@ kernelbase, user32, DXMT d3d11/dxgi/winemetal and hello-x86.exe decode 100%.
   Forager's `steam_api.dll` is 13 MB and holds the VM-protected code from run 1 (Valve's is a few
   hundred KB and unprotected), i.e. not Valve's library; per the project rules (no Steam
   emulators, no license-check bypasses) nothing targets it: test with copies run from Steam.
+- **Run 4 (build 129):** Forager runs. Steins;Gate's `Launcher.exe` died after 0.5 s on the 64-bit
+  side: `NtUserCreateWindowEx` -> `wine_dbgstr_wn` read the class name at B + 0x8002, the dialog
+  class atom (#32770) turned into a pointer by Madeira's `wow64win.dll` (`guest_ptr32` adds B to
+  every value; upstream's is the identity, so `IS_INTRESOURCE()` works downstream). Madeira's
+  latest fork has the same code. `engine/wine/patches/wow64win_atoms.py` keeps values below 64 KB
+  (never pointers in Windows) unchanged both ways, fixing class, window, menu and icon names in
+  every thunk; wine-i386.yml rebuilds `wow64win.dll` for aarch64 from the pinned fork (16 KB
+  sections, exports and imports checked against Madeira's), and build-ipa.yml puts it over the
+  prebuilt copy before the aarch64 farm becomes dylibs. Only 32-bit processes load wow64win.dll.
 
 ### Stage 6: speed
 - FXR32 (guest registers pinned, as FXR), native fast paths for hot 32-bit system functions

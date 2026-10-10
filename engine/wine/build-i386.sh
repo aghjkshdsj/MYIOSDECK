@@ -12,9 +12,10 @@
 #   dxmt     DXMT's i386 d3d11/dxgi/d3d10core/winemetal, the D3D9 shim (d3d9.dll, d3d9shim.dll)
 #            and the emulated D3D9 frontend (d3d9-emulated.dll), against that tree
 #   extras   Madeira's hello-x86.exe (tests/x86: kernel32 only, prints a line, exits 42)
+#   a64      the WoW64 host side's wow64win.dll (aarch64), patched to keep atoms (step_a64)
 #   collect  strip into engine/wine/out-i386/i386-windows; fails on a missing import
 #
-#   engine/wine/build-i386.sh <step>     fetch | wine | dxmt | extras | collect | all
+#   engine/wine/build-i386.sh <step>     fetch | wine | dxmt | extras | a64 | collect | all
 # macOS host (Wine's configure and DXMT's Metal shaders, as Madeira builds it).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -137,6 +138,40 @@ step_extras() {
     llvm-readobj --file-headers --coff-imports "$OUT/extras/hello-x86.exe" | grep -E 'Machine|Name:' || true
 }
 
+# The WoW64 host side's wow64win.dll (aarch64), rebuilt from the same Wine fork with
+# engine/wine/patches/wow64win_atoms.py: atoms and resource IDs pass its thunks unchanged
+# (Madeira's prebuilt copy turns the dialog class 0x8002 into a pointer, and win32u faults on
+# it). 16 KB sections, so pe2dylib converts it like the rest of the aarch64 farm; build-ipa.yml
+# puts it over Madeira's copy. Its exports and imports must equal the prebuilt one's.
+A="$W/build-a64"
+A64_OUT="$OUT/aarch64-windows"
+step_a64() {
+    python3 "$ROOT/engine/wine/patches/wow64win_atoms.py" "$W"
+    mkdir -p "$A"
+    cd "$A"
+    if [ ! -f config.status ]; then
+        ../configure --enable-archs=aarch64 --with-wine-tools="$B" --without-x --without-vulkan --without-freetype \
+            --without-gnutls --disable-tests aarch64_LDFLAGS="-Wl,--section-alignment=0x4000" \
+            > configure.log 2>&1 || { tail -60 configure.log; return 1; }
+    fi
+    local t=dlls/wow64win/aarch64-windows/wow64win.dll
+    make -j"$JOBS" "$t" > make-a64.log 2>&1 || { grep -E 'error:|Error [0-9]' make-a64.log | head -40; return 1; }
+    mkdir -p "$A64_OUT"
+    aarch64-w64-mingw32-strip --strip-debug -o "$A64_OUT/wow64win.dll" "$t"
+    local ref="$M/app/Madeira/aarch64-windows/wow64win.dll" diffs=0 what
+    [ -f "$ref" ] || { echo "no prebuilt wow64win.dll at $ref to compare with" >&2; return 1; }
+    llvm-readobj --file-headers "$A64_OUT/wow64win.dll" | grep -E 'Machine|SectionAlignment'
+    for what in coff-exports coff-imports; do
+        if ! diff <(llvm-readobj --"$what" "$ref" | grep -E '^ *Name:' | sort) \
+                  <(llvm-readobj --"$what" "$A64_OUT/wow64win.dll" | grep -E '^ *Name:' | sort); then
+            echo "wow64win.dll: $what differ from Madeira's prebuilt copy" >&2
+            diffs=1
+        fi
+    done
+    [ "$diffs" = 0 ]
+    echo "== wow64win.dll (aarch64, atoms kept): $(wc -c < "$A64_OUT/wow64win.dll" | tr -d ' ') bytes, exports and imports as Madeira's =="
+}
+
 step_collect() {
     local t b f imp l missing=0 n=0
     rm -rf "$FARM"
@@ -183,7 +218,8 @@ case "${1:-all}" in
     wine) step_wine ;;
     dxmt) step_dxmt ;;
     extras) step_extras ;;
+    a64) step_a64 ;;
     collect) step_collect ;;
-    all) step_fetch; step_wine; step_dxmt; step_extras; step_collect ;;
+    all) step_fetch; step_wine; step_dxmt; step_extras; step_a64; step_collect ;;
     *) echo "unknown step $1" >&2; exit 2 ;;
 esac
