@@ -311,6 +311,13 @@ kernelbase, user32, DXMT d3d11/dxgi/winemetal and hello-x86.exe decode 100%.
   --scan-pe` on Forager.exe locally first: the binary is never uploaded), D3D11 through DXMT's
   i386 DLLs and winemetal's 32-bit table, audio (XAudio2/DirectSound 32-bit), input.
 - **Phone**: Forager's title screen, then play; FPS from the overlay.
+- **Run 1 (build 125):** stages 1-4 pass on the phone (ARM64 hello, x86 hello, x86 suite, x64
+  unchanged). Forager stopped after 0.8 s, 1237 system calls in: `d4 49` (aam 0x49) reached by
+  `jmp ecx`, followed by `mov eax,[esi]; pushfd; clc; stc; add eax,ebx`: a code-virtualizing
+  protector's handler, so real code. Build 127 runs those legacy instructions, drops decoded
+  blocks when code changes (2.7), raises single-step traps (2.8), and a STOP now names the
+  module, the offset and the last 16 jumps. Only running the code faithfully: no protection or
+  license check is bypassed or patched.
 
 ### Stage 6: speed
 - FXR32 (guest registers pinned, as FXR), native fast paths for hot 32-bit system functions
