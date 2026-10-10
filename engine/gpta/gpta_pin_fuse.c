@@ -93,8 +93,20 @@ const PFn t_fjs_rrx[2][2][16][16] = {   // [test?][16-bit?][D][S]
 // ---- (u)comiss / (u)comisd + jcc: x86's flags after the compare are CF = less or unordered,
 // ZF = equal or unordered, PF = unordered, OF = SF = 0 ----
 FXI_INLINE int fcj_cond(unsigned cc, double a, double b) {
-    int un = (a != a) | (b != b);
-    return cc_flags(cc, 0, !(a >= b), !(a < b || a > b), 0, un);
+    // Use the condition's direct ordered/unordered comparison rather than
+    // independently constructing CF and ZF and then combining them.
+    switch (cc) {
+    case 0: case 8: case 12: return 0;
+    case 1: case 9: case 13: return 1;
+    case 2: return !(a >= b);
+    case 3: return a >= b;
+    case 4: case 14: return !(a < b || a > b);
+    case 5: case 15: return a < b || a > b;
+    case 6: return !(a > b);
+    case 7: return a > b;
+    case 10: return (a != a) | (b != b);
+    default: return (a == a) & (b == b);
+    }
 }
 #define DEF_FCJ(S, D, CC)                                                                  \
     PH p_fcjd_##CC##_##D##_##S(GPTA_PARAMS) {                                               \

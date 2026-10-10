@@ -489,10 +489,11 @@ typedef struct { const char *name; PFn h[9]; } XShift;
     X(t_fs_addr, [4][16]) X(t_fs_subr, [4][16]) X(t_fs_comis, [2][9][9]) \
     X(t_fs_addrr, [4][16][16]) X(t_fs_subrr, [4][16][16]) \
     X(t_x3, [20][9][9][9]) X(t_arj, [5][2][8][16][16]) X(t_lcj, [2][16][17][16]) \
-    X(t_xmemi, [12][9][17][17]) X(t_xmemb, [12][9][17])
+    X(t_xmemi, [12][9][17][17]) X(t_xmemb, [12][9][17]) X(t_jresult, [4][6])
 #define GPTA_DECL_TABLE(NAME, DIMS) extern const PFn GPTA_T(NAME) DIMS; extern const PFn gpta_##NAME##_r1 DIMS;
 GPTA_TABLES(GPTA_DECL_TABLE)
 #define t_setcc GPTA_T(t_setcc)
+#define t_jresult GPTA_T(t_jresult)
 #define t_xmemi GPTA_T(t_xmemi)
 #define t_xmemb GPTA_T(t_xmemb)
 #define t_alu_rr GPTA_T(t_alu_rr)

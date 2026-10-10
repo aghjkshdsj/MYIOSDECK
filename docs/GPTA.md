@@ -3,7 +3,24 @@
 GPTA is a separately namespaced fork of FXR at
 `f9bf149bae500728d11484ea943c2374bcae2568`. It preserves FXI and FXR and inherits
 their GPL licensing. All handlers are statically compiled; it generates no
-executable code. Initial GPTA performance: **not measured**.
+executable code.
+
+## Measured progress
+
+Both suites remain below the 50% target. These are ARM64 Linux arithmetic means
+of exact native/engine median ratios; displayed values are truncated. All
+required Linux, Windows-state and iOS compile gates passed on both runs.
+
+| Commit | CI run | Standard GPTA | Held-out GPTA | Standard FXI | Held-out FXI |
+|---|---|---:|---:|---:|---:|
+| 750038f | [37978872152](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/37978872152) | 22.73% | 23.59% | 8.27% | 13.99% |
+| 850e583 | [37980142939](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/37980142939) | 24.44% | 23.87% | 8.27% | 14.01% |
+
+Raw per-sample nanoseconds, checksums, commands and return codes are in each
+run's `gpta-evidence-ubuntu-24.04-arm` artifact (`gpta-results.json`). The first
+run is an inherited FXR baseline, not a new speed improvement. The second adds
+single-dispatch SSE memory arithmetic and direct result-only flag checks.
+GPTA iPhone performance is **not measured**.
 
 The held-out suite stays frozen at commit
 `57ce94e8ff5c7d39fbf22b73997a60317c31437e`, blob

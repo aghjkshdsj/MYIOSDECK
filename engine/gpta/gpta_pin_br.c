@@ -5,6 +5,19 @@
 
 #include "gpta_pin.h"
 
+// A local flag writer can prove the result's width before dispatch. These
+// handlers preserve all lazy flags and test only the requested result bit(s).
+#define DEF_JRESULT(SZ) \
+    PH p_jres_e_##SZ(GPTA_PARAMS) { FJ_BR((F3 & M##SZ) == 0); } \
+    PH p_jres_ne_##SZ(GPTA_PARAMS) { FJ_BR((F3 & M##SZ) != 0); } \
+    PH p_jres_s_##SZ(GPTA_PARAMS) { FJ_BR((F3 & (1ull << (SZ - 1))) != 0); } \
+    PH p_jres_ns_##SZ(GPTA_PARAMS) { FJ_BR((F3 & (1ull << (SZ - 1))) == 0); } \
+    PH p_jres_p_##SZ(GPTA_PARAMS) { FJ_BR(PAR(F3)); } \
+    PH p_jres_np_##SZ(GPTA_PARAMS) { FJ_BR(!PAR(F3)); }
+DEF_JRESULT(8) DEF_JRESULT(16) DEF_JRESULT(32) DEF_JRESULT(64)
+#define JRESULT_ROW(SZ) { p_jres_e_##SZ, p_jres_ne_##SZ, p_jres_s_##SZ, p_jres_ns_##SZ, p_jres_p_##SZ, p_jres_np_##SZ }
+const PFn t_jresult[4][6] = { JRESULT_ROW(8), JRESULT_ROW(16), JRESULT_ROW(32), JRESULT_ROW(64) };
+
 #define DEF_FJC_RR(S, D, SZ, CC)                                                           \
     PH p_fjc_rr_##SZ##_##CC##_##D##_##S(GPTA_PARAMS) {                                      \
         uint64_t a = g##D & M##SZ, b = g##S & M##SZ;                                       \
