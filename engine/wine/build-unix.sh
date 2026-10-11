@@ -110,6 +110,11 @@ PY
 }
 
 step_win32u() {
+    # A click on a dialog's button reaches it (engine/wine/patches/click_activation.py). Start
+    # from the pristine files: the checkout is cached.
+    git -C "$M" checkout -- build/win32u-unix/message_ios.c
+    git -C "$M/wine" checkout -- dlls/win32u/window.c
+    python3 "$HERE/patches/click_activation.py" "$M"
     bash "$M/build/win32u-unix/build.sh"
     test -s "$M/app/Madeira/libwin32u_unix.a"
 }
