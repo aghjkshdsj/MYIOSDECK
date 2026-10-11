@@ -364,6 +364,8 @@ kernelbase, user32, DXMT d3d11/dxgi/winemetal and hello-x86.exe decode 100%.
 - **Run 13 (build 142):** no stop: the launcher exits after starting Game.exe and Madeira ended
   the session with it, killing the game while it loaded. 32-bit sessions now set
   `MADEIRA_WAIT_CHILDREN=1` (WineController): the session waits for the children it started.
+- **Run 14 (build 143): Steins;Gate plays without JIT**, launcher to game, at a steady 60 fps
+  (user report, 2026-10-11): FXI32 for both processes, DXMT's D3D9 frontend, touch as mouse.
 
 ### Stage 6: speed
 - FXR32 (guest registers pinned, as FXR), native fast paths for hot 32-bit system functions
