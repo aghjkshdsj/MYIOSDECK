@@ -325,13 +325,13 @@ static void sse(void) {
 
 // ---- SSE3 (DXMT's i386 D3D9 frontend is built with -msse3): duplicates, horizontal and
 // alternating add/sub, lddqu. Finite values (NaN results differ between hosts in sign). ----
-static float fbuf[16] __attribute__((aligned(16)));
-static double dbuf[8] __attribute__((aligned(16)));
+static float sse3_f[16] __attribute__((aligned(16)));
+static double sse3_d[8] __attribute__((aligned(16)));
 static void sse3(void) {
     u64 h = H0;
     for (int i = 0; i < N; i++) {
-        for (int k = 0; k < 16; k++) fbuf[k] = (float)(int)(val() & 0xfffff) / 13.0f - 20000.0f;
-        for (int k = 0; k < 8; k++) dbuf[k] = (double)(int)val() / 7.0;
+        for (int k = 0; k < 16; k++) sse3_f[k] = (float)(int)(val() & 0xfffff) / 13.0f - 20000.0f;
+        for (int k = 0; k < 8; k++) sse3_d[k] = (double)(int)val() / 7.0;
         v2 r[10];
         __asm__ volatile("movups (%[f]), %%xmm0\n\tmovups 16(%[f]), %%xmm1\n\t"
                          "movsldup %%xmm0, %%xmm2\n\tmovshdup 32(%[f]), %%xmm3\n\t"
@@ -347,7 +347,7 @@ static void sse3(void) {
                          "lddqu 8(%[d]), %%xmm6\n\thsubpd %%xmm6, %%xmm6\n\t"
                          "movups %%xmm2, 80(%[r])\n\tmovups %%xmm3, 96(%[r])\n\tmovups %%xmm4, 112(%[r])\n\t"
                          "movups %%xmm5, 128(%[r])\n\tmovups %%xmm6, 144(%[r])"
-                         : : [f] "r"(fbuf), [d] "r"(dbuf), [r] "r"(r)
+                         : : [f] "r"(sse3_f), [d] "r"(sse3_d), [r] "r"(r)
                          : "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "memory");
         for (int k = 0; k < 10; k++) h = mix(mix(h, (u64)r[k][0]), (u64)r[k][1]);
     }
