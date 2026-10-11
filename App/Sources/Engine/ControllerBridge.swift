@@ -22,6 +22,7 @@ final class ControllerBridge: @unchecked Sendable {
     private var owners: [GCController?] = [nil, nil, nil, nil]
     private var active = true
     private var firstPress = [false, false, false, false]
+    private var lastButtons: [UInt16] = [0, 0, 0, 0]
     private var mode = Mode.xinput
     private var heldKeys = Set<Int32>()      // keyboard mode: VKs currently down
     private var heldMouse: UInt16 = 0        // keyboard mode: 1 left, 2 right
@@ -190,6 +191,10 @@ final class ControllerBridge: @unchecked Sendable {
             ]
             var buttons: UInt16 = 0
             for (b, mask) in map where b?.isPressed == true { buttons |= mask }
+            // A new press: a 32-bit program's calls for the next 3 s go to the log (GameInput.traceInput),
+            // so what its XInput / DirectInput code does with the pad can be read there.
+            if buttons != 0, lastButtons[i] == 0 { mid_wow_trace_calls(3) }
+            lastButtons[i] = buttons
             if buttons != 0, !firstPress[i] {
                 firstPress[i] = true
                 dlog("[xinput] slot=\(i) first press buttons=0x\(String(buttons, radix: 16)) published to \(hid ? "HID gamepad" : route == .keyboard ? "keyboard" : "XInput")")

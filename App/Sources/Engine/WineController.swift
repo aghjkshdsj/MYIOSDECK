@@ -286,7 +286,10 @@ final class WineController: ObservableObject, @unchecked Sendable {
         let api = Self.controllerAPI(for: program.id)
         sessionProgramID = program.id
         unsetenv("MADEIRA_DINPUT_PAD"); unsetenv("MADEIRA_HIDPAD"); unsetenv("MADEIRA_HIDPAD_NAME")
-        if api == "dinput" { setenv("MADEIRA_DINPUT_PAD", "1", 1) }
+        // DirectInput view of the pad; its trace (Madeira's joystick_ios.c, rate-limited: what the
+        // game reads once it has acquired the pad) shows in the log whether it ever does.
+        unsetenv("MADEIRA_DINPUT_TRACE")
+        if api == "dinput" { setenv("MADEIRA_DINPUT_PAD", "1", 1); setenv("MADEIRA_DINPUT_TRACE", "1", 1) }
         if api == "hid" || api == "dualsense" {
             setenv("MADEIRA_HIDPAD", api == "hid" ? "generic" : "dualsense", 1)
             if api == "hid", let name = GCController.controllers().first?.vendorName { setenv("MADEIRA_HIDPAD_NAME", name, 1) }

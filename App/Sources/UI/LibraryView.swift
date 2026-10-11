@@ -106,6 +106,7 @@ struct LibraryView: View {
             .persistentSystemOverlays(.hidden)
             .onAppear {
                 GameHostView.onMenu = {
+                    dlog("[ui] game menu opening (surface shown \(showSurface), menu already open \(showGameMenu))")
                     GameHostView.shared.isHidden = true
                     showGameMenu = true
                 }
@@ -139,6 +140,7 @@ struct LibraryView: View {
                 Text("XInput and Keyboard and mouse switch at once. DirectInput and HID modes need the game to start with them, so they apply at the next launch. The choice is remembered for this game.")
             }
             .onChange(of: showGameMenu) { _, open in
+                dlog("[ui] game menu \(open ? "shown" : "closed")")
                 if !open, showSurface, !openingControllerMenu { GameHostView.shared.isHidden = false }
             }
             .onChange(of: showControllerMenu) { _, open in

@@ -565,14 +565,21 @@ static int tracing(void) {
 // buttons, left stick) are logged, 40 lines per run: a pad the game ignores shows its presses
 // here; one that never reaches it does not.
 static void note_gamepad(wow_thread *t, uint32_t esp, uint32_t status) {
-    static int lines, first;
+    static int lines;
     static uint32_t last = ~0u;
+    static uint64_t seen_base[8];   // processes (windows) that queried already: a launcher and its game
     uint64_t base = t->proc->base;
     uint32_t arg1 = rd_guest32(base, esp + 8), buf = rd_guest32(base, esp + 12);
     uint32_t index = arg1 & 0xff, op = (arg1 >> 8) & 0xff;
     static int vib_lines;
-    if (!first++)
-        mid_log("[fxi-wow] pad: first query from the 32-bit program (index %u, op %u) -> %u", index, op, status);
+    int known = 0;
+    for (int i = 0; i < 8 && !known; i++) {
+        if (seen_base[i] == base) known = 1;
+        else if (!seen_base[i]) { seen_base[i] = base; break; }
+    }
+    if (!known)
+        mid_log("[fxi-wow] pad: first query from the 32-bit program at B=%#llx (index %u, op %u) -> %u",
+                (unsigned long long)base, index, op, status);
     // op 2 (XINPUT_VIBRATION in): XInputSetState, and XInputEnable(FALSE) silencing the motors,
     // after which xinput hands the program an all-zero pad.
     if (op == 2 && vib_lines < 12) {

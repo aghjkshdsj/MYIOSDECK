@@ -37,7 +37,10 @@ final class GameHostView: UIView, UIKeyInput {
                                     withConfiguration: UIImage.SymbolConfiguration(pointSize: 26)), for: .normal)
         menuButton.tintColor = UIColor.white.withAlphaComponent(0.55)
         menuButton.frame = CGRect(x: 6, y: 6, width: 44, height: 44)
-        menuButton.addAction(UIAction { _ in GameHostView.onMenu?() }, for: .touchUpInside)
+        menuButton.addAction(UIAction { _ in
+            dlog("[ui] game menu button tapped (menu handler \(GameHostView.onMenu == nil ? "missing" : "set"))")
+            GameHostView.onMenu?()
+        }, for: .touchUpInside)
         addSubview(menuButton)
         keyboardButton.setImage(UIImage(systemName: "keyboard",
                                         withConfiguration: UIImage.SymbolConfiguration(pointSize: 22)), for: .normal)
@@ -109,6 +112,11 @@ final class GameHostView: UIView, UIKeyInput {
     // MARK: - touches: the program's mouse (GameInput); the buttons keep theirs
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        // A touch on the menu or keyboard button's spot that reached the game view instead.
+        if let p = touches.first?.location(in: self), p.x < 110, p.y < 60, !menuButton.isHidden {
+            dlog("[ui] touch at \(Int(p.x)),\(Int(p.y)) went to the game, not the menu/keyboard button "
+                 + "(menu button frame \(menuButton.frame), alpha \(menuButton.alpha), in view \(menuButton.superview === self))")
+        }
         GameInput.shared.touchesBegan(touches, event, in: self)
     }
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
