@@ -252,6 +252,12 @@ final class WineController: ObservableObject, @unchecked Sendable {
                       "MYIOSDECK_NOJIT_WOW_CPU", "WINEDLLOVERRIDES", "MYIOSDECK_WIN_CPU"] { unsetenv(k) }
             if program.aarch64 { unsetenv("MADEIRA_USE_ARM64EC") } else if program.noJIT { setenv("MADEIRA_USE_ARM64EC", "1", 1) }
         }
+        // A 32-bit game's launcher starts the game and exits (Steins;Gate: Launcher.exe ->
+        // Game.exe): the session waits for the children it started instead of ending with the
+        // launcher and killing the game (Madeira's MADEIRA_WAIT_CHILDREN; opt-in there because a
+        // child that ends from a worker thread can keep the session waiting, which the game menu's
+        // Quit ends). 64-bit sessions keep Madeira's default.
+        if program.aarch64 { setenv("MADEIRA_WAIT_CHILDREN", "1", 1) } else { unsetenv("MADEIRA_WAIT_CHILDREN") }
         // A Dock session publishes no fixed Steam game identity: Madeira's bridge otherwise sets
         // SteamAppId/SteamGameId/SteamAppPath (its Thumper fallback) for every launch, and in
         // build 105 that reached Valve's client inside the host, which then never finished

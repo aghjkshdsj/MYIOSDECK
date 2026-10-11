@@ -361,6 +361,9 @@ kernelbase, user32, DXMT d3d11/dxgi/winemetal and hello-x86.exe decode 100%.
   `movshdup` in DXMT's `d3d9-emulated.dll`, built with `-msse3`. FXI (shared by FXI32) now
   has SSE3: movsldup/movshdup/movddup, addsubps/pd, haddps/pd, hsubps/pd, lddqu (fisttp was
   there); difftest32 `sse3`. CPUID still says SSE2 (64-bit games unchanged).
+- **Run 13 (build 142):** no stop: the launcher exits after starting Game.exe and Madeira ended
+  the session with it, killing the game while it loaded. 32-bit sessions now set
+  `MADEIRA_WAIT_CHILDREN=1` (WineController): the session waits for the children it started.
 
 ### Stage 6: speed
 - FXR32 (guest registers pinned, as FXR), native fast paths for hot 32-bit system functions
