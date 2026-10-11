@@ -323,6 +323,37 @@ static void sse(void) {
     out("sse", h);
 }
 
+// ---- SSE3 (DXMT's i386 D3D9 frontend is built with -msse3): duplicates, horizontal and
+// alternating add/sub, lddqu. Finite values (NaN results differ between hosts in sign). ----
+static float fbuf[16] __attribute__((aligned(16)));
+static double dbuf[8] __attribute__((aligned(16)));
+static void sse3(void) {
+    u64 h = H0;
+    for (int i = 0; i < N; i++) {
+        for (int k = 0; k < 16; k++) fbuf[k] = (float)(int)(val() & 0xfffff) / 13.0f - 20000.0f;
+        for (int k = 0; k < 8; k++) dbuf[k] = (double)(int)val() / 7.0;
+        v2 r[10];
+        __asm__ volatile("movups (%[f]), %%xmm0\n\tmovups 16(%[f]), %%xmm1\n\t"
+                         "movsldup %%xmm0, %%xmm2\n\tmovshdup 32(%[f]), %%xmm3\n\t"
+                         "movaps %%xmm0, %%xmm4\n\thaddps %%xmm1, %%xmm4\n\t"
+                         "movaps %%xmm1, %%xmm5\n\thsubps 48(%[f]), %%xmm5\n\t"
+                         "movaps %%xmm0, %%xmm6\n\taddsubps %%xmm1, %%xmm6\n\t"
+                         "movups %%xmm2, (%[r])\n\tmovups %%xmm3, 16(%[r])\n\tmovups %%xmm4, 32(%[r])\n\t"
+                         "movups %%xmm5, 48(%[r])\n\tmovups %%xmm6, 64(%[r])\n\t"
+                         "movupd (%[d]), %%xmm0\n\tmovupd 16(%[d]), %%xmm1\n\t"
+                         "movddup 32(%[d]), %%xmm2\n\tmovddup %%xmm1, %%xmm3\n\t"
+                         "movapd %%xmm0, %%xmm4\n\thaddpd %%xmm1, %%xmm4\n\thsubpd 48(%[d]), %%xmm4\n\t"
+                         "movapd %%xmm0, %%xmm5\n\taddsubpd 16(%[d]), %%xmm5\n\t"
+                         "lddqu 8(%[d]), %%xmm6\n\thsubpd %%xmm6, %%xmm6\n\t"
+                         "movups %%xmm2, 80(%[r])\n\tmovups %%xmm3, 96(%[r])\n\tmovups %%xmm4, 112(%[r])\n\t"
+                         "movups %%xmm5, 128(%[r])\n\tmovups %%xmm6, 144(%[r])"
+                         : : [f] "r"(fbuf), [d] "r"(dbuf), [r] "r"(r)
+                         : "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "memory");
+        for (int k = 0; k < 10; k++) h = mix(mix(h, (u64)r[k][0]), (u64)r[k][1]);
+    }
+    out("sse3", h);
+}
+
 // ---- Legacy i386 instructions (old compilers, hand-written and obfuscated code) ----
 // BCD adjusts and aam/aad with any base: AX and the flags each defines (Intel SDM). AAA/AAS stay
 // clear of an AL carry/borrow, where Intel and AMD differ.
@@ -423,7 +454,7 @@ static const test_fn kTests[] = {
     lea_l, lea_w, lea_abs, xchg_l, xchg_b, xadd_l, bt_l, bts_l, btr_l, btc_w, bt_imm_l, bts_imm_l, bsf_l, bsr_l,
     cmov_l, cmov_w, cwde,
     cc_o, cc_no, cc_b, cc_ae, cc_e, cc_ne, cc_be, cc_a, cc_s, cc_ns, cc_p, cc_np, cc_l, cc_ge, cc_le, cc_g,
-    muldiv, stack_forms, moffs, strings, control, sse,
+    muldiv, stack_forms, moffs, strings, control, sse, sse3,
     daa, das, aaa, aas, aam10, aam16, aam73, aad10, aad7, alias82, xlat_loop, enter_bound,
 };
 

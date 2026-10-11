@@ -144,6 +144,20 @@ DEF_X(shufps, 16, { X128 r; r.d[0] = D->d[u->imm & 3]; r.d[1] = D->d[(u->imm >> 
                     r.d[2] = S->d[(u->imm >> 4) & 3]; r.d[3] = S->d[(u->imm >> 6) & 3]; *D = r; })
 DEF_X(shufpd, 16, { X128 r; r.q[0] = D->q[u->imm & 1]; r.q[1] = S->q[(u->imm >> 1) & 1]; *D = r; })
 
+// ---- SSE3 (DXMT's i386 D3D9 frontend is built with -msse3): duplicates, horizontal and
+// alternating add/sub. movddup reads 8 bytes from memory; lddqu is movdqu (movx_RM). ----
+DEF_X(movsldup, 16, { X128 r; r.d[0] = r.d[1] = S->d[0]; r.d[2] = r.d[3] = S->d[2]; *D = r; })
+DEF_X(movshdup, 16, { X128 r; r.d[0] = r.d[1] = S->d[1]; r.d[2] = r.d[3] = S->d[3]; *D = r; })
+DEF_X(movddup, 8, { uint64_t v = S->q[0]; D->q[0] = D->q[1] = v; })
+DEF_X(addsubps, 16, { D->f[0] -= S->f[0]; D->f[1] += S->f[1]; D->f[2] -= S->f[2]; D->f[3] += S->f[3]; })
+DEF_X(addsubpd, 16, { D->g[0] -= S->g[0]; D->g[1] += S->g[1]; })
+DEF_X(haddps, 16, { X128 r; r.f[0] = D->f[0] + D->f[1]; r.f[1] = D->f[2] + D->f[3];
+                    r.f[2] = S->f[0] + S->f[1]; r.f[3] = S->f[2] + S->f[3]; *D = r; })
+DEF_X(hsubps, 16, { X128 r; r.f[0] = D->f[0] - D->f[1]; r.f[1] = D->f[2] - D->f[3];
+                    r.f[2] = S->f[0] - S->f[1]; r.f[3] = S->f[2] - S->f[3]; *D = r; })
+DEF_X(haddpd, 16, { X128 r; r.g[0] = D->g[0] + D->g[1]; r.g[1] = S->g[0] + S->g[1]; *D = r; })
+DEF_X(hsubpd, 16, { X128 r; r.g[0] = D->g[0] - D->g[1]; r.g[1] = S->g[0] - S->g[1]; *D = r; })
+
 // ---- compares with a predicate (u->imm: eq lt le unord neq nlt nle ord) ----
 static inline int fcmp(double a, double b, unsigned p) {
     switch (p & 7) {
@@ -283,6 +297,8 @@ static const struct { const char *name; OpFn fn; } kSse[] = {
     E2(punpcklbw), E2(punpckhbw), E2(punpcklwd), E2(punpckhwd), E2(punpckldq), E2(punpckhdq),
     E2(punpcklqdq), E2(punpckhqdq), E2(packsswb), E2(packuswb), E2(packssdw),
     E2(pshufd), E2(pshuflw), E2(pshufhw), E2(shufps), E2(shufpd),
+    E2(movsldup), E2(movshdup), E2(movddup), E2(addsubps), E2(addsubpd),
+    E2(haddps), E2(hsubps), E2(haddpd), E2(hsubpd),
     E2(cmpps), E2(cmppd), E2(cmpss), E2(cmpsd), E2(comiss), E2(comisd),
     E2(cvtss2sd), E2(cvtsd2ss), E2(cvtdq2ps), E2(cvttps2dq), E2(cvtps2dq), E2(cvtdq2pd),
     E2(cvttpd2dq), E2(cvtpd2dq), E2(cvtpd2ps), E2(cvtps2pd),

@@ -357,6 +357,10 @@ kernelbase, user32, DXMT d3d11/dxgi/winemetal and hello-x86.exe decode 100%.
 - **Run 11 (build 139):** Game.exe got its aarch64 ntdll and FXI32, then faulted in wow64's
   init on ntdll_handle 0: the 32-bit init block (LdrSystemDllInitBlock) was written into the
   session image only; the child's fresh ntdll now gets a copy (`nojit_child.py`).
+- **Run 12 (build 141):** Game.exe runs (20+ threads, its own code for 9 s) and stops on
+  `movshdup` in DXMT's `d3d9-emulated.dll`, built with `-msse3`. FXI (shared by FXI32) now
+  has SSE3: movsldup/movshdup/movddup, addsubps/pd, haddps/pd, hsubps/pd, lddqu (fisttp was
+  there); difftest32 `sse3`. CPUID still says SSE2 (64-bit games unchanged).
 
 ### Stage 6: speed
 - FXR32 (guest registers pinned, as FXR), native fast paths for hot 32-bit system functions

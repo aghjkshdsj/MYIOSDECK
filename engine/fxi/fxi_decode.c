@@ -252,13 +252,15 @@ static int decode_sse(Dec *d, uint8_t op) {
         return 0;
     case 0x12:
         if (pf <= 1) { if (d->is_mem) emit_x(d, "movlps", 0); else if (pf == 0) emit_x(d, "movhlps", 0); else return unimplemented(d, "movlpd reg"); return 0; }
-        return unimplemented(d, "movddup/movsldup");
+        emit_x(d, pf == 3 ? "movsldup" : "movddup", 0);   // SSE3
+        return 0;
     case 0x13: if (pf <= 1 && d->is_mem) { emit_xstore(d, "movsd_MR", "movsd_RR"); return 0; } return unimplemented(d, "0f13");
     case 0x14: emit_x(d, pf == 1 ? "punpcklqdq" : "punpckldq", 0); return 0;
     case 0x15: emit_x(d, pf == 1 ? "punpckhqdq" : "punpckhdq", 0); return 0;
     case 0x16:
         if (pf <= 1) { if (d->is_mem) emit_x(d, "movhps", 0); else if (pf == 0) emit_x(d, "movlhps", 0); else return unimplemented(d, "movhpd reg"); return 0; }
-        return unimplemented(d, "movshdup");
+        if (pf == 3) { emit_x(d, "movshdup", 0); return 0; }   // SSE3
+        return unimplemented(d, "f2 0f 16");
     case 0x17: if (pf <= 1 && d->is_mem) { emit_xstore(d, "movhps_MR", "movhps_MR"); return 0; } return unimplemented(d, "0f17");
     case 0x28: if (pf <= 1) { emit_x(d, "movx", 0); return 0; } break;
     case 0x29: if (pf <= 1) { emit_xstore(d, "movx_MR", "movx_RR"); return 0; } break;
@@ -311,6 +313,11 @@ static int decode_sse(Dec *d, uint8_t op) {
         }
         break;
     case 0x7f: if (pf == 1 || pf == 3) { emit_xstore(d, "movx_MR", "movx_RR"); return 0; } break;
+    // SSE3: horizontal add/sub (66 pd, F2 ps), add-subtract, lddqu (an unaligned 16-byte load)
+    case 0x7c: case 0x7d: if (pf == 1 || pf == 2) {
+        emit_x(d, op == 0x7c ? (pf == 1 ? "haddpd" : "haddps") : (pf == 1 ? "hsubpd" : "hsubps"), 0); return 0; } break;
+    case 0xd0: if (pf == 1 || pf == 2) { emit_x(d, pf == 1 ? "addsubpd" : "addsubps", 0); return 0; } break;
+    case 0xf0: if (pf == 2 && d->is_mem) { emit_x(d, "movx", 0); return 0; } break;
     case 0xc2: { const char *n = pf == 0 ? "cmpps" : pf == 1 ? "cmppd" : pf == 2 ? "cmpsd" : "cmpss"; emit_x(d, n, 1); return 0; }
     case 0xc6: if (pf <= 1) { emit_x(d, pf ? "shufpd" : "shufps", 1); return 0; } break;
     case 0xd6: if (pf == 1) {
