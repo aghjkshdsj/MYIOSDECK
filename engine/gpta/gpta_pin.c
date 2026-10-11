@@ -479,7 +479,7 @@ static void lower_one(Out *o, const Uop *u) {
         }
         if (fm == F_MI) {
             if (simple_mem(u)) { put_uop(o, u, t_sti[si][u->base]); return; }
-            if (ea_ok(u)) { put_uop(o, u, t_sti_bi[si][u->base][u->index]); return; }
+            if (ea_ok(u)) { put_uop(o, u, t_sti_bi[u->scale][si][u->base][u->index]); return; }
         }
         break;
     }

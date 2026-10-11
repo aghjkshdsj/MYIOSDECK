@@ -23,7 +23,8 @@ The last listed run has passed ARM64; x86 and iOS were pending at this update.
 | 92c2ee4 | [38104303289](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38104303289) | 24.60% | 24.16% | 8.47% | 14.04% |
 | 75b2c45 | [38104450060](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38104450060) | 25.07% | 23.73% | 8.28% | 13.95% |
 | b6ce108 | [38105141310](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38105141310) | 26.82% | 24.14% | 8.20% | 13.99% |
-| 828ed0e (x86/iOS gates pending) | [38137673954](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38137673954) | 25.72% | 24.48% | 8.37% | 14.04% |
+| 828ed0e | [38137673954](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38137673954) | 25.72% | 24.48% | 8.37% | 14.04% |
+| 6bb20ff (iOS gate pending) | [38137973007](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38137973007) | 25.50% | 29.74% | 8.22% | 14.00% |
 
 The third trial (result-width branches and simplified floating comparisons)
 regressed. Its ARM64, x86 and iOS gates passed. That trial is rolled back in
@@ -59,12 +60,18 @@ instruction or pair optimization. No held-out program is inspected to select
 these changes. Results must be recorded after CI; unrecorded trials are not
 measured.
 
-The carry trial's ARM64 gates passed; its standard mean regressed while its
+The carry trial's gates all passed; its standard mean regressed while its
 held-out mean increased. The trace trials retain each guest branch and
 specialize only an adjacent successor proven during ordinary trace construction.
 A subsequent isolated code-layout trial aligns static handler entries to 32
 bytes, motivated by front-end stalls in the standard memory/branch profiles.
 It has no measured result yet.
+
+The narrow-register trial passes ARM64 and x86 gates (iOS pending). The
+standard branch profile also identifies indexed immediate stores as costly;
+the next trial specializes all four address scales for every immediate-store
+width and adds exact-fault sites 20-23. The held-out source remains frozen and
+is not used to select these changes.
 
 Raw per-sample nanoseconds, checksums, commands and return codes are in each
 run's `gpta-evidence-ubuntu-24.04-arm` artifact (`gpta-results.json`). The first

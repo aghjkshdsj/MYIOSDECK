@@ -908,6 +908,25 @@ static void gpta_jresult_trace(void) {
     out("gpta_jresult_trace", h);
 }
 
+#define IMMSTORE_SCALE(SCALE) do { \
+    u64 fi = flags_in(), f; \
+    __asm__ volatile(PRE "movb $0xa5, -3(%[p],%[ix]," #SCALE ")\n\t" \
+        "movw $0x8153, 17(%[p],%[ix]," #SCALE ")\n\t" \
+        "movl $0x89abcdef, 39(%[p],%[ix]," #SCALE ")\n\t" \
+        "movq $-12345, 67(%[p],%[ix]," #SCALE ")" POST \
+        : [f] "=&r"(f) : [p] "r"(arr), [ix] "r"((u64)7), [fi] "r"(fi) : "cc", "memory"); \
+    for (int j = 0; j < 32; j++) h = mix(h, arr[j]); \
+    h = mix(h, f & ARITH); \
+} while (0)
+static void gpta_immstores(void) {
+    u64 h = 14695981039346656037ull, arr[32];
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j < 32; j++) arr[j] = val();
+        IMMSTORE_SCALE(1); IMMSTORE_SCALE(2); IMMSTORE_SCALE(4); IMMSTORE_SCALE(8);
+    }
+    out("gpta_immstores", h);
+}
+
 typedef void (*test_fn)(void);
 #define ALU_LIST(OP) OP##_q, OP##_l, OP##_w, OP##_b, OP##_mr_q, OP##_rm_l, OP##_mr_b,
 static const test_fn kTests[] = {
@@ -938,7 +957,7 @@ static const test_fn kTests[] = {
     fz_o, fz_no, fz_b, fz_ae, fz_e, fz_ne, fz_be, fz_a, fz_s, fz_ns, fz_p, fz_np, fz_l, fz_ge, fz_le, fz_g,
     fc_o, fc_no, fc_b, fc_ae, fc_e, fc_ne, fc_be, fc_a, fc_s, fc_ns, fc_p, fc_np, fc_l, fc_ge, fc_le, fc_g,
     fz_call, fz_index, fz_xindex, fz_3op, fz_3gap, fz_x3, fz_hoist, gpta_xmem, gpta_result_flags, gpta_xhigh, gpta_cf_flow,
-    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow, gpta_fcj_trace, gpta_jresult_trace,
+    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow, gpta_fcj_trace, gpta_jresult_trace, gpta_immstores,
 };
 
 int guest_main(int argc, char **argv) {

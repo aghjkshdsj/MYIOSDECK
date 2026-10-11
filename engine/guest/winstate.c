@@ -90,9 +90,14 @@ FAULT(f_xload8, "", "movdqu -16(%%rbx,%%rsi,8), %%xmm3")    // 16
 FAULT(f_xstore2, "", "movdqu %%xmm0, 16(%%rbx,%%rsi,2)")    // 17
 FAULT(f_xstore4, "", "movdqu %%xmm7, 16(%%rbx,%%rsi,4)")    // 18
 FAULT(f_xstore8, "", "movdqu %%xmm3, -16(%%rbx,%%rsi,8)")   // 19
+FAULT(f_immstore1, "", "movb $0xa5, 16(%%rbx,%%rsi)")     // 20
+FAULT(f_immstore2, "", "movw $0x8153, -16(%%rbx,%%rsi,2)") // 21
+FAULT(f_immstore4, "", "movl $0x89abcdef, 16(%%rbx,%%rsi,4)") // 22
+FAULT(f_immstore8, "", "movq $-12345, -16(%%rbx,%%rsi,8)") // 23
 static void (*const k_faults[])(void) = { f_load, f_store, f_xload, f_push, f_call, f_cmpj, f_ltj, f_pop, f_ret,
                                           f_rmw, f_callm, f_xstore, f_xarith_index, f_xarith_base,
-                                          f_xload2, f_xload4, f_xload8, f_xstore2, f_xstore4, f_xstore8 };
+                                          f_xload2, f_xload4, f_xload8, f_xstore2, f_xstore4, f_xstore8,
+                                          f_immstore1, f_immstore2, f_immstore4, f_immstore8 };
 
 int guest_main(int argc, char **argv) {
     if (argc >= 3 && g_streq(argv[1], "loop")) { loop(g_atou(argv[2])); g_puts("loop done\n"); return 0; }

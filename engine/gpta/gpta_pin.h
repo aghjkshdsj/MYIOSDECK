@@ -499,7 +499,7 @@ typedef struct { const char *name; PFn h[9]; } XShift;
     X(t_setcc, [16][16]) X(t_alu_rr, [2][ALU_COUNT][2][16][16]) X(t_alu_ri, [2][ALU_COUNT][2][16]) \
     X(t_alu_rt, [2][ALU_COUNT][2][16]) X(t_alu_tr, [2][ALU_COUNT][4][16]) X(t_alu_ti, [2][ALU_COUNT][4]) \
     X(t_stti, [4]) X(t_ld, [2][17][16]) X(t_st, [4][17][16]) X(t_lea, [2][17][16]) X(t_sti, [4][17]) \
-    X(t_sti_bi, [4][17][17]) X(t_ea, [17][17]) X(t_eaz, [17][17]) X(t_mov_rr, [2][16][16]) X(t_mov_ri, [2][16]) X(t_movt, [2][16]) \
+    X(t_sti_bi, [4][4][17][17]) X(t_ea, [17][17]) X(t_eaz, [17][17]) X(t_mov_rr, [2][16][16]) X(t_mov_ri, [2][16]) X(t_movt, [2][16]) \
     X(t_ldt, [K_COUNT][16]) X(t_stt, [4][16]) X(t_ext, [K_COUNT][16][16]) X(t_sh, [2][5][2][2][16]) \
     X(t_un, [2][2][4][16]) X(t_uncf, [2][2][16]) X(t_uknown, [CFK_COUNT][4][2][2][16]) X(t_imul2, [2][2][16][16]) X(t_imul3, [2][2][16][16]) X(t_imul2t, [2][2][16]) \
     X(t_imul3t, [2][2][16]) X(t_cmov, [2][16][16]) X(t_cmovt, [2][16]) \

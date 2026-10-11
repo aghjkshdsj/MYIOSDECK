@@ -183,18 +183,19 @@ const PFn t_lea[2][17][16] = { { R17(ROW_B, lea_32) }, { R17(ROW_B, lea_64) } };
 #define E_STI(B, SZ) p_sti_##SZ##_##B,
 const PFn t_sti[4][17] = { { R17(E_STI, 8) }, { R17(E_STI, 16) }, { R17(E_STI, 32) }, { R17(E_STI, 64) } };
 // stores of an immediate with [base + index*scale + disp]
-#define BI_EA(B, I) (g##B + (g##I << u->scale) + (uint64_t)u->disp)
-#define DEF_STI_BI(I, B)                                                                   \
-    PH psi_8_##B##_##I(GPTA_PARAMS) { st8(BI_EA(B, I), u->imm); PNEXT(); }                   \
-    PH psi_16_##B##_##I(GPTA_PARAMS) { st16(BI_EA(B, I), u->imm); PNEXT(); }                 \
-    PH psi_32_##B##_##I(GPTA_PARAMS) { st32(BI_EA(B, I), u->imm); PNEXT(); }                 \
-    PH psi_64_##B##_##I(GPTA_PARAMS) { st64(BI_EA(B, I), u->imm); PNEXT(); }
-#define DEF_STI_BI_ROW(B, _) R17B(DEF_STI_BI, B)
-R17(DEF_STI_BI_ROW, _)
+#define BI_EA(B, I, SC) (g##B + (g##I << (SC)) + (uint64_t)u->disp)
+#define DEF_STI_BI(I, B, SC)                                                               \
+    PH psi_8_##SC##_##B##_##I(GPTA_PARAMS) { st8(BI_EA(B, I, SC), u->imm); PNEXT(); }        \
+    PH psi_16_##SC##_##B##_##I(GPTA_PARAMS) { st16(BI_EA(B, I, SC), u->imm); PNEXT(); }      \
+    PH psi_32_##SC##_##B##_##I(GPTA_PARAMS) { st32(BI_EA(B, I, SC), u->imm); PNEXT(); }      \
+    PH psi_64_##SC##_##B##_##I(GPTA_PARAMS) { st64(BI_EA(B, I, SC), u->imm); PNEXT(); }
+#define DEF_STI_BI_ROW(B, SC) R17B(DEF_STI_BI, B, SC)
+R17(DEF_STI_BI_ROW, 0) R17(DEF_STI_BI_ROW, 1) R17(DEF_STI_BI_ROW, 2) R17(DEF_STI_BI_ROW, 3)
 #define E_MBI(I, B, NAME) NAME##_##B##_##I,
 #define ROW_MBI(B, NAME) { R17B(E_MBI, B, NAME) },
-const PFn t_sti_bi[4][17][17] = { { R17(ROW_MBI, psi_8) }, { R17(ROW_MBI, psi_16) }, { R17(ROW_MBI, psi_32) },
-                                          { R17(ROW_MBI, psi_64) } };
+#define T_STI_BI(SC) { { R17(ROW_MBI, psi_8_##SC) }, { R17(ROW_MBI, psi_16_##SC) }, \
+    { R17(ROW_MBI, psi_32_##SC) }, { R17(ROW_MBI, psi_64_##SC) } }
+const PFn t_sti_bi[4][4][17][17] = { T_STI_BI(0), T_STI_BI(1), T_STI_BI(2), T_STI_BI(3) };
 #define E_EA(I, B) p_ea_##B##_##I,
 #define ROW_EA(B, _) { R17B(E_EA, B) },
 const PFn t_ea[17][17] = { R17(ROW_EA, _) };
