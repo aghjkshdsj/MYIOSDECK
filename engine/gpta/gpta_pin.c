@@ -747,7 +747,7 @@ static int try_fuse(Out *o, const Uop *u, uint32_t left) {
         int k = x3_index(gpta_xops[b->a].name);
         if (k >= 0) {
             unsigned X = v->src == u->dst ? u->src : v->src;
-            x = put_uop(o, v, t_x3[k][xcls(u->dst)][xcls(u->src)][xcls(X)]);
+            x = put_uop(o, v, t_x3[k][xcls(u->dst)][u->src][X]);
             x->dst = u->dst; x->src = u->src; x->base = (uint8_t)X;
             return 2;
         }

@@ -927,6 +927,34 @@ static void gpta_immstores(void) {
     out("gpta_immstores", h);
 }
 
+#define X3HIGH_CASE(OP, D, S, X) do { \
+    v2 r; \
+    __asm__ volatile("movdqu %[a], %%" S "\n\tmovdqu %[b], %%" X "\n\t" \
+        "movdqa %%" S ", %%" D "\n\t" OP " %%" X ", %%" D "\n\tmovdqu %%" D ", %[r]" \
+        : [r] "=m"(r) : [a] "m"(a), [b] "m"(b) \
+        : "xmm0", "xmm7", "xmm8", "xmm9", "xmm10", "xmm11", "xmm12", "xmm13", "xmm14", "xmm15", "memory"); \
+    h = vmix(h, r); \
+} while (0)
+#define X3HIGH_FORMS(OP) \
+    X3HIGH_CASE(OP, "xmm0", "xmm8", "xmm15"); X3HIGH_CASE(OP, "xmm15", "xmm8", "xmm9"); \
+    X3HIGH_CASE(OP, "xmm8", "xmm14", "xmm7"); X3HIGH_CASE(OP, "xmm7", "xmm15", "xmm8"); \
+    X3HIGH_CASE(OP, "xmm13", "xmm13", "xmm12"); X3HIGH_CASE(OP, "xmm14", "xmm10", "xmm14"); \
+    X3HIGH_CASE(OP, "xmm9", "xmm11", "xmm11")
+static void gpta_x3high(void) {
+    u64 h = 14695981039346656037ull;
+    for (int i = 0; i < N; i++) {
+        v2 a = vfloat(1), b = vfloat(1);
+        X3HIGH_FORMS("addps"); X3HIGH_FORMS("subps"); X3HIGH_FORMS("mulps"); X3HIGH_FORMS("divps");
+        X3HIGH_FORMS("addss"); X3HIGH_FORMS("subss"); X3HIGH_FORMS("mulss"); X3HIGH_FORMS("divss");
+        a = vdouble(1); b = vdouble(1);
+        X3HIGH_FORMS("addpd"); X3HIGH_FORMS("subpd"); X3HIGH_FORMS("mulpd"); X3HIGH_FORMS("divpd");
+        X3HIGH_FORMS("addsd"); X3HIGH_FORMS("subsd"); X3HIGH_FORMS("mulsd"); X3HIGH_FORMS("divsd");
+        a = vrand(); b = vrand();
+        X3HIGH_FORMS("pand"); X3HIGH_FORMS("pandn"); X3HIGH_FORMS("por"); X3HIGH_FORMS("pxor");
+    }
+    out("gpta_x3high", h);
+}
+
 typedef void (*test_fn)(void);
 #define ALU_LIST(OP) OP##_q, OP##_l, OP##_w, OP##_b, OP##_mr_q, OP##_rm_l, OP##_mr_b,
 static const test_fn kTests[] = {
@@ -957,7 +985,7 @@ static const test_fn kTests[] = {
     fz_o, fz_no, fz_b, fz_ae, fz_e, fz_ne, fz_be, fz_a, fz_s, fz_ns, fz_p, fz_np, fz_l, fz_ge, fz_le, fz_g,
     fc_o, fc_no, fc_b, fc_ae, fc_e, fc_ne, fc_be, fc_a, fc_s, fc_ns, fc_p, fc_np, fc_l, fc_ge, fc_le, fc_g,
     fz_call, fz_index, fz_xindex, fz_3op, fz_3gap, fz_x3, fz_hoist, gpta_xmem, gpta_result_flags, gpta_xhigh, gpta_cf_flow,
-    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow, gpta_fcj_trace, gpta_jresult_trace, gpta_immstores,
+    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow, gpta_fcj_trace, gpta_jresult_trace, gpta_immstores, gpta_x3high,
 };
 
 int guest_main(int argc, char **argv) {
