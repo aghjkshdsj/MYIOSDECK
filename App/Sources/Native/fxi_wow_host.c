@@ -474,6 +474,7 @@ enum { SYSNAMES = 0x2000 };
 static const char *g_sysname[SYSNAMES];
 static int g_sysnames_ntdll, g_sysnames_win32u;
 static uint32_t g_create_num = ~0u;   // NtCreateUserProcess
+static uint32_t g_twoparam_num = ~0u; // NtUserCallTwoParam (XInput's and DirectInput's pad reads)
 
 static void sysnames_from(uint64_t base, uint32_t img) {
     pe_exp e;
@@ -496,6 +497,7 @@ static void sysnames_from(uint64_t base, uint32_t img) {
         if (num >= SYSNAMES || g_sysname[num]) continue;
         g_sysname[num] = strdup(name);
         if (!strcmp(name, "NtCreateUserProcess")) g_create_num = num;
+        if (!strcmp(name, "NtUserCallTwoParam")) g_twoparam_num = num;
     }
     free(e.d);
 }
@@ -555,6 +557,37 @@ static int tracing(void) {
     g_trace_left--;
     g_trace_total++;
     return 1;
+}
+
+// The pad as a 32-bit program reads it: NtUserCallTwoParam(index | op << 8, buffer,
+// NtUserCallTwoParam_GetGamepadState = 10), Madeira's host snapshot read behind XInput (and its
+// DirectInput joystick). The first query and every change of what came back for slot 0 (result,
+// buttons, left stick) are logged, 40 lines per run: a pad the game ignores shows its presses
+// here; one that never reaches it does not.
+static void note_gamepad(wow_thread *t, uint32_t esp, uint32_t status) {
+    static int lines, first;
+    static uint32_t last = ~0u;
+    uint64_t base = t->proc->base;
+    uint32_t arg1 = rd_guest32(base, esp + 8), buf = rd_guest32(base, esp + 12);
+    uint32_t index = arg1 & 0xff, op = (arg1 >> 8) & 0xff;
+    static int vib_lines;
+    if (!first++)
+        mid_log("[fxi-wow] pad: first query from the 32-bit program (index %u, op %u) -> %u", index, op, status);
+    // op 2 (XINPUT_VIBRATION in): XInputSetState, and XInputEnable(FALSE) silencing the motors,
+    // after which xinput hands the program an all-zero pad.
+    if (op == 2 && vib_lines < 12) {
+        vib_lines++;
+        mid_log("[fxi-wow] pad: vibration call for slot %u, motors %u %u (XInputSetState or XInputEnable)", index,
+                rd_guest16(base, buf), rd_guest16(base, buf + 2));
+    }
+    if (op != 0 || index != 0 || lines >= 40) return;
+    uint16_t buttons = rd_guest16(base, buf + 4);
+    int16_t lx = (int16_t)rd_guest16(base, buf + 8), ly = (int16_t)rd_guest16(base, buf + 10);
+    uint32_t now = status << 31 ^ buttons ^ (uint32_t)(lx / 8192 & 0xff) << 16 ^ (uint32_t)(ly / 8192 & 0xff) << 24;
+    if (now == last) return;
+    last = now;
+    lines++;
+    mid_log("[fxi-wow] pad: slot 0 -> %u, buttons %#06x, left stick %d %d", status, buttons, lx, ly);
 }
 
 // After a system or unix call. A failure (an NTSTATUS error) is logged by name with its caller,
@@ -627,6 +660,7 @@ static void note_call(wow_thread *t, int unix_call, uint32_t num, uint32_t esp, 
         }
         pthread_mutex_unlock(&g_note_lock);
     }
+    if (!unix_call && num == g_twoparam_num && rd_guest32(t->proc->base, esp + 16) == 10) note_gamepad(t, esp, status);
     // win32u calls return values (handles, lengths), not NTSTATUS: only the trace shows them.
     if (!unix_call && num >= 0x1000) return;
     if (status < 0xC0000000u && !create) return;
