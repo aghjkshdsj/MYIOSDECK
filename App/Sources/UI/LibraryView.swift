@@ -112,7 +112,7 @@ struct LibraryView: View {
             }
             .confirmationDialog(surfaceTitle, isPresented: $showGameMenu, titleVisibility: .visible) {
                 Button("Resume") {}
-                Button("Controller: \(Self.controllerNames[settings.controllerAPI] ?? "XInput")…") {
+                Button("Controller: \(Self.controllerNames[WineController.controllerAPI(for: wine.sessionProgramID)] ?? "XInput")…") {
                     openingControllerMenu = true
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { showControllerMenu = true }
                 }
@@ -128,15 +128,15 @@ struct LibraryView: View {
             }
             .confirmationDialog("Controller", isPresented: $showControllerMenu, titleVisibility: .visible) {
                 ForEach(Self.controllerOrder, id: \.self) { api in
-                    let current = api == settings.controllerAPI
-                    let later = (api == "hid" || api == "dualsense") && api != wine.sessionAPI
+                    let current = api == WineController.controllerAPI(for: wine.sessionProgramID)
+                    let later = WineController.sessionStartAPIs.contains(api) && api != wine.sessionAPI
                     Button((current ? "✓ " : "") + (Self.controllerNames[api] ?? api) + (later ? " (next launch)" : "")) {
                         settings.controllerAPI = api
                         wine.switchController(to: api)
                     }
                 }
             } message: {
-                Text("XInput and Keyboard and mouse switch at once. HID modes need the game to start with them, so they apply at the next launch.")
+                Text("XInput and Keyboard and mouse switch at once. DirectInput and HID modes need the game to start with them, so they apply at the next launch. The choice is remembered for this game.")
             }
             .onChange(of: showGameMenu) { _, open in
                 if !open, showSurface, !openingControllerMenu { GameHostView.shared.isHidden = false }

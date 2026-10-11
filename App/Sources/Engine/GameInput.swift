@@ -8,7 +8,8 @@ import UIKit
 /// HardwareInput.swift and ContentView.swift (GPL-3.0-or-later):
 /// - Touch, as a trackpad (default: a drawn cursor that one finger moves, a tap clicks where it
 ///   is, a tap then hold drags) or direct (a tap is a left click where the finger is; holding
-///   or moving drags); in both a two-finger tap is a right click, a two-finger drag the wheel.
+///   or moving drags); in both a two-finger tap is a right click, a two-finger drag the wheel,
+///   and a three-finger tap opens the game menu.
 /// - Hardware keyboard (GCKeyboard: raw HID usages, modifiers as keys, no repeat) and mouse
 ///   (GCMouse: deltas posted relative, buttons, wheel), only while the game view is shown and
 ///   the app is active; losing that releases everything that was posted down.
@@ -141,7 +142,7 @@ final class GameInput {
     private var tpStartTime: TimeInterval = 0, tpLastTap: TimeInterval = 0
     private var tpPeak = 0, tpMoved = false, tpDragging = false
     private var tpTwoY: CGFloat = 0, tpScroll: CGFloat = 0
-    private static let tapTime: TimeInterval = 0.3, dragAfterTap: TimeInterval = 0.35
+    private static let tapTime: TimeInterval = 0.3, dragAfterTap: TimeInterval = 0.35, menuTapTime: TimeInterval = 0.6
     private static let leftDown: UInt32 = 0x0002, leftUp: UInt32 = 0x0004
 
     private func resetTrackpad() {
@@ -205,6 +206,8 @@ final class GameInput {
         if tpDragging {
             tpDragging = false
             mid_post_pointer(Int32(cursor.x), Int32(cursor.y), Self.leftUp | Self.absolute, 0)
+        } else if !tpMoved, tpPeak >= 3, now - tpStartTime < Self.menuTapTime {
+            GameHostView.onMenu?()   // three fingers: the game menu, whatever covers its button
         } else if !tpMoved, now - tpStartTime < Self.tapTime {
             if tpPeak >= 2 {
                 clickAtCursor(Self.rightDown, Self.rightUp)
@@ -351,6 +354,8 @@ final class GameInput {
         if fingers == 1 {
             mid_post_touch(0, Int32(at.x), Int32(at.y))
             mid_post_touch(2, Int32(at.x), Int32(at.y))
+        } else if fingers >= 3 {
+            GameHostView.onMenu?()   // three fingers: the game menu, whatever covers its button
         } else if fingers == 2 {
             mid_post_pointer(Int32(at.x), Int32(at.y), Self.move | Self.absolute, 0)
             mid_post_pointer(Int32(at.x), Int32(at.y), Self.rightDown | Self.absolute, 0)

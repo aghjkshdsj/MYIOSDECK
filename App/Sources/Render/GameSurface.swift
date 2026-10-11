@@ -98,6 +98,10 @@ final class GameHostView: UIView, UIKeyInput {
     override var isHidden: Bool {
         didSet {
             if isHidden { _ = resignFirstResponder() }   // the game menu took over
+            // A launcher's or dialog's windows (Winios's overlay) are shown with the game view
+            // and hidden with it: above the game menu they hid it (and took its taps).
+            if isHidden { mid_game_overlay_show(0, nil) }
+            else if let w = window { mid_game_overlay_show(1, Unmanaged.passUnretained(w).toOpaque()) }
             placeCursor()
         }
     }

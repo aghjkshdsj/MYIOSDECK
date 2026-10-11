@@ -94,13 +94,28 @@ final class WineController: ObservableObject, @unchecked Sendable {
         }
     }
 
-    /// In-game switch (the game menu). Saved for the next launch either way;
-    /// applied now unless the mode needs a device this session was not started
-    /// with. Returns whether it took effect now.
+    /// The program this session started (its controller choice is remembered per program).
+    private(set) var sessionProgramID = ""
+
+    /// Modes whose device exists only if the session started with it: the HID gamepads, and
+    /// the DirectInput joystick (MADEIRA_DINPUT_PAD, read at session start).
+    static let sessionStartAPIs: Set<String> = ["hid", "dualsense", "dinput"]
+
+    /// The controller API a program starts with: its own last choice (games differ: a
+    /// GameMaker game wants XInput, Steins;Gate DirectInput), else Settings › Controller.
+    static func controllerAPI(for programID: String) -> String {
+        UserDefaults.standard.string(forKey: "controllerAPI.\(programID)")
+            ?? UserDefaults.standard.string(forKey: "controllerAPI") ?? "xinput"
+    }
+
+    /// In-game switch (the game menu). Saved for the next launch either way, also as this
+    /// program's own choice; applied now unless the mode needs a device this session was not
+    /// started with. Returns whether it took effect now.
     @discardableResult
     func switchController(to api: String) -> Bool {
         UserDefaults.standard.set(api, forKey: "controllerAPI")
-        let needsStart = (api == "hid" || api == "dualsense") && api != sessionAPI
+        if !sessionProgramID.isEmpty { UserDefaults.standard.set(api, forKey: "controllerAPI.\(sessionProgramID)") }
+        let needsStart = Self.sessionStartAPIs.contains(api) && api != sessionAPI
         dlog("[xinput] in-game switch to \(api)\(needsStart ? " (applies at next launch)" : "")")
         guard !needsStart else { return false }
         ControllerBridge.shared.setMode(Self.bridgeMode(api))
@@ -268,7 +283,8 @@ final class WineController: ObservableObject, @unchecked Sendable {
         // Controller API for this session (Settings › Controller). Must be in the
         // environment before the wineserver starts: the HID device and the
         // DirectInput joystick are created at session start.
-        let api = UserDefaults.standard.string(forKey: "controllerAPI") ?? "xinput"
+        let api = Self.controllerAPI(for: program.id)
+        sessionProgramID = program.id
         unsetenv("MADEIRA_DINPUT_PAD"); unsetenv("MADEIRA_HIDPAD"); unsetenv("MADEIRA_HIDPAD_NAME")
         if api == "dinput" { setenv("MADEIRA_DINPUT_PAD", "1", 1) }
         if api == "hid" || api == "dualsense" {
