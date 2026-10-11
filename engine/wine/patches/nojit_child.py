@@ -36,6 +36,25 @@ WOW_FIXES = [
      "                                   IMAGE_FILE_MACHINE_AMD64, FALSE, 0 );\n",
      "    status = open_builtin_pe_file( name, &attr, &module, &size, &info, 0, 0,\n"
      "                                   nt_machine, FALSE, 0 );\n"),
+    # The 32-bit ntdll's init block: load_wow64_ntdll wrote it for this child into the session
+    # image's LdrSystemDllInitBlock (pLdrSystemDllInitBlock); with JIT the child's ntdll is a copy
+    # of that image and inherits it, here the child's ntdll is fresh and its block empty, so
+    # wow64.dll took ntdll_handle 0 and faulted reading its header (Game.exe, build 139).
+    # Guest addresses: the same in every 32-bit process's window.
+    ("        /* Same slot recipe as load_ntdll_functions for the session image. */\n",
+     "        if (nt_machine == IMAGE_FILE_MACHINE_ARM64 && pLdrSystemDllInitBlock)\n"
+     "        {\n"
+     "            SYSTEM_DLL_INIT_BLOCK *blk = (void *)find_named_export( module, exports, \"LdrSystemDllInitBlock\" );\n"
+     "            if (blk)\n"
+     "            {\n"
+     "                memcpy( blk, pLdrSystemDllInitBlock, sizeof(*blk) );\n"
+     "                ios_jit_sync_write( blk, sizeof(*blk) );\n"
+     "                dprintf(2, \"[ec-child-ntdll] wow64 init block copied: ntdll_handle=%#lx LdrInitializeThunk=%#lx\\n\",\n"
+     "                        (unsigned long)blk->ntdll_handle, (unsigned long)blk->pLdrInitializeThunk);\n"
+     "            }\n"
+     "            else dprintf(2, \"[ec-child-ntdll] LdrSystemDllInitBlock NOT FOUND\\n\");\n"
+     "        }\n"
+     "        /* Same slot recipe as load_ntdll_functions for the session image. */\n"),
 ]
 
 

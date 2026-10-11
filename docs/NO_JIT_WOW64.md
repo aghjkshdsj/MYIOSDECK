@@ -354,6 +354,9 @@ kernelbase, user32, DXMT d3d11/dxgi/winemetal and hello-x86.exe decode 100%.
 - **Run 10 (build 137):** Start Game works; Game.exe, a child process, died at
   `load_child_ec_ntdll`: the no-JIT child path loaded the ARM64EC ntdll (`x86_64-windows`) for
   an i386 child. `nojit_child.py` now gives a 32-bit child the session's aarch64 ntdll.
+- **Run 11 (build 139):** Game.exe got its aarch64 ntdll and FXI32, then faulted in wow64's
+  init on ntdll_handle 0: the 32-bit init block (LdrSystemDllInitBlock) was written into the
+  session image only; the child's fresh ntdll now gets a copy (`nojit_child.py`).
 
 ### Stage 6: speed
 - FXR32 (guest registers pinned, as FXR), native fast paths for hot 32-bit system functions
