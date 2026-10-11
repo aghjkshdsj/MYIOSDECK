@@ -39,7 +39,9 @@
 #else
 #define GPTA_SECTION
 #endif
-#define PH static GPTA_SECTION GPTA_CC void
+// Keep handler entries on a fixed fetch boundary. This is static code layout;
+// the normal correctness and performance harness validates the layout trial.
+#define PH static __attribute__((aligned(32))) GPTA_SECTION GPTA_CC void
 // Dispatch: the handler pointer is the uop's first field, so stepping to the next uop is one
 // load with writeback and an indirect branch.
 #ifdef GPTA_PROFILE   // diagnostic build: count every dispatch (gpta_profile_dump)
