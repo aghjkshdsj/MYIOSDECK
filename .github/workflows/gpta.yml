@@ -83,15 +83,31 @@ jobs:
           sudo apt-get install -y -qq clang-19 > /dev/null || (wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh && sudo bash /tmp/llvm.sh 19 > /dev/null)
           clang-19 --version | head -1
           uname -a; lscpu | grep -E 'Model name|Vendor|MHz|^CPU\(s\)' || true
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: gpta-ccache-${{ matrix.os }}-clang19-v1-${{ github.sha }}
+          restore-keys: gpta-ccache-${{ matrix.os }}-clang19-v1-
+      - name: Cache unchanged compiler inputs
+        run: |
+          sudo apt-get install -y -qq ccache > /dev/null
+          ccache --set-config=max_size=512M
+          ccache --set-config=compiler_check=content
+          cat > "$RUNNER_TEMP/clang-cached" <<'EOF'
+          #!/bin/sh
+          exec ccache clang-19 "$@"
+          EOF
+          chmod +x "$RUNNER_TEMP/clang-cached"
       - name: Build GPTA, FXI and the native drivers (all clang 19)
         run: |
           mkdir -p guests; cp in/guests/*.elf guests/ 2>/dev/null || cp in/*.elf guests/
           chmod +x guests/*.elf
           ls in in/* | head -40
-          CC=clang-19 bash engine/gpta/build.sh "$RUNNER_TEMP/gpta"
-          CC=clang-19 bash engine/fxi/build.sh "$RUNNER_TEMP/fxi"
+          CC="$RUNNER_TEMP/clang-cached" bash engine/gpta/build.sh "$RUNNER_TEMP/gpta"
+          CC="$RUNNER_TEMP/clang-cached" bash engine/fxi/build.sh "$RUNNER_TEMP/fxi"
           clang-19 -O2 -ffp-contract=off -o "$RUNNER_TEMP/native" engine/gpta/native.c
           clang-19 -O2 -ffp-contract=off -DHELDOUT_HOSTED -o "$RUNNER_TEMP/native_heldout" engine/guest/heldout.c
+          ccache --show-stats
       - name: Correctness gates (GPTA and FXI)
         run: |
           NAT=$( [ "$(uname -m)" = x86_64 ] && echo run || echo "$(dirname "$(find in -name difftest.txt | head -1)")" )

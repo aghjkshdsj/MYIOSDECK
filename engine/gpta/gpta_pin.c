@@ -176,6 +176,20 @@ R16(DEF_PUSHPOP, _)
 static const PFn t_push[16] = { R16(E1, push) }, t_pop[16] = { R16(E1, pop) };
 static const PFn t_call_R[16] = { R16(E1, call_R) }, t_jmp_R[16] = { R16(E1, jmp_R) };
 static const PFn t_jcc[16] = { C16(E1, jcc) };
+
+// Result-only conditions with a statically proven width. Like t_jcc these
+// deliberately have no replica: adding one changes the trace replication
+// policy, which is a separate optimization and regressed in run 38008077789.
+#define DEF_JRESULT(SZ) \
+    PH p_jres_e_##SZ(GPTA_PARAMS) { FJ_BR((F3 & M##SZ) == 0); } \
+    PH p_jres_ne_##SZ(GPTA_PARAMS) { FJ_BR((F3 & M##SZ) != 0); } \
+    PH p_jres_s_##SZ(GPTA_PARAMS) { FJ_BR((F3 & (1ull << (SZ - 1))) != 0); } \
+    PH p_jres_ns_##SZ(GPTA_PARAMS) { FJ_BR((F3 & (1ull << (SZ - 1))) == 0); } \
+    PH p_jres_p_##SZ(GPTA_PARAMS) { FJ_BR(PAR(F3)); } \
+    PH p_jres_np_##SZ(GPTA_PARAMS) { FJ_BR(!PAR(F3)); }
+DEF_JRESULT(8) DEF_JRESULT(16) DEF_JRESULT(32) DEF_JRESULT(64)
+#define JRESULT_ROW(SZ) { p_jres_e_##SZ, p_jres_ne_##SZ, p_jres_s_##SZ, p_jres_ns_##SZ, p_jres_p_##SZ, p_jres_np_##SZ }
+static const PFn t_jresult[4][6] = { JRESULT_ROW(8), JRESULT_ROW(16), JRESULT_ROW(32), JRESULT_ROW(64) };
 // setcc, specialised on cc and register
 #define DEF_SETCC(R, CC)                                                                   \
     PH p_setcc_##CC##_##R(GPTA_PARAMS) {                                                    \
@@ -824,6 +838,44 @@ static void bound(Out *o, int start, int np, uint64_t rip, int nobound) {
     }
 }
 
+// Conservative local propagation of the flag result's width. Unknown
+// instructions, raw flag writers and variable/zero-count shifts end the proof.
+static int result_size_before(const Block *b, uint32_t at) {
+    while (at) {
+        const Uop *u = &b->u[--at];
+        const Desc *d = find(u->fn);
+        if (!d) return -1;
+        switch (d->fam) {
+        case FAM_ALU: return d->c2;
+        case FAM_UNARY:
+            if (d->a != U_NOT) return d->c2;
+            break;
+        case FAM_SHIFT:
+            if (d->a >= SH_SHL && u->src != 0xffff &&
+                ((unsigned)u->imm & (d->c2 == 3 ? 63u : 31u))) return d->c2;
+            return -1;
+        case FAM_MOV: case FAM_LEA: case FAM_EXT: case FAM_CMOV:
+        case FAM_SETCC: case FAM_XI: case FAM_XS: break;
+        case FAM_X: if (d->d) return -1; break;
+        case FAM_NAMED:
+            if (d->a != N_NOP && d->a != N_PUSH_R && d->a != N_POP_R) return -1;
+            break;
+        default: return -1;
+        }
+    }
+    return -1;
+}
+static void specialize_result_branch(Out *o, const Block *b, uint32_t at) {
+    const Uop *u = &b->u[at];
+    const Desc *d = find(u->fn);
+    if (!d || d->fam != FAM_NAMED || d->a != N_JCC) return;
+    unsigned cc = u->cc;
+    int condition = cc == 4 || cc == 5 ? (int)cc - 4 : cc >= 8 && cc <= 11 ? (int)cc - 6 : -1;
+    if (condition < 0) return;
+    int si = result_size_before(b, at);
+    if (si >= 0) o->out[o->n - 1].p = t_jresult[si][condition];
+}
+
 static void lower_block(Out *o, const Block *b) {
     for (uint32_t i = 0; i < b->n; i++) {
         int start = o->n, np = o->np;
@@ -856,6 +908,7 @@ static void lower_block(Out *o, const Block *b) {
         }
         if (try_fuse(o, &b->u[i], b->n - i)) { bound(o, start, np, b->u[i].rip, 0); i++; continue; }
         lower_one(o, &b->u[i]);
+        specialize_result_branch(o, b, i);
         bound(o, start, np, 0, 0);
     }
 }
@@ -1081,6 +1134,7 @@ static void hidx_build(void) {
     for (size_t i = 0; i < gpta_n_xops; i++) { hidx_tab(&gpta_xops[i].rr[0][0], 256); hidx_tab(gpta_xops[i].rt, 9); }
     for (size_t i = 0; i < gpta_n_xshift; i++) hidx_tab(gpta_xshift[i].h, 9);
     hidx_tab(t_push, 16); hidx_tab(t_pop, 16); hidx_tab(t_call_R, 16); hidx_tab(t_jmp_R, 16); hidx_tab(t_jcc, 16);
+    hidx_tab(&t_jresult[0][0], 24);
     static const PFn one[] = { p_stop, p_nop, p_jmp, p_goto, p_call, p_ret, p_call_T, p_jmp_T, p_call_M, p_jmp_M, p_syscall,
                                p_nat_tlsget, p_nat_csenter, p_nat_csleave };
     hidx_tab(one, sizeof one / sizeof one[0]);
