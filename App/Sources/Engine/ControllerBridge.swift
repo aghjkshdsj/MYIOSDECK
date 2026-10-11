@@ -47,6 +47,7 @@ final class ControllerBridge: @unchecked Sendable {
 
     /// Releases and presses only what changed since the last sample.
     private func applyKeyboard(keys: Set<Int32>, mouse: UInt16) {
+        if !keys.subtracting(heldKeys).isEmpty || mouse & ~heldMouse != 0 { mid_wow_trace_calls(3) }   // GameInput.traceInput
         for vk in heldKeys.subtracting(keys) { mid_post_key(vk, 0) }
         for vk in keys.subtracting(heldKeys) { mid_post_key(vk, 1) }
         heldKeys = keys

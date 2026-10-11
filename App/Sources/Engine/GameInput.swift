@@ -85,6 +85,10 @@ final class GameInput {
         GameHostView.shared.showCursor(showArrow ? CGPoint(x: cursor.x / d.w, y: cursor.y / d.h) : nil)
     }
 
+    /// A click or key press: a 32-bit program's calls for the next 3 s go to the log
+    /// (fxi_wow_host.c), so what a button does, or does not do, can be read there.
+    static func traceInput() { mid_wow_trace_calls(3) }
+
     /// The right stick's cursor motion, in desktop pixels. Main thread.
     func stickMoved(dx: CGFloat, dy: CGFloat) {
         guard focused else { return }
@@ -146,6 +150,7 @@ final class GameInput {
 
     /// A click at the cursor (button down and up at its position).
     private func clickAtCursor(_ down: UInt32, _ up: UInt32) {
+        Self.traceInput()
         let x = Int32(cursor.x), y = Int32(cursor.y)
         mid_post_pointer(x, y, down | Self.absolute, 0)
         mid_post_pointer(x, y, up | Self.absolute, 0)
@@ -163,6 +168,7 @@ final class GameInput {
             if !cursorPlaced { surfaceShown() }
             if now - tpLastTap < Self.dragAfterTap {   // tap, then hold: drag from the cursor
                 tpDragging = true
+                Self.traceInput()
                 mid_post_pointer(Int32(cursor.x), Int32(cursor.y), Self.leftDown | Self.absolute, 0)
             }
         }
@@ -248,6 +254,7 @@ final class GameInput {
         dragTouch = t
         let p = desktopPoint(gestureStart, in: view)
         cursor = p
+        Self.traceInput()
         mid_post_touch(0, Int32(p.x), Int32(p.y))
     }
 
@@ -340,6 +347,7 @@ final class GameInput {
         resetGesture()
         guard !moved else { return }
         cursor = at
+        Self.traceInput()
         if fingers == 1 {
             mid_post_touch(0, Int32(at.x), Int32(at.y))
             mid_post_touch(2, Int32(at.x), Int32(at.y))
@@ -381,6 +389,7 @@ final class GameInput {
         if pressed {
             guard focused, !keysDown.contains(vk) else { return }
             keysDown.insert(vk)
+            Self.traceInput()
             mid_post_key(vk, 1)
         } else if keysDown.remove(vk) != nil {
             mid_post_key(vk, 0)
@@ -432,6 +441,7 @@ final class GameInput {
     private func mouseButton(_ down: UInt32, _ up: UInt32, _ data: Int32, _ pressed: Bool) {
         if pressed {
             guard focused, buttonsDown.insert(Int(down)).inserted else { return }
+            Self.traceInput()
             mid_post_pointer(0, 0, down, data)
         } else if buttonsDown.remove(Int(down)) != nil {
             mid_post_pointer(0, 0, up, data)
@@ -459,6 +469,7 @@ final class GameInput {
     // MARK: - on-screen keyboard (GameHostView's UIKeyInput)
 
     func type(_ text: String) {
+        Self.traceInput()
         guard !hardwareKeyboard else { return }
         for ch in text {
             guard let (vk, shift) = Self.vk(forChar: ch) else { continue }
@@ -470,6 +481,7 @@ final class GameInput {
     }
 
     func backspace() {
+        Self.traceInput()
         guard !hardwareKeyboard else { return }
         mid_post_key(0x08, 1)
         mid_post_key(0x08, 0)

@@ -74,6 +74,10 @@ void mid_post_touch(int phase, int x, int y);
 /// or before the first such window.
 void mid_game_overlay_show(int shown, void *window);
 
+/// Diagnostics (fxi_wow_host.c): log every system and unix call of a 32-bit program for this
+/// long after a click or key press (bounded per input and per run).
+void mid_wow_trace_calls(double seconds);
+
 /// The guest's virtual monitor in pixels (1024x768 unless a program changes it).
 void mid_display_screen_size(int *w, int *h);
 

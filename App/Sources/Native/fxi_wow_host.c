@@ -17,6 +17,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <stdatomic.h>
+#include <time.h>
 
 #include <mach/mach.h>
 #include <pthread.h>
@@ -529,24 +531,63 @@ static void params_string(uint64_t base, uint32_t params, uint32_t off, char *ou
     out[k] = 0;
 }
 
+// Input trace: for a few seconds after the user clicks or presses a key (GameInput.swift,
+// mid_wow_trace_calls), every system and unix call of a 32-bit program is logged with its
+// result and caller: what a launcher's button does, or does not do. 250 lines per input,
+// 2000 per run.
+static pthread_mutex_t g_note_lock = PTHREAD_MUTEX_INITIALIZER;   // the logs below and the name table
+static _Atomic uint64_t g_trace_until;   // CLOCK_MONOTONIC ns
+static _Atomic int g_trace_left, g_trace_total;
+static uint64_t now_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
+void mid_wow_trace_calls(double seconds) {
+    if (g_trace_total >= 2000) return;
+    g_trace_until = now_ns() + (uint64_t)(seconds * 1e9);
+    g_trace_left = 250;
+}
+static int tracing(void) {
+    if (!g_trace_until) return 0;
+    if (now_ns() > g_trace_until) { g_trace_until = 0; return 0; }
+    if (g_trace_left <= 0 || g_trace_total >= 2000) return 0;
+    g_trace_left--;
+    g_trace_total++;
+    return 1;
+}
+
 // After a system or unix call. A failure (an NTSTATUS error) is logged by name with its caller,
 // once per (call, status, caller), the first 400 of a run: what a program tried and could not do
 // before it stopped or did nothing. Every process start is logged with its image and command
 // line, whatever the result (a launcher whose button does nothing).
 static void note_call(wow_thread *t, int unix_call, uint32_t num, uint32_t esp, uint32_t caller, uint32_t status) {
     int create = !unix_call && num == g_create_num;
+    if (tracing()) {
+        static wow_module tmods[160];
+        char where[128];
+        pthread_mutex_lock(&g_note_lock);
+        int nm = wow_modules(t->proc->base, t->teb32, tmods, 160);
+        describe(t->proc->base, tmods, nm, caller, where, sizeof where);
+        const char *name = unix_call ? NULL : sysname(t, num);
+        if (unix_call) mid_log("[fxi-wow] after input: unix call %u -> %08x from %s", num, status, where);
+        else if (name) mid_log("[fxi-wow] after input: %s -> %08x from %s", name, status, where);
+        else mid_log("[fxi-wow] after input: system call %#x -> %08x from %s", num, status, where);
+        pthread_mutex_unlock(&g_note_lock);
+    }
+    // win32u calls return values (handles, lengths), not NTSTATUS: only the trace shows them.
+    if (!unix_call && num >= 0x1000) return;
     if (status < 0xC0000000u && !create) return;
-    static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
     static uint64_t seen[1024];
     static unsigned distinct;
     uint64_t key = ((uint64_t)unix_call << 63) ^ ((uint64_t)num << 40) ^ ((uint64_t)caller << 8) ^ (status & 0xff) ^
                    ((uint64_t)(status >> 8 & 0xff) << 32);
     if (!key) key = 1;
-    pthread_mutex_lock(&lock);
+    pthread_mutex_lock(&g_note_lock);
     if (!create) {
         unsigned h = (unsigned)((key * 0x9E3779B97F4A7C15ull) >> 54);
         while (seen[h] && seen[h] != key) h = (h + 1) & 1023;
-        if (seen[h] || distinct >= 400) { pthread_mutex_unlock(&lock); return; }
+        if (seen[h] || distinct >= 400) { pthread_mutex_unlock(&g_note_lock); return; }
         seen[h] = key;
         distinct++;
     }
@@ -569,7 +610,7 @@ static void note_call(wow_thread *t, int unix_call, uint32_t num, uint32_t esp, 
         if (name) mid_log("[fxi-wow] failed: %s -> %08x from %s", name, status, where);
         else mid_log("[fxi-wow] failed: system call %#x -> %08x from %s", num, status, where);
     }
-    pthread_mutex_unlock(&lock);
+    pthread_mutex_unlock(&g_note_lock);
 }
 
 // ---- The module's calls ----

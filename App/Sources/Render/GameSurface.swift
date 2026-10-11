@@ -52,7 +52,6 @@ final class GameHostView: UIView, UIKeyInput {
         cursorView.layer.shadowOffset = .zero
         cursorView.isUserInteractionEnabled = false
         cursorView.isHidden = true
-        addSubview(cursorView)
         statusLabel.font = .preferredFont(forTextStyle: .subheadline)
         statusLabel.textColor = UIColor.white.withAlphaComponent(0.8)
         statusLabel.backgroundColor = UIColor.black.withAlphaComponent(0.55)
@@ -97,7 +96,10 @@ final class GameHostView: UIView, UIKeyInput {
     }
 
     override var isHidden: Bool {
-        didSet { if isHidden { _ = resignFirstResponder() } }   // the game menu took over
+        didSet {
+            if isHidden { _ = resignFirstResponder() }   // the game menu took over
+            placeCursor()
+        }
     }
 
     // MARK: - touches: the program's mouse (GameInput); the buttons keep theirs
@@ -120,10 +122,16 @@ final class GameHostView: UIView, UIKeyInput {
         cursorUnit = unit
         placeCursor()
     }
+    /// The cursor is the window's topmost view, not this view's: a launcher's or dialog's
+    /// windows (Winios's overlay) are above the game view and would cover it. Raised on every
+    /// move, since the overlay is added when the first such window appears.
     private func placeCursor() {
-        guard let u = cursorUnit else { cursorView.isHidden = true; return }
+        guard let u = cursorUnit, let w = window, !isHidden else { cursorView.isHidden = true; return }
+        if cursorView.superview !== w { w.addSubview(cursorView) }
+        w.bringSubviewToFront(cursorView)
         let size = cursorView.intrinsicContentSize
-        cursorView.frame = CGRect(x: u.x * bounds.width - 2, y: u.y * bounds.height - 2, width: size.width, height: size.height)
+        let tip = convert(CGPoint(x: u.x * bounds.width, y: u.y * bounds.height), to: w)
+        cursorView.frame = CGRect(x: tip.x - 2, y: tip.y - 2, width: size.width, height: size.height)
         cursorView.isHidden = false
     }
 
