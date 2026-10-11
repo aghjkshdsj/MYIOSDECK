@@ -190,6 +190,26 @@ static const PFn t_jcc[16] = { C16(E1, jcc) };
 DEF_JRESULT(8) DEF_JRESULT(16) DEF_JRESULT(32) DEF_JRESULT(64)
 #define JRESULT_ROW(SZ) { p_jres_e_##SZ, p_jres_ne_##SZ, p_jres_s_##SZ, p_jres_ns_##SZ, p_jres_p_##SZ, p_jres_np_##SZ }
 static const PFn t_jresult[4][6] = { JRESULT_ROW(8), JRESULT_ROW(16), JRESULT_ROW(32), JRESULT_ROW(64) };
+// The same conditions when trace construction proves one edge adjacent.
+// Keep these unreplicated, just like the ordinary result handlers.
+#define JRESULT_TRACE(TAKEN, EDGE) do { \
+    if (TAKEN) { if ((EDGE) == 0) PNEXT(); PCHAIN(u->ulink, p_miss_t); } \
+    if ((EDGE) == 1) PNEXT(); PCHAIN(u->ulink2, p_miss_f); \
+} while (0)
+#define DEF_JRESULT_TRACE(SZ, E) \
+    PH p_jrest_e_##SZ##_##E(GPTA_PARAMS) { JRESULT_TRACE((F3 & M##SZ) == 0, E); } \
+    PH p_jrest_ne_##SZ##_##E(GPTA_PARAMS) { JRESULT_TRACE((F3 & M##SZ) != 0, E); } \
+    PH p_jrest_s_##SZ##_##E(GPTA_PARAMS) { JRESULT_TRACE((F3 & (1ull << (SZ - 1))) != 0, E); } \
+    PH p_jrest_ns_##SZ##_##E(GPTA_PARAMS) { JRESULT_TRACE((F3 & (1ull << (SZ - 1))) == 0, E); } \
+    PH p_jrest_p_##SZ##_##E(GPTA_PARAMS) { JRESULT_TRACE(PAR(F3), E); } \
+    PH p_jrest_np_##SZ##_##E(GPTA_PARAMS) { JRESULT_TRACE(!PAR(F3), E); }
+#define DEF_JRT(E) DEF_JRESULT_TRACE(8, E) DEF_JRESULT_TRACE(16, E) DEF_JRESULT_TRACE(32, E) DEF_JRESULT_TRACE(64, E)
+DEF_JRT(0) DEF_JRT(1)
+#define JRT_ROW(SZ, E) { p_jrest_e_##SZ##_##E, p_jrest_ne_##SZ##_##E, p_jrest_s_##SZ##_##E, p_jrest_ns_##SZ##_##E, p_jrest_p_##SZ##_##E, p_jrest_np_##SZ##_##E }
+static const PFn t_jresult_trace[2][4][6] = {
+    { JRT_ROW(8, 0), JRT_ROW(16, 0), JRT_ROW(32, 0), JRT_ROW(64, 0) },
+    { JRT_ROW(8, 1), JRT_ROW(16, 1), JRT_ROW(32, 1), JRT_ROW(64, 1) }
+};
 // setcc, specialised on cc and register
 #define DEF_SETCC(R, CC)                                                                   \
     PH p_setcc_##CC##_##R(GPTA_PARAMS) {                                                    \
@@ -1101,6 +1121,11 @@ Block *gpta_lower(struct Fxi *vm, Block *b) {
                             break;
                         }
                 }
+                if (to == t + 1) {
+                    for (int si = 0; si < 4; si++)
+                        for (int cc = 0; cc < 6; cc++)
+                            if (t->p == t_jresult[si][cc]) t->p = t_jresult_trace[edge[i]][si][cc];
+                }
             }
         }
     if (g_replicas) replicate(nb->u, M, copies);
@@ -1208,6 +1233,7 @@ static void hidx_build(void) {
     for (size_t i = 0; i < gpta_n_xshift; i++) hidx_tab(gpta_xshift[i].h, 9);
     hidx_tab(t_push, 16); hidx_tab(t_pop, 16); hidx_tab(t_call_R, 16); hidx_tab(t_jmp_R, 16); hidx_tab(t_jcc, 16);
     hidx_tab(&t_jresult[0][0], 24);
+    hidx_tab(&t_jresult_trace[0][0][0], 48);
     static const PFn one[] = { p_stop, p_nop, p_jmp, p_goto, p_call, p_ret, p_call_T, p_jmp_T, p_call_M, p_jmp_M, p_syscall,
                                p_nat_tlsget, p_nat_csenter, p_nat_csleave };
     hidx_tab(one, sizeof one / sizeof one[0]);
