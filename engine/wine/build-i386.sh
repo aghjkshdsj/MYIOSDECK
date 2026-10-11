@@ -64,6 +64,10 @@ for e in "${SKIP_REASON[@]}"; do IFS='|' read -r -a n <<< "${e%%=*}"; SKIP+=("${
 is_in() { local x="$1"; shift; for y in "$@"; do [ "$x" = "$y" ] && return 0; done; return 1; }
 
 step_wine() {
+    # The 32-bit dinput's iOS pad wakes a game waiting on its event (patches/dinput_ios_events.py).
+    # From the pristine file each time: the tree may be cached. 64-bit dinput stays Madeira's.
+    git -C "$W" checkout -- dlls/dinput/joystick_ios.c
+    python3 "$ROOT/engine/wine/patches/dinput_ios_events.py" "$W"
     mkdir -p "$B"
     cd "$B"
     if [ ! -f config.status ]; then

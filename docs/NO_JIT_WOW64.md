@@ -366,6 +366,12 @@ kernelbase, user32, DXMT d3d11/dxgi/winemetal and hello-x86.exe decode 100%.
   `MADEIRA_WAIT_CHILDREN=1` (WineController): the session waits for the children it started.
 - **Run 14 (build 143): Steins;Gate plays without JIT**, launcher to game, at a steady 60 fps
   (user report, 2026-10-11): FXI32 for both processes, DXMT's D3D9 frontend, touch as mouse.
+- **Run 15–17 (builds 144–146): input.** Forager's XInput pad works. Steins;Gate acquires
+  Madeira's DirectInput pad (`joystick_ios.c`), reads it once, then waits on its
+  SetEventNotification event, which nothing signals: that pad is sampled only inside the game's
+  own GetDeviceState/Poll and has no read_event. `patches/dinput_ios_events.py` (i386 dinput
+  only) gives it an 8 ms waitable timer as read_event while acquired; dinput's input thread then
+  samples it and signals the game's event on a change, as the HID joystick does.
 
 ### Stage 6: speed
 - FXR32 (guest registers pinned, as FXR), native fast paths for hot 32-bit system functions
