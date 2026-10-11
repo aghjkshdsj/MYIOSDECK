@@ -298,6 +298,34 @@ R16(DEF_UNCF, 32) R16(DEF_UNCF, 64)
 #define T_UNCF(SZ) { { R16(E1, inc_cfdead_##SZ) }, { R16(E1, dec_cfdead_##SZ) } }
 const PFn t_uncf[2][2][16] = { T_UNCF(32), T_UNCF(64) };
 
+// Incoming flag kind and width proven by local dataflow. Carry is still
+// preserved exactly, but its runtime kind/width switch is unnecessary.
+#define CF_SRC_add(M) ((F3 & (M)) < (F1 & (M)))
+#define CF_SRC_adc(M) (((F0 >> 32) & 1) ? (F3 & (M)) <= (F1 & (M)) : CF_SRC_add(M))
+#define CF_SRC_sub(M) ((F1 & (M)) < (F2 & (M)))
+#define CF_SRC_sbb(M) (((F0 >> 32) & 1) ? (F1 & (M)) <= (F2 & (M)) : CF_SRC_sub(M))
+#define CF_SRC_logic(M) 0
+#define CF_SRC_cin(M) ((F0 >> 32) & 1)
+#define CF_SRC_neg(M) ((F1 & (M)) != 0)
+#define DEF_UKNOWN_D(D, SZ, OLD, FROM) \
+    PH p_inc_cf_##FROM##_##OLD##_##SZ##_##D(GPTA_PARAMS) { \
+        uint64_t ci = CF_SRC_##FROM(M##OLD), a = g##D & M##SZ, r = (a + 1) & M##SZ; \
+        g##D = r; SETF(LF_INC, SI##SZ, a, 1, r, ci); PNEXT(); } \
+    PH p_dec_cf_##FROM##_##OLD##_##SZ##_##D(GPTA_PARAMS) { \
+        uint64_t ci = CF_SRC_##FROM(M##OLD), a = g##D & M##SZ, r = (a - 1) & M##SZ; \
+        g##D = r; SETF(LF_DEC, SI##SZ, a, 1, r, ci); PNEXT(); }
+#define DEF_UKNOWN_W(OLD, FROM) R16(DEF_UKNOWN_D, 32, OLD, FROM) R16(DEF_UKNOWN_D, 64, OLD, FROM)
+#define DEF_UKNOWN(FROM) DEF_UKNOWN_W(8, FROM) DEF_UKNOWN_W(16, FROM) DEF_UKNOWN_W(32, FROM) DEF_UKNOWN_W(64, FROM)
+DEF_UKNOWN(add) DEF_UKNOWN(adc) DEF_UKNOWN(sub) DEF_UKNOWN(sbb)
+DEF_UKNOWN(logic) DEF_UKNOWN(cin) DEF_UKNOWN(neg)
+#define E_UKNOWN(D, SZ, OLD, FROM, OP) p_##OP##_cf_##FROM##_##OLD##_##SZ##_##D,
+#define T_UKNOWN_SZ(SZ, OLD, FROM) { { R16(E_UKNOWN, SZ, OLD, FROM, inc) }, { R16(E_UKNOWN, SZ, OLD, FROM, dec) } }
+#define T_UKNOWN_W(OLD, FROM) { T_UKNOWN_SZ(32, OLD, FROM), T_UKNOWN_SZ(64, OLD, FROM) }
+#define T_UKNOWN(FROM) { T_UKNOWN_W(8, FROM), T_UKNOWN_W(16, FROM), T_UKNOWN_W(32, FROM), T_UKNOWN_W(64, FROM) },
+const PFn t_uknown[CFK_COUNT][4][2][2][16] = {
+    T_UKNOWN(add) T_UKNOWN(adc) T_UKNOWN(sub) T_UKNOWN(sbb) T_UKNOWN(logic) T_UKNOWN(cin) T_UKNOWN(neg)
+};
+
 // ---- imul (two/three operand), cmov ----
 // The low half is all a flags-dead imul needs; CF/OF (the high half) only when recorded.
 #define IMUL_BODY(SZ, A, B, FL)                                                            \

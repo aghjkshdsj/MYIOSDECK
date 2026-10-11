@@ -264,7 +264,7 @@ static void rmap_init(void) {
     // gpta_pin_alu.c
     RMAP(t_alu_rr); RMAP(t_alu_ri); RMAP(t_alu_rt); RMAP(t_alu_tr); RMAP(t_alu_ti); RMAP(t_stti); RMAP(t_ld);
     RMAP(t_st); RMAP(t_lea); RMAP(t_sti); RMAP(t_sti_bi); RMAP(t_ea); RMAP(t_eaz); RMAP(t_mov_rr); RMAP(t_mov_ri); RMAP(t_movt);
-    RMAP(t_ldt); RMAP(t_stt); RMAP(t_ext); RMAP(t_sh); RMAP(t_un); RMAP(t_uncf); RMAP(t_imul2); RMAP(t_imul3); RMAP(t_imul2t);
+    RMAP(t_ldt); RMAP(t_stt); RMAP(t_ext); RMAP(t_sh); RMAP(t_un); RMAP(t_uncf); RMAP(t_uknown); RMAP(t_imul2); RMAP(t_imul3); RMAP(t_imul2t);
     RMAP(t_imul3t); RMAP(t_cmov); RMAP(t_cmovt);
     // gpta_pin_sse.c
     RMAP(t_xl_movx); RMAP(t_xs_movx); RMAP(t_xl_movxz); RMAP(t_xs_movxz); RMAP(t_xl_movss); RMAP(t_xl_movsd); RMAP(t_xs_movss); RMAP(t_xs_movsd);
@@ -887,6 +887,42 @@ static void specialize_result_branch(Out *o, const Block *b, uint32_t at) {
     if (si >= 0) o->out[o->n - 1].p = t_jresult[si][condition];
 }
 
+static int carry_source_before(const Block *b, uint32_t at) {
+    while (at) {
+        const Desc *d = find(b->u[--at].fn);
+        if (!d) return -1;
+        switch (d->fam) {
+        case FAM_ALU: {
+            int k = d->a == ALU_ADD ? CFK_ADD : d->a == ALU_ADC ? CFK_ADC :
+                d->a == ALU_SUB || d->a == ALU_CMP ? CFK_SUB : d->a == ALU_SBB ? CFK_SBB : CFK_LOGIC;
+            return k * 4 + d->c2;
+        }
+        case FAM_UNARY:
+            if (d->a == U_INC || d->a == U_DEC) return CFK_CIN * 4;
+            if (d->a == U_NEG) return CFK_NEG * 4 + d->c2;
+            break;   // NOT preserves all flags
+        case FAM_IMUL2: case FAM_IMUL3: return CFK_CIN * 4;
+        case FAM_MOV: case FAM_LEA: case FAM_EXT: case FAM_CMOV:
+        case FAM_SETCC: case FAM_XI: case FAM_XS: break;
+        case FAM_X: if (d->d) return -1; break;
+        case FAM_NAMED:
+            if (d->a != N_NOP && d->a != N_PUSH_R && d->a != N_POP_R) return -1;
+            break;
+        default: return -1;
+        }
+    }
+    return -1;
+}
+static void specialize_unary_carry(Out *o, const Block *b, uint32_t at) {
+    const Uop *u = &b->u[at];
+    const Desc *d = find(u->fn);
+    int D = greg(u->dst);
+    if (!d || d->fam != FAM_UNARY || d->b || d->c2 < 2 || D < 0 ||
+        (d->a != U_INC && d->a != U_DEC) || !u->flive || (!g_win && u->cfdead)) return;
+    int source = carry_source_before(b, at);
+    if (source >= 0) o->out[o->n - 1].p = t_uknown[source / 4][source % 4][d->c2 - 2][d->a][D];
+}
+
 static void lower_block(Out *o, const Block *b) {
     for (uint32_t i = 0; i < b->n; i++) {
         int start = o->n, np = o->np;
@@ -920,6 +956,7 @@ static void lower_block(Out *o, const Block *b) {
         if (try_fuse(o, &b->u[i], b->n - i)) { bound(o, start, np, b->u[i].rip, 0); i++; continue; }
         lower_one(o, &b->u[i]);
         specialize_result_branch(o, b, i);
+        specialize_unary_carry(o, b, i);
         bound(o, start, np, 0, 0);
     }
 }

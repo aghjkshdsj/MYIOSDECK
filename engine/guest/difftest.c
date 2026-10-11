@@ -802,6 +802,38 @@ static void gpta_op3r(void) {
     out("gpta_op3r", h);
 }
 
+#define KNOWN_CF_CASE(SOURCE, UNARY) do { \
+    u64 a = val(), b = val(), d = val(), fi = flags_in(), ra, rd, f; \
+    __asm__ volatile(PRE "movq %[a], %%rax\n\tmovq %[b], %%rcx\n\tmovq %[d], %%rdx\n\t" \
+        SOURCE "\n\tmovq %%rax, %%rsi\n\t" UNARY POST \
+        "\n\tmovq %%rax, %[ra]\n\tmovq %%rdx, %[rd]" \
+        : [ra] "=&r"(ra), [rd] "=&r"(rd), [f] "=&r"(f) \
+        : [a] "r"(a), [b] "r"(b), [d] "r"(d), [fi] "r"(fi) \
+        : "rax", "rcx", "rdx", "rsi", "cc", "memory"); \
+    h = mix(mix(mix(h, ra), rd), f & ARITH); \
+} while (0)
+#define KNOWN_CF_TARGETS(SOURCE) \
+    KNOWN_CF_CASE(SOURCE, "incl %%edx"); KNOWN_CF_CASE(SOURCE, "decl %%edx"); \
+    KNOWN_CF_CASE(SOURCE, "incq %%rdx"); KNOWN_CF_CASE(SOURCE, "decq %%rdx")
+#define KNOWN_CF_WIDTHS(OP) \
+    KNOWN_CF_TARGETS(OP "b %%cl, %%al"); KNOWN_CF_TARGETS(OP "w %%cx, %%ax"); \
+    KNOWN_CF_TARGETS(OP "l %%ecx, %%eax"); KNOWN_CF_TARGETS(OP "q %%rcx, %%rax")
+static void gpta_known_carry(void) {
+    u64 h = 14695981039346656037ull;
+    for (int i = 0; i < N; i++) {
+        KNOWN_CF_WIDTHS("add"); KNOWN_CF_WIDTHS("adc");
+        KNOWN_CF_WIDTHS("sub"); KNOWN_CF_WIDTHS("sbb"); KNOWN_CF_WIDTHS("xor");
+        KNOWN_CF_TARGETS("negb %%al"); KNOWN_CF_TARGETS("negw %%ax");
+        KNOWN_CF_TARGETS("negl %%eax"); KNOWN_CF_TARGETS("negq %%rax");
+        KNOWN_CF_TARGETS("incq %%rax"); KNOWN_CF_TARGETS("decl %%eax");
+        KNOWN_CF_TARGETS("imull %%ecx, %%eax"); KNOWN_CF_TARGETS("imulq %%rcx, %%rax");
+        KNOWN_CF_TARGETS("addq %%rcx, %%rax\n\tshlq $0, %%rax");
+        KNOWN_CF_TARGETS("addq %%rcx, %%rax\n\tmovl $1, %%ecx\n\tshlq %%cl, %%rax");
+        KNOWN_CF_TARGETS("addq %%rcx, %%rax\n\tstc");
+    }
+    out("gpta_known_carry", h);
+}
+
 typedef void (*test_fn)(void);
 #define ALU_LIST(OP) OP##_q, OP##_l, OP##_w, OP##_b, OP##_mr_q, OP##_rm_l, OP##_mr_b,
 static const test_fn kTests[] = {
@@ -832,7 +864,7 @@ static const test_fn kTests[] = {
     fz_o, fz_no, fz_b, fz_ae, fz_e, fz_ne, fz_be, fz_a, fz_s, fz_ns, fz_p, fz_np, fz_l, fz_ge, fz_le, fz_g,
     fc_o, fc_no, fc_b, fc_ae, fc_e, fc_ne, fc_be, fc_a, fc_s, fc_ns, fc_p, fc_np, fc_l, fc_ge, fc_le, fc_g,
     fz_call, fz_index, fz_xindex, fz_3op, fz_3gap, fz_x3, fz_hoist, gpta_xmem, gpta_result_flags, gpta_xhigh, gpta_cf_flow,
-    gpta_scaled_moves, gpta_high_comis, gpta_op3r,
+    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry,
 };
 
 int guest_main(int argc, char **argv) {

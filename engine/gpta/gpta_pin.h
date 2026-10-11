@@ -486,6 +486,7 @@ enum { XG_SI2SS32, XG_SI2SS64, XG_SI2SD32, XG_SI2SD64, XG_MOVD32, XG_MOVD64, XG_
 enum { GX_TSS32, GX_SS32, GX_TSD32, GX_SD32, GX_TSS64, GX_SS64, GX_TSD64, GX_SD64, GX_MOVD32, GX_MOVD64,
        GX_PMOVMSKB, GX_MOVMSKPS, GX_MOVMSKPD, GX_COUNT };
 enum { FL_LD32, FL_LD64, FL_LDZ8 };   // t_ldi kinds; t_stx: 8, 32, 64-bit stores
+enum { CFK_ADD, CFK_ADC, CFK_SUB, CFK_SBB, CFK_LOGIC, CFK_CIN, CFK_NEG, CFK_COUNT };
 // Register-register operations also specialize memory-backed XMM8-15: their
 // offsets are constants, so no runtime operand-index loads are needed.
 typedef struct { const char *name; PFn rr[16][16]; PFn rt[9]; } XOp;
@@ -496,7 +497,7 @@ typedef struct { const char *name; PFn h[9]; } XShift;
     X(t_stti, [4]) X(t_ld, [2][17][16]) X(t_st, [4][17][16]) X(t_lea, [2][17][16]) X(t_sti, [4][17]) \
     X(t_sti_bi, [4][17][17]) X(t_ea, [17][17]) X(t_eaz, [17][17]) X(t_mov_rr, [2][16][16]) X(t_mov_ri, [2][16]) X(t_movt, [2][16]) \
     X(t_ldt, [K_COUNT][16]) X(t_stt, [4][16]) X(t_ext, [K_COUNT][16][16]) X(t_sh, [2][5][2][2][16]) \
-    X(t_un, [2][2][4][16]) X(t_uncf, [2][2][16]) X(t_imul2, [2][2][16][16]) X(t_imul3, [2][2][16][16]) X(t_imul2t, [2][2][16]) \
+    X(t_un, [2][2][4][16]) X(t_uncf, [2][2][16]) X(t_uknown, [CFK_COUNT][4][2][2][16]) X(t_imul2, [2][2][16][16]) X(t_imul3, [2][2][16][16]) X(t_imul2t, [2][2][16]) \
     X(t_imul3t, [2][2][16]) X(t_cmov, [2][16][16]) X(t_cmovt, [2][16]) \
     X(t_fjc_rr, [2][16][16][16]) X(t_fjc_ri, [2][16][16]) X(t_fjt_ri, [2][16][16]) X(t_fjt_rr, [2][16][16]) \
     X(t_fjt_rrx, [2][16][16]) \
@@ -544,6 +545,7 @@ GPTA_TABLES(GPTA_DECL_TABLE)
 #define t_un GPTA_T(t_un)
 #define t_op3r GPTA_T(t_op3r)
 #define t_uncf GPTA_T(t_uncf)
+#define t_uknown GPTA_T(t_uknown)
 #define t_imul2 GPTA_T(t_imul2)
 #define t_imul3 GPTA_T(t_imul3)
 #define t_imul2t GPTA_T(t_imul2t)
