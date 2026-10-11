@@ -492,6 +492,7 @@ enum { CFK_ADD, CFK_ADC, CFK_SUB, CFK_SBB, CFK_LOGIC, CFK_CIN, CFK_NEG, CFK_COUN
 typedef struct { const char *name; PFn rr[16][16]; PFn rt[9]; } XOp;
 typedef struct { const char *name; PFn h[9]; } XShift;
 #define GPTA_TABLES(X) \
+    X(t_nrr, [2][ALU_COUNT][2][20][20]) X(t_nri, [2][ALU_COUNT][2][20]) X(t_nmov, [2][20][20]) X(t_nmovi, [2][20]) \
     X(t_setcc, [16][16]) X(t_alu_rr, [2][ALU_COUNT][2][16][16]) X(t_alu_ri, [2][ALU_COUNT][2][16]) \
     X(t_alu_rt, [2][ALU_COUNT][2][16]) X(t_alu_tr, [2][ALU_COUNT][4][16]) X(t_alu_ti, [2][ALU_COUNT][4]) \
     X(t_stti, [4]) X(t_ld, [2][17][16]) X(t_st, [4][17][16]) X(t_lea, [2][17][16]) X(t_sti, [4][17]) \
@@ -536,6 +537,10 @@ GPTA_TABLES(GPTA_DECL_TABLE)
 #define t_ea GPTA_T(t_ea)
 #define t_eaz GPTA_T(t_eaz)
 #define t_mov_rr GPTA_T(t_mov_rr)
+#define t_nrr GPTA_T(t_nrr)
+#define t_nri GPTA_T(t_nri)
+#define t_nmov GPTA_T(t_nmov)
+#define t_nmovi GPTA_T(t_nmovi)
 #define t_mov_ri GPTA_T(t_mov_ri)
 #define t_movt GPTA_T(t_movt)
 #define t_ldt GPTA_T(t_ldt)

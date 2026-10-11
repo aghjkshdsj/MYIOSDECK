@@ -378,6 +378,11 @@ static void init_desc(void) {
 }
 
 static int greg(unsigned off) { return (off & 7) == 0 && off < 128 ? (int)(off >> 3) : -1; }   // pinnable GPR
+static int nreg(unsigned off, int si) {
+    int r = greg(off);
+    if (r >= 0) return r;
+    return si == 0 && (off & 7) == 1 && off < 32 ? 16 + (int)(off >> 3) : -1;
+}
 static int simple_mem(const Uop *u) { return u->index == R_ZERO && u->base <= R_ZERO; }        // [base + disp]
 static int ea_ok(const Uop *u) { return u->base <= R_ZERO && u->index <= R_ZERO; }
 static int lean(const Uop *u) { return !u->scale && !u->disp; }   // [base + index]: no scale, no displacement
@@ -420,6 +425,11 @@ static void lower_one(Out *o, const Uop *u) {
     if (d) switch (d->fam) {
     case FAM_ALU: {
         int op = d->a, fm = d->b, si = d->c2;
+        if (si < 2) {
+            int nd = nreg(u->dst, si), ns = nreg(u->src, si);
+            if (fm == F_RR && nd >= 0 && ns >= 0) { put_uop(o, u, t_nrr[fl][op][si][nd][ns]); return; }
+            if (fm == F_RI && nd >= 0) { put_uop(o, u, t_nri[fl][op][si][nd]); return; }
+        }
         // cmp/test of registers whose flags nothing reads: no effect at all
         if (!fl && (op == ALU_CMP || op == ALU_TEST) && (fm == F_RR || fm == F_RI)) return;
         if (fm == F_RR && si >= 2 && D >= 0 && S >= 0) { put_uop(o, u, t_alu_rr[fl][op][si - 2][D][S]); return; }
@@ -431,6 +441,11 @@ static void lower_one(Out *o, const Uop *u) {
     }
     case FAM_MOV: {
         int fm = d->a, si = d->b;
+        if (si < 2) {
+            int nd = nreg(u->dst, si), ns = nreg(u->src, si);
+            if (fm == F_RR && nd >= 0 && ns >= 0) { put_uop(o, u, t_nmov[si][nd][ns]); return; }
+            if (fm == F_RI && nd >= 0) { put_uop(o, u, t_nmovi[si][nd]); return; }
+        }
         if (fm == F_RR && si >= 2 && D >= 0 && S >= 0) { put_uop(o, u, t_mov_rr[si - 2][D][S]); return; }
         if (fm == F_RI && si >= 2 && D >= 0) { put_uop(o, u, t_mov_ri[si - 2][D]); return; }
         if (fm == F_RM && si >= 2 && D >= 0) {

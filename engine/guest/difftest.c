@@ -834,6 +834,33 @@ static void gpta_known_carry(void) {
     out("gpta_known_carry", h);
 }
 
+#define NARROW_CASE(CODE, MASK) do { \
+    u64 a = val(), b = val(), c = val(), d = val(), fi = flags_in(), f; \
+    __asm__ volatile(PRE CODE POST \
+        : "+a"(a), "+b"(b), "+c"(c), "+d"(d), [f] "=&r"(f) \
+        : [fi] "r"(fi) : "r8", "r9", "cc", "memory"); \
+    h = mix(mix(mix(mix(mix(h, a), b), c), d), f & (MASK)); \
+} while (0)
+#define NARROW_OP(OP, MASK) \
+    NARROW_CASE(OP "b %%ah, %%al", MASK); NARROW_CASE(OP "b %%al, %%ah", MASK); \
+    NARROW_CASE(OP "b %%ch, %%dh", MASK); NARROW_CASE(OP "b %%bl, %%bh", MASK); \
+    NARROW_CASE(OP "b $0xa5, %%ah", MASK); NARROW_CASE(OP "b $0x80, %%cl", MASK); \
+    NARROW_CASE(OP "w %%ax, %%dx", MASK); NARROW_CASE(OP "w $0x8001, %%bx", MASK); \
+    NARROW_CASE("movq %%rax, %%r8\n\tmovq %%rcx, %%r9\n\t" OP "b %%r8b, %%r9b\n\tmovq %%r9, %%rcx", MASK); \
+    NARROW_CASE("movq %%rax, %%r8\n\tmovq %%rcx, %%r9\n\t" OP "w %%r9w, %%r8w\n\tmovq %%r8, %%rax", MASK); \
+    NARROW_CASE(OP "b %%ch, %%ah\n\txorl %%edx, %%edx", LOGIC)
+static void gpta_narrow(void) {
+    u64 h = 14695981039346656037ull;
+    for (int i = 0; i < N; i++) {
+        NARROW_OP("add", ARITH); NARROW_OP("adc", ARITH);
+        NARROW_OP("sub", ARITH); NARROW_OP("sbb", ARITH);
+        NARROW_OP("and", LOGIC); NARROW_OP("or", LOGIC); NARROW_OP("xor", LOGIC);
+        NARROW_OP("cmp", ARITH); NARROW_OP("test", LOGIC);
+        NARROW_OP("mov", ARITH);
+    }
+    out("gpta_narrow", h);
+}
+
 typedef void (*test_fn)(void);
 #define ALU_LIST(OP) OP##_q, OP##_l, OP##_w, OP##_b, OP##_mr_q, OP##_rm_l, OP##_mr_b,
 static const test_fn kTests[] = {
@@ -864,7 +891,7 @@ static const test_fn kTests[] = {
     fz_o, fz_no, fz_b, fz_ae, fz_e, fz_ne, fz_be, fz_a, fz_s, fz_ns, fz_p, fz_np, fz_l, fz_ge, fz_le, fz_g,
     fc_o, fc_no, fc_b, fc_ae, fc_e, fc_ne, fc_be, fc_a, fc_s, fc_ns, fc_p, fc_np, fc_l, fc_ge, fc_le, fc_g,
     fz_call, fz_index, fz_xindex, fz_3op, fz_3gap, fz_x3, fz_hoist, gpta_xmem, gpta_result_flags, gpta_xhigh, gpta_cf_flow,
-    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry,
+    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow,
 };
 
 int guest_main(int argc, char **argv) {
