@@ -92,22 +92,7 @@ const PFn t_fjs_rrx[2][2][16][16] = {   // [test?][16-bit?][D][S]
 
 // ---- (u)comiss / (u)comisd + jcc: x86's flags after the compare are CF = less or unordered,
 // ZF = equal or unordered, PF = unordered, OF = SF = 0 ----
-FXI_INLINE int fcj_cond(unsigned cc, double a, double b) {
-    // Algebraic forms preserve COMIS unordered results while avoiding separate
-    // CF/ZF calculations when the condition can use one floating comparison.
-    switch (cc) {
-    case 0: case 8: case 12: return 0;
-    case 1: case 9: case 13: return 1;
-    case 2: return !(a >= b);
-    case 3: return a >= b;
-    case 4: case 14: return !(a < b || a > b);
-    case 5: case 15: return a < b || a > b;
-    case 6: return !(a > b);
-    case 7: return a > b;
-    case 10: return (a != a) | (b != b);
-    default: return (a == a) & (b == b);
-    }
-}
+#include "gpta_fcj_cond.h"
 #define DEF_FCJ(S, D, CC)                                                                  \
     PH p_fcjd_##CC##_##D##_##S(GPTA_PARAMS) {                                               \
         double a = LD0(XD_##D), b = LD0(XS_##S);                                           \

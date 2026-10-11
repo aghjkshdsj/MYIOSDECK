@@ -861,6 +861,34 @@ static void gpta_narrow(void) {
     out("gpta_narrow", h);
 }
 
+#define FCJ_TRACE_CASE(CC, OP, LOAD, A, B) do { \
+    u64 r; \
+    __asm__ volatile(LOAD " %[a], %%xmm7\n\t" LOAD " %[b], %%xmm14\n\t" \
+        "movl $11, %%ecx\n\txorl %%eax, %%eax\n1:\t" OP " %%xmm14, %%xmm7\n\tj" #CC " 2f\n\t" \
+        "addq $3, %%rax\n\tjmp 3f\n2:\taddq $5, %%rax\n3:\tsubl $1, %%ecx\n\tjnz 1b" \
+        : "=&a"(r) : [a] "m"(A), [b] "m"(B) : "rcx", "xmm7", "xmm14", "cc", "memory"); \
+    h = mix(h, r); \
+} while (0)
+#define FCJ_TRACE_FORMS(CC) \
+    FCJ_TRACE_CASE(CC, "ucomisd", "movsd", a, b); FCJ_TRACE_CASE(CC, "ucomiss", "movss", af, bf)
+static void gpta_fcj_trace(void) {
+    u64 h = 14695981039346656037ull;
+    for (int i = 0; i < N; i++) {
+        double a = dval(i), b = (i & 3) ? dval(i + 2) : a;
+        float af = (float)a, bf = (float)b;
+        FCJ_TRACE_FORMS(o); FCJ_TRACE_FORMS(no); FCJ_TRACE_FORMS(b); FCJ_TRACE_FORMS(ae);
+        FCJ_TRACE_FORMS(e); FCJ_TRACE_FORMS(ne); FCJ_TRACE_FORMS(be); FCJ_TRACE_FORMS(a);
+        FCJ_TRACE_FORMS(s); FCJ_TRACE_FORMS(ns); FCJ_TRACE_FORMS(p); FCJ_TRACE_FORMS(np);
+        FCJ_TRACE_FORMS(l); FCJ_TRACE_FORMS(ge); FCJ_TRACE_FORMS(le); FCJ_TRACE_FORMS(g);
+    }
+    double one = 1.0, limit = 11.0, result;
+    __asm__ volatile("pxor %%xmm14, %%xmm14\n\tmovsd %[one], %%xmm7\n\tmovsd %[lim], %%xmm8\n"
+        "1:\taddsd %%xmm7, %%xmm14\n\tucomisd %%xmm8, %%xmm14\n\tjb 1b\n\tmovsd %%xmm14, %[out]\n\txorl %%eax, %%eax"
+        : [out] "=m"(result) : [one] "m"(one), [lim] "m"(limit) : "rax", "xmm7", "xmm8", "xmm14", "cc", "memory");
+    h = mix(h, (u64)result);
+    out("gpta_fcj_trace", h);
+}
+
 typedef void (*test_fn)(void);
 #define ALU_LIST(OP) OP##_q, OP##_l, OP##_w, OP##_b, OP##_mr_q, OP##_rm_l, OP##_mr_b,
 static const test_fn kTests[] = {
@@ -891,7 +919,7 @@ static const test_fn kTests[] = {
     fz_o, fz_no, fz_b, fz_ae, fz_e, fz_ne, fz_be, fz_a, fz_s, fz_ns, fz_p, fz_np, fz_l, fz_ge, fz_le, fz_g,
     fc_o, fc_no, fc_b, fc_ae, fc_e, fc_ne, fc_be, fc_a, fc_s, fc_ns, fc_p, fc_np, fc_l, fc_ge, fc_le, fc_g,
     fz_call, fz_index, fz_xindex, fz_3op, fz_3gap, fz_x3, fz_hoist, gpta_xmem, gpta_result_flags, gpta_xhigh, gpta_cf_flow,
-    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow,
+    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow, gpta_fcj_trace,
 };
 
 int guest_main(int argc, char **argv) {

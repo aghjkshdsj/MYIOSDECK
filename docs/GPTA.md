@@ -22,6 +22,7 @@ The last listed run has passed ARM64; x86 and iOS were pending at this update.
 | c2e200f | [38104183988](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38104183988) | 24.97% | 23.85% | 8.46% | 13.99% |
 | 92c2ee4 | [38104303289](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38104303289) | 24.60% | 24.16% | 8.47% | 14.04% |
 | 75b2c45 | [38104450060](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38104450060) | 25.07% | 23.73% | 8.28% | 13.95% |
+| b6ce108 | [38105141310](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38105141310) | 26.82% | 24.14% | 8.20% | 13.99% |
 
 The third trial (result-width branches and simplified floating comparisons)
 regressed. Its ARM64, x86 and iOS gates passed. That trial is rolled back in
@@ -47,6 +48,15 @@ The next pair family is `mov D,S ; ALU D,R`, selected from the independent
 Its lowering requires dead output flags and an arithmetic width no greater
 than the copy width, handles R aliasing D, and does not reuse the old gap
 reordering rule for register operands. Differential cases cover those guards.
+Its b6ce108 run passed every gate; both suite means remain below 50%.
+
+Subsequent trials specialize INC/DEC carry preservation from a locally proven
+flag producer, add pinned byte/word register ALU and moves (including legacy
+high bytes), and remove redundant successor checks from floating compare
+branches whose trace edge is statically adjacent. Each remains a general
+instruction or pair optimization. No held-out program is inspected to select
+these changes. Results must be recorded after CI; unrecorded trials are not
+measured.
 
 Raw per-sample nanoseconds, checksums, commands and return codes are in each
 run's `gpta-evidence-ubuntu-24.04-arm` artifact (`gpta-results.json`). The first

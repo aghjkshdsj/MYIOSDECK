@@ -1091,6 +1091,16 @@ Block *gpta_lower(struct Fxi *vm, Block *b) {
             if (ns) {   // the trace edge: the next block, or back to the start (the next copy's)
                 Uop *t = &nb->u[base + m[i] - 1], *to = i + 1 < nseg ? t + 1 : &nb->u[c + 1 < copies ? (c + 1) * M : 0];
                 if (edge[i]) t->ulink2 = to; else t->ulink = to;
+                // No link lookup is needed for a statically adjacent trace edge.
+                // Match the original handler so unrelated uop fields cannot opt in.
+                if (to == t + 1 && t->dst < 16 && t->src < 16) {
+                    unsigned cc = t->cc & 15;
+                    for (int dbl = 0; dbl < 2; dbl++)
+                        if (t->p == t_fcj[dbl][cc][t->dst][t->src]) {
+                            t->p = t_fcj_trace[edge[i]][dbl][cc][t->dst][t->src];
+                            break;
+                        }
+                }
             }
         }
     if (g_replicas) replicate(nb->u, M, copies);
