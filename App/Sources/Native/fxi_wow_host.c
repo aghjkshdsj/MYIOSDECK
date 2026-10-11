@@ -533,8 +533,8 @@ static void params_string(uint64_t base, uint32_t params, uint32_t off, char *ou
 
 // Input trace: for a few seconds after the user clicks or presses a key (GameInput.swift,
 // mid_wow_trace_calls), every system and unix call of a 32-bit program is logged with its
-// result and caller: what a launcher's button does, or does not do. 250 lines per input,
-// 2000 per run.
+// result and caller (window messages by name): what a launcher's button does, or does not do.
+// 400 lines per input, 4000 per run; read-only window helpers are not logged.
 static pthread_mutex_t g_note_lock = PTHREAD_MUTEX_INITIALIZER;   // the logs below and the name table
 static _Atomic uint64_t g_trace_until;   // CLOCK_MONOTONIC ns
 static _Atomic int g_trace_left, g_trace_total;
@@ -544,14 +544,14 @@ static uint64_t now_ns(void) {
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 }
 void mid_wow_trace_calls(double seconds) {
-    if (g_trace_total >= 2000) return;
+    if (g_trace_total >= 4000) return;
     g_trace_until = now_ns() + (uint64_t)(seconds * 1e9);
-    g_trace_left = 250;
+    g_trace_left = 400;
 }
 static int tracing(void) {
     if (!g_trace_until) return 0;
     if (now_ns() > g_trace_until) { g_trace_until = 0; return 0; }
-    if (g_trace_left <= 0 || g_trace_total >= 2000) return 0;
+    if (g_trace_left <= 0 || g_trace_total >= 4000) return 0;
     g_trace_left--;
     g_trace_total++;
     return 1;
@@ -561,18 +561,70 @@ static int tracing(void) {
 // once per (call, status, caller), the first 400 of a run: what a program tried and could not do
 // before it stopped or did nothing. Every process start is logged with its image and command
 // line, whatever the result (a launcher whose button does nothing).
+// Window messages by name, for the input trace.
+static const char *msg_name(uint32_t m) {
+    switch (m) {
+    case 0x0001: return "CREATE";        case 0x0002: return "DESTROY";       case 0x0006: return "ACTIVATE";
+    case 0x0007: return "SETFOCUS";      case 0x0008: return "KILLFOCUS";     case 0x000F: return "PAINT";
+    case 0x0010: return "CLOSE";         case 0x0012: return "QUIT";          case 0x0014: return "ERASEBKGND";
+    case 0x001C: return "ACTIVATEAPP";   case 0x0020: return "SETCURSOR";     case 0x0021: return "MOUSEACTIVATE";
+    case 0x002B: return "DRAWITEM";      case 0x0084: return "NCHITTEST";     case 0x0086: return "NCACTIVATE";
+    case 0x0087: return "GETDLGCODE";    case 0x00A0: return "NCMOUSEMOVE";   case 0x00F0: return "BM_GETCHECK";
+    case 0x00F2: return "BM_GETSTATE";   case 0x00F3: return "BM_SETSTATE";   case 0x00F4: return "BM_SETSTYLE";
+    case 0x00F5: return "BM_CLICK";      case 0x0100: return "KEYDOWN";       case 0x0101: return "KEYUP";
+    case 0x0102: return "CHAR";          case 0x0110: return "INITDIALOG";    case 0x0111: return "COMMAND";
+    case 0x0112: return "SYSCOMMAND";    case 0x0113: return "TIMER";         case 0x0133: return "CTLCOLORBTN";
+    case 0x0135: return "CTLCOLORDLG";   case 0x0138: return "CTLCOLORSTATIC"; case 0x0200: return "MOUSEMOVE";
+    case 0x0201: return "LBUTTONDOWN";   case 0x0202: return "LBUTTONUP";     case 0x0203: return "LBUTTONDBLCLK";
+    case 0x0204: return "RBUTTONDOWN";   case 0x0205: return "RBUTTONUP";     case 0x0215: return "CAPTURECHANGED";
+    case 0x02A1: return "MOUSEHOVER";    case 0x02A3: return "MOUSELEAVE";    default: return m >= 0x400 && m < 0x8000 ? "USER+" : "";
+    }
+}
+
+// The trace's line for one call: window-message calls show the message (MSG at arg 0 for
+// GetMessage, PeekMessage and DispatchMessage; hwnd, msg, wparam, lparam, .., type for
+// MessageCall); helpers that only read window state are left out.
+static int trace_line(wow_thread *t, const char *name, uint32_t esp, char *out, size_t len) {
+    uint64_t base = t->proc->base;
+    if (!name) { out[0] = 0; return 1; }
+    if (!strcmp(name, "NtUserCallHwnd") || !strcmp(name, "NtUserCallHwndParam") || !strcmp(name, "NtUserCallTwoParam") ||
+        !strcmp(name, "NtUserGetProcessDpiAwarenessContext") || !strcmp(name, "NtUserTranslateMessage") ||
+        !strcmp(name, "NtUserCallMsgFilter") || !strcmp(name, "NtUserGetThreadState"))
+        return 0;
+    uint32_t hwnd, msg, wp, lp, type = ~0u;
+    if (!strcmp(name, "NtUserGetMessage") || !strcmp(name, "NtUserPeekMessage") || !strcmp(name, "NtUserDispatchMessage")) {
+        uint32_t m = rd_guest32(base, esp + 8);
+        hwnd = rd_guest32(base, m); msg = rd_guest32(base, m + 4); wp = rd_guest32(base, m + 8); lp = rd_guest32(base, m + 12);
+    } else if (!strcmp(name, "NtUserMessageCall")) {
+        hwnd = rd_guest32(base, esp + 8); msg = rd_guest32(base, esp + 12);
+        wp = rd_guest32(base, esp + 16); lp = rd_guest32(base, esp + 20); type = rd_guest32(base, esp + 28);
+    } else {
+        out[0] = 0;
+        return 1;
+    }
+    int n = snprintf(out, len, " [%s%s%#x hwnd %#x wp %#x lp %#x", msg_name(msg), *msg_name(msg) ? " " : "", msg, hwnd, wp, lp);
+    if (type != ~0u && n > 0 && (size_t)n < len) snprintf(out + n, len - (size_t)n, " type %#x]", type);
+    else if (n > 0 && (size_t)n < len) snprintf(out + n, len - (size_t)n, "]");
+    return 1;
+}
+
 static void note_call(wow_thread *t, int unix_call, uint32_t num, uint32_t esp, uint32_t caller, uint32_t status) {
     int create = !unix_call && num == g_create_num;
-    if (tracing()) {
+    if (g_trace_until) {
         static wow_module tmods[160];
-        char where[128];
+        char where[128], detail[96];
         pthread_mutex_lock(&g_note_lock);
-        int nm = wow_modules(t->proc->base, t->teb32, tmods, 160);
-        describe(t->proc->base, tmods, nm, caller, where, sizeof where);
         const char *name = unix_call ? NULL : sysname(t, num);
-        if (unix_call) mid_log("[fxi-wow] after input: unix call %u -> %08x from %s", num, status, where);
-        else if (name) mid_log("[fxi-wow] after input: %s -> %08x from %s", name, status, where);
-        else mid_log("[fxi-wow] after input: system call %#x -> %08x from %s", num, status, where);
+        // A read-only window helper (or a PeekMessage that found nothing) spends no budget.
+        int show = unix_call || trace_line(t, name, esp, detail, sizeof detail);
+        if (show && !unix_call && name && !strcmp(name, "NtUserPeekMessage") && !status) show = 0;
+        if (show && tracing()) {
+            int nm = wow_modules(t->proc->base, t->teb32, tmods, 160);
+            describe(t->proc->base, tmods, nm, caller, where, sizeof where);
+            if (unix_call) mid_log("[fxi-wow] after input: unix call %u -> %08x from %s", num, status, where);
+            else if (name) mid_log("[fxi-wow] after input: %s%s -> %08x from %s", name, detail, status, where);
+            else mid_log("[fxi-wow] after input: system call %#x -> %08x from %s", num, status, where);
+        }
         pthread_mutex_unlock(&g_note_lock);
     }
     // win32u calls return values (handles, lengths), not NTSTATUS: only the trace shows them.
