@@ -510,7 +510,7 @@ typedef struct { const char *name; PFn h[9]; } XShift;
     X(t_fai, [5][2][16][16]) X(t_fid, [2][2][4][16]) X(t_amr, [2][16][16]) X(t_alea, [17][16]) X(t_ami, [2][16]) \
     X(t_axz, [16]) X(t_pop2, [16][16]) X(t_push2, [16][16]) X(t_popret, [16]) X(t_ltj, [2][6][17][16]) \
     X(t_sic, [2][2][10][16][16]) X(t_sicr, [2][2][10][16][16]) X(t_sii, [2][2][10][16]) X(t_sri, [2][2][10][16][16]) \
-    X(t_3op, [10][2][16][16]) \
+    X(t_3op, [10][2][16][16]) X(t_op3r, [6][2][16][16][16]) \
     X(t_fs_sub, [4][16][16]) X(t_fs_and, [4][16][16]) X(t_fs_subi, [4][16]) X(t_fs_andi, [4][16]) X(t_fs_log, [4][16]) \
     X(t_fs_addr, [4][16]) X(t_fs_subr, [4][16]) X(t_fs_comis, [2][9][9]) \
     X(t_fs_addrr, [4][16][16]) X(t_fs_subrr, [4][16][16]) \
@@ -542,6 +542,7 @@ GPTA_TABLES(GPTA_DECL_TABLE)
 #define t_ext GPTA_T(t_ext)
 #define t_sh GPTA_T(t_sh)
 #define t_un GPTA_T(t_un)
+#define t_op3r GPTA_T(t_op3r)
 #define t_uncf GPTA_T(t_uncf)
 #define t_imul2 GPTA_T(t_imul2)
 #define t_imul3 GPTA_T(t_imul3)

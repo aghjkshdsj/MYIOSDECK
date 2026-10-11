@@ -9,7 +9,8 @@ executable code.
 
 Both suites remain below the 50% target. These are ARM64 Linux arithmetic means
 of exact native/engine median ratios; displayed values are truncated. All
-required Linux, Windows-state and iOS compile gates passed on all five measured runs.
+required Linux, Windows-state and iOS compile gates passed through 92c2ee4.
+The last listed run has passed ARM64; x86 and iOS were pending at this update.
 
 | Commit | CI run | Standard GPTA | Held-out GPTA | Standard FXI | Held-out FXI |
 |---|---|---:|---:|---:|---:|
@@ -18,6 +19,9 @@ required Linux, Windows-state and iOS compile gates passed on all five measured 
 | 56d9267 | [38008077789](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38008077789) | 22.42% | 23.66% | 8.20% | 13.99% |
 | c886273 | [38008906404](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38008906404) | 25.34% | 23.94% | 8.33% | 13.97% |
 | 0b03207 | [38009158655](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38009158655) | 25.01% | 24.11% | 8.34% | 13.99% |
+| c2e200f | [38104183988](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38104183988) | 24.97% | 23.85% | 8.46% | 13.99% |
+| 92c2ee4 | [38104303289](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38104303289) | 24.60% | 24.16% | 8.47% | 14.04% |
+| 75b2c45 | [38104450060](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38104450060) | 25.07% | 23.73% | 8.28% | 13.95% |
 
 The third trial (result-width branches and simplified floating comparisons)
 regressed. Its ARM64, x86 and iOS gates passed. That trial is rolled back in
@@ -31,6 +35,18 @@ trial. The fifth adds independent carry liveness for INC/DEC in ELF mode. It
 did not improve the standard mean. All gates passed on both runs. The earlier
 carry commit 651be44 had a declaration-order error and was superseded by
 0b03207; its cancelled run has no valid performance result.
+
+c2e200f specializes SSE memory addressing on each scale; 92c2ee4 specializes
+floating compare branches across all XMM registers. Neither increased the
+standard mean over its predecessor. 75b2c45 retries result-width branches
+without the original trial's replication change. It improves the standard
+integer timing but remains well below the required suite means.
+
+The next pair family is `mov D,S ; ALU D,R`, selected from the independent
+[corpus run](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/37933433358).
+Its lowering requires dead output flags and an arithmetic width no greater
+than the copy width, handles R aliasing D, and does not reuse the old gap
+reordering rule for register operands. Differential cases cover those guards.
 
 Raw per-sample nanoseconds, checksums, commands and return codes are in each
 run's `gpta-evidence-ubuntu-24.04-arm` artifact (`gpta-results.json`). The first

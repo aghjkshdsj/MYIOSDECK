@@ -242,7 +242,7 @@ static int is_shuffle(const char *n) {
 // branch keeps one successor: Ertl and Gregg's replication of interpreter instructions. A handler
 // at one place per copy alternates between the copies of a trace, which also spaces out repeats of
 // the same branch (the probe: a branch taken again within a few dispatches costs more).
-#define RMAP_SLOTS (1u << 18)
+#define RMAP_SLOTS (1u << 19)
 typedef struct { PFn p, r; } RPair;
 static RPair *g_rmap;
 static uint64_t hpfn(PFn p) { return ((uint64_t)(uintptr_t)p * 0x9E3779B97F4A7C15ull) >> 40; }
@@ -277,7 +277,7 @@ static void rmap_init(void) {
     }
     for (size_t i = 0; i < gpta_n_xshift; i++) rmap_tab(gpta_xshift[i].h, gpta_xshift_r1[i].h, 9);
     // gpta_pin_mem.c, gpta_pin_mem2.c, gpta_pin_step3.c
-    RMAP(t_ldi); RMAP(t_ldz8s); RMAP(t_stx); RMAP(t_sri); RMAP(t_sii); RMAP(t_3op);
+    RMAP(t_ldi); RMAP(t_ldz8s); RMAP(t_stx); RMAP(t_sri); RMAP(t_sii); RMAP(t_3op); RMAP(t_op3r);
     // gpta_pin_br.c, gpta_pin_step1.c, gpta_pin_step2.c: the branches that most often close a loop
     RMAP(t_fjc_rr); RMAP(t_fjc_ri); RMAP(t_fjt_ri); RMAP(t_fjt_rr); RMAP(t_fjt_rrx); RMAP(t_sic); RMAP(t_sicr);
 }
@@ -732,8 +732,16 @@ static int try_fuse(Out *o, const Uop *u, uint32_t left) {
         }
         if (x) { if (fd) edge_stubs(o, fd, fs); return 2; }
     }
-    // mov D, S ; op D, imm -> D = S op imm (the op no wider than the move; its flags dead)
+    // mov D, S ; op D, operand (the op no wider than the move; its flags dead)
     if (a->fam == FAM_MOV && a->a == F_RR && a->b >= 2 && D >= 0 && S >= 0 && D != S && greg(v->dst) == D && !v->flive) {
+        int R = greg(v->src);
+        if (R >= 0 && b->fam == FAM_ALU && b->b == F_RR && b->c2 >= 2 && b->c2 <= a->b) {
+            int k = b->a == ALU_ADD ? 0 : b->a == ALU_SUB ? 1 : b->a == ALU_AND ? 2 : b->a == ALU_OR ? 3 : b->a == ALU_XOR ? 4 : -1;
+            if (k >= 0) { put_uop(o, v, t_op3r[k][b->c2 - 2][D][S][R == D ? S : R]); return 2; }
+        }
+        if (R >= 0 && b->fam == FAM_IMUL2 && !b->a && b->b >= 2 && b->b <= a->b) {
+            put_uop(o, v, t_op3r[5][b->b - 2][D][S][R == D ? S : R]); return 2;
+        }
         if (b->fam == FAM_ALU && b->b == F_RI && b->c2 >= 2 && b->c2 <= a->b) {
             int k = b->a == ALU_ADD ? 0 : b->a == ALU_SUB ? 1 : b->a == ALU_AND ? 2 : b->a == ALU_OR ? 3 : b->a == ALU_XOR ? 4 : -1;
             if (k >= 0) { put_uop(o, v, t_3op[k][b->c2 - 2][D][S]); return 2; }
@@ -821,6 +829,9 @@ static int can_hoist(const Uop *a, const Uop *x, const Uop *c) {
 static int can_sink(const Uop *a, const Uop *x, const Uop *c) {
     const Desc *da = find(a->fn), *dc = find(c->fn);
     if (!da || !dc || da->fam != FAM_MOV || da->a != F_RR || (dc->fam != FAM_ALU && dc->fam != FAM_SHIFT)) return 0;
+    // Register-operand pairs require another dependency proof for c's source.
+    // Keep this existing reordering restricted to the immediate forms.
+    if (dc->fam == FAM_ALU && dc->b != F_RI) return 0;
     int D = greg(a->dst);
     unsigned rd, wr;
     return D >= 0 && greg(a->src) >= 0 && greg(c->dst) == D && reg_rw(x, &rd, &wr) && !((rd | wr) & (1u << D));

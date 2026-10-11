@@ -773,6 +773,35 @@ static void gpta_high_comis(void) {
     out("gpta_high_comis", h);
 }
 
+#define OP3R_CASE(MOVE, OP, TAIL, MASK) do { \
+    u64 a = val(), b = val(), fi = flags_in(), r, f; \
+    __asm__ volatile(PRE "movq %[a], %%rcx\n\tmovq %[b], %%rdx\n\t" MOVE \
+        "\n\t" OP "\n\t" TAIL POST "\n\tmovq %%rax, %[r]" \
+        : [r] "=&r"(r), [f] "=&r"(f) : [a] "r"(a), [b] "r"(b), [fi] "r"(fi) \
+        : "rax", "rcx", "rdx", "r8", "cc", "memory"); \
+    h = mix(mix(h, r), f & (MASK)); \
+} while (0)
+#define OP3R_FORMS(OP, TAIL, MASK) \
+    OP3R_CASE("movq %%rcx, %%rax", OP "q %%rdx, %%rax", TAIL, MASK); \
+    OP3R_CASE("movq %%rcx, %%rax", OP "q %%rax, %%rax", TAIL, MASK); \
+    OP3R_CASE("movq %%rcx, %%rax", OP "q %%rcx, %%rax", TAIL, MASK); \
+    OP3R_CASE("movl %%ecx, %%eax", OP "l %%edx, %%eax", TAIL, MASK); \
+    OP3R_CASE("movl %%ecx, %%eax", OP "l %%eax, %%eax", TAIL, MASK); \
+    OP3R_CASE("movq %%rcx, %%rax", OP "l %%edx, %%eax", TAIL, MASK); \
+    OP3R_CASE("movl %%ecx, %%eax", OP "q %%rdx, %%rax", TAIL, MASK); \
+    OP3R_CASE("movq %%rcx, %%rax\n\tincq %%rdx", OP "q %%rdx, %%rax", TAIL, MASK)
+#define OP3R_OP(OP, MASK) \
+    OP3R_FORMS(OP, "xor %%r8d, %%r8d\n\t", MASK); \
+    OP3R_FORMS(OP, "", MASK)
+static void gpta_op3r(void) {
+    u64 h = 14695981039346656037ull;
+    for (int i = 0; i < N; i++) {
+        OP3R_OP("add", ARITH); OP3R_OP("sub", ARITH); OP3R_OP("and", ARITH);
+        OP3R_OP("or", ARITH); OP3R_OP("xor", ARITH); OP3R_OP("imul", 0x801);
+    }
+    out("gpta_op3r", h);
+}
+
 typedef void (*test_fn)(void);
 #define ALU_LIST(OP) OP##_q, OP##_l, OP##_w, OP##_b, OP##_mr_q, OP##_rm_l, OP##_mr_b,
 static const test_fn kTests[] = {
@@ -803,7 +832,7 @@ static const test_fn kTests[] = {
     fz_o, fz_no, fz_b, fz_ae, fz_e, fz_ne, fz_be, fz_a, fz_s, fz_ns, fz_p, fz_np, fz_l, fz_ge, fz_le, fz_g,
     fc_o, fc_no, fc_b, fc_ae, fc_e, fc_ne, fc_be, fc_a, fc_s, fc_ns, fc_p, fc_np, fc_l, fc_ge, fc_le, fc_g,
     fz_call, fz_index, fz_xindex, fz_3op, fz_3gap, fz_x3, fz_hoist, gpta_xmem, gpta_result_flags, gpta_xhigh, gpta_cf_flow,
-    gpta_scaled_moves, gpta_high_comis,
+    gpta_scaled_moves, gpta_high_comis, gpta_op3r,
 };
 
 int guest_main(int argc, char **argv) {
