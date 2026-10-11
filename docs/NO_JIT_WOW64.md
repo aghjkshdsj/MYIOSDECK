@@ -345,6 +345,15 @@ kernelbase, user32, DXMT d3d11/dxgi/winemetal and hello-x86.exe decode 100%.
   every thunk; wine-i386.yml rebuilds `wow64win.dll` for aarch64 from the pinned fork (64 KB
   sections, exports and imports checked against Madeira's), and build-ipa.yml puts it over the
   prebuilt copy before the aarch64 farm becomes dylibs. Only 32-bit processes load wow64win.dll.
+- **Runs 5-9 (builds 130-137), the launcher:** drawn behind the game view (Winios's GDI overlay
+  is now kept above it, `stage-app.sh`); no pointer (touch as trackpad or direct, hardware
+  keyboard/mouse, `GameInput.swift`); clicks lost their WM_LBUTTONDOWN because GA_ROOT of a
+  dialog's button came back 0 and process_mouse_message ate the click when activating window 0
+  failed (`engine/wine/patches/click_activation.py`). The input trace (`mid_wow_trace_calls`:
+  every call for 3 s after a click, window messages by name) found it.
+- **Run 10 (build 137):** Start Game works; Game.exe, a child process, died at
+  `load_child_ec_ntdll`: the no-JIT child path loaded the ARM64EC ntdll (`x86_64-windows`) for
+  an i386 child. `nojit_child.py` now gives a 32-bit child the session's aarch64 ntdll.
 
 ### Stage 6: speed
 - FXR32 (guest registers pinned, as FXR), native fast paths for hot 32-bit system functions
