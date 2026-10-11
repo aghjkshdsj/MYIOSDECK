@@ -746,6 +746,33 @@ static void gpta_scaled_moves(void) {
     out("gpta_scaled_moves", h);
 }
 
+#define HIGH_COM_CASE(CC, D, S, OP, LOAD, A, B) do { \
+    u64 j, f; \
+    __asm__ volatile(LOAD " %[a], %%" D "\n\t" LOAD " %[b], %%" S \
+        "\n\t" OP " %%" S ", %%" D JX(CC) \
+        : [j] "=&r"(j), [f] "=&r"(f) : [a] "m"(A), [b] "m"(B) : D, S, "cc", "memory"); \
+    h = mix(mix(h, j), f & ARITH); \
+} while (0)
+#define HIGH_COM_FORMS(CC) \
+    HIGH_COM_CASE(CC, "xmm7", "xmm15", "ucomisd", "movsd", a, b); \
+    HIGH_COM_CASE(CC, "xmm8", "xmm0", "comisd", "movsd", a, b); \
+    HIGH_COM_CASE(CC, "xmm14", "xmm12", "ucomisd", "movsd", a, b); \
+    HIGH_COM_CASE(CC, "xmm15", "xmm7", "ucomiss", "movss", af, bf); \
+    HIGH_COM_CASE(CC, "xmm0", "xmm8", "comiss", "movss", af, bf); \
+    HIGH_COM_CASE(CC, "xmm12", "xmm14", "ucomiss", "movss", af, bf)
+static void gpta_high_comis(void) {
+    u64 h = 14695981039346656037ull;
+    for (int i = 0; i < N; i++) {
+        double a = dval(i), b = (i & 3) ? dval(i + 2) : a;
+        float af = (float)a, bf = (float)b;
+        HIGH_COM_FORMS(o); HIGH_COM_FORMS(no); HIGH_COM_FORMS(b); HIGH_COM_FORMS(ae);
+        HIGH_COM_FORMS(e); HIGH_COM_FORMS(ne); HIGH_COM_FORMS(be); HIGH_COM_FORMS(a);
+        HIGH_COM_FORMS(s); HIGH_COM_FORMS(ns); HIGH_COM_FORMS(p); HIGH_COM_FORMS(np);
+        HIGH_COM_FORMS(l); HIGH_COM_FORMS(ge); HIGH_COM_FORMS(le); HIGH_COM_FORMS(g);
+    }
+    out("gpta_high_comis", h);
+}
+
 typedef void (*test_fn)(void);
 #define ALU_LIST(OP) OP##_q, OP##_l, OP##_w, OP##_b, OP##_mr_q, OP##_rm_l, OP##_mr_b,
 static const test_fn kTests[] = {
@@ -776,7 +803,7 @@ static const test_fn kTests[] = {
     fz_o, fz_no, fz_b, fz_ae, fz_e, fz_ne, fz_be, fz_a, fz_s, fz_ns, fz_p, fz_np, fz_l, fz_ge, fz_le, fz_g,
     fc_o, fc_no, fc_b, fc_ae, fc_e, fc_ne, fc_be, fc_a, fc_s, fc_ns, fc_p, fc_np, fc_l, fc_ge, fc_le, fc_g,
     fz_call, fz_index, fz_xindex, fz_3op, fz_3gap, fz_x3, fz_hoist, gpta_xmem, gpta_result_flags, gpta_xhigh, gpta_cf_flow,
-    gpta_scaled_moves,
+    gpta_scaled_moves, gpta_high_comis,
 };
 
 int guest_main(int argc, char **argv) {

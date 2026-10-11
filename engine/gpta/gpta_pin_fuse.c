@@ -93,8 +93,20 @@ const PFn t_fjs_rrx[2][2][16][16] = {   // [test?][16-bit?][D][S]
 // ---- (u)comiss / (u)comisd + jcc: x86's flags after the compare are CF = less or unordered,
 // ZF = equal or unordered, PF = unordered, OF = SF = 0 ----
 FXI_INLINE int fcj_cond(unsigned cc, double a, double b) {
-    int un = (a != a) | (b != b);
-    return cc_flags(cc, 0, !(a >= b), !(a < b || a > b), 0, un);
+    // Algebraic forms preserve COMIS unordered results while avoiding separate
+    // CF/ZF calculations when the condition can use one floating comparison.
+    switch (cc) {
+    case 0: case 8: case 12: return 0;
+    case 1: case 9: case 13: return 1;
+    case 2: return !(a >= b);
+    case 3: return a >= b;
+    case 4: case 14: return !(a < b || a > b);
+    case 5: case 15: return a < b || a > b;
+    case 6: return !(a > b);
+    case 7: return a > b;
+    case 10: return (a != a) | (b != b);
+    default: return (a == a) & (b == b);
+    }
 }
 #define DEF_FCJ(S, D, CC)                                                                  \
     PH p_fcjd_##CC##_##D##_##S(GPTA_PARAMS) {                                               \
@@ -103,7 +115,10 @@ FXI_INLINE int fcj_cond(unsigned cc, double a, double b) {
     PH p_fcjs_##CC##_##D##_##S(GPTA_PARAMS) {                                               \
         double a = LF0(XD_##D), b = LF0(XS_##S);                                           \
         FJ_BR(fcj_cond(CC, a, b)); }
-#define DEF_FCJ_ROW(D, CC) X9B(DEF_FCJ, D, CC)                                             \
+#define DEF_FCJ_REG_ROW(D, CC) R16B(DEF_FCJ, D, CC)
+#define DEF_FCJ_REG_CC(CC, _) R16(DEF_FCJ_REG_ROW, CC)
+C16(DEF_FCJ_REG_CC, _)
+#define DEF_FCJ_ROW(D, CC)                                                                 \
     PH p_fcjdt_##CC##_##D(GPTA_PARAMS) {                                                    \
         double a = LD0(XD_##D), b = LD0(xldn(T, 8));                                       \
         FJ_BR(fcj_cond(CC, a, b)); }                                                       \
@@ -113,9 +128,9 @@ FXI_INLINE int fcj_cond(unsigned cc, double a, double b) {
 #define DEF_FCJ_CC(CC, _) X9(DEF_FCJ_ROW, CC)
 C16(DEF_FCJ_CC, _)
 #define E_FCJ(S, D, CC, NAME) p_##NAME##_##CC##_##D##_##S,
-#define ROW_FCJ(D, CC, NAME) { X9B(E_FCJ, D, CC, NAME) },
-#define CC_FCJ(CC, NAME) { X9(ROW_FCJ, CC, NAME) },
-const PFn t_fcj[2][16][9][9] = { { C16(CC_FCJ, fcjs) }, { C16(CC_FCJ, fcjd) } };   // [double?][cc][D][S]
+#define ROW_FCJ(D, CC, NAME) { R16B(E_FCJ, D, CC, NAME) },
+#define CC_FCJ(CC, NAME) { R16(ROW_FCJ, CC, NAME) },
+const PFn t_fcj[2][16][16][16] = { { C16(CC_FCJ, fcjs) }, { C16(CC_FCJ, fcjd) } };   // [double?][cc][D][S]
 #define E_FCJT(D, CC, NAME) p_##NAME##_##CC##_##D,
 #define CC_FCJT(CC, NAME) { X9(E_FCJT, CC, NAME) },
 const PFn t_fcjt[2][16][9] = { { C16(CC_FCJT, fcjst) }, { C16(CC_FCJT, fcjdt) } };

@@ -638,7 +638,7 @@ static int try_fuse(Out *o, const Uop *u, uint32_t left) {
             int dbl = !strcmp(gpta_xops[a->a].name, "comisd");
             if (!a->b) {
                 fs = t_fs_comis[dbl][xcls(u->dst)][xcls(u->src)];
-                x = put_uop(o, v, t_fcj[dbl][cc][xcls(u->dst)][xcls(u->src)]);
+                x = put_uop(o, v, t_fcj[dbl][cc][u->dst][u->src]);
             } else if (ea_ok(u) && !fd) {
                 put_uop(o, u, ea_h(u));
                 x = put_uop(o, v, t_fcjt[dbl][cc][xcls(u->dst)]);

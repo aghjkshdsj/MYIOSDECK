@@ -9,7 +9,7 @@ executable code.
 
 Both suites remain below the 50% target. These are ARM64 Linux arithmetic means
 of exact native/engine median ratios; displayed values are truncated. All
-required Linux, Windows-state and iOS compile gates passed on all three runs.
+required Linux, Windows-state and iOS compile gates passed on all five measured runs.
 
 | Commit | CI run | Standard GPTA | Held-out GPTA | Standard FXI | Held-out FXI |
 |---|---|---:|---:|---:|---:|
@@ -17,6 +17,7 @@ required Linux, Windows-state and iOS compile gates passed on all three runs.
 | 850e583 | [37980142939](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/37980142939) | 24.44% | 23.87% | 8.27% | 14.01% |
 | 56d9267 | [38008077789](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38008077789) | 22.42% | 23.66% | 8.20% | 13.99% |
 | c886273 | [38008906404](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38008906404) | 25.34% | 23.94% | 8.33% | 13.97% |
+| 0b03207 | [38009158655](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38009158655) | 25.01% | 24.11% | 8.34% | 13.99% |
 
 The third trial (result-width branches and simplified floating comparisons)
 regressed. Its ARM64, x86 and iOS gates passed. That trial is rolled back in
@@ -26,8 +27,10 @@ does not isolate the effect of the flag check. Its standard integer perf
 evidence shows increased front-end stalls despite fewer retired instructions.
 
 The fourth run specializes high-XMM register operands and rolls back the third
-trial. ARM64 correctness and Windows-state gates passed; x86 and iOS were still
-pending when this entry was written. No iPhone timing exists yet.
+trial. The fifth adds independent carry liveness for INC/DEC in ELF mode. It
+did not improve the standard mean. All gates passed on both runs. The earlier
+carry commit 651be44 had a declaration-order error and was superseded by
+0b03207; its cancelled run has no valid performance result.
 
 Raw per-sample nanoseconds, checksums, commands and return codes are in each
 run's `gpta-evidence-ubuntu-24.04-arm` artifact (`gpta-results.json`). The first
