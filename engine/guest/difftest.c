@@ -971,7 +971,9 @@ static void gpta_immstores(void) {
     X3HIGH_CASE(OP, "xmm0", "xmm8", "xmm15"); X3HIGH_CASE(OP, "xmm15", "xmm8", "xmm9"); \
     X3HIGH_CASE(OP, "xmm8", "xmm14", "xmm7"); X3HIGH_CASE(OP, "xmm7", "xmm15", "xmm8"); \
     X3HIGH_CASE(OP, "xmm13", "xmm13", "xmm12"); X3HIGH_CASE(OP, "xmm14", "xmm10", "xmm14"); \
-    X3HIGH_CASE(OP, "xmm9", "xmm11", "xmm11")
+    X3HIGH_CASE(OP, "xmm9", "xmm11", "xmm11"); \
+    X3HIGH_CASE(OP, "xmm10", "xmm8", "xmm15"); X3HIGH_CASE(OP, "xmm11", "xmm7", "xmm0"); \
+    X3HIGH_CASE(OP, "xmm12", "xmm14", "xmm9")
 static void gpta_x3high(void) {
     u64 h = 14695981039346656037ull;
     for (int i = 0; i < N; i++) {

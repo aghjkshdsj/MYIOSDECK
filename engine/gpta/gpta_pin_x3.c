@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // GPTA: 3-operand SSE pairs, "movaps/movups/movdqa D, S ; op D, X" run as D = S op X: two-operand
 // SSE makes compilers copy a register before an op, and the corpus (engine/gpta/corpus.sh: "SSE: copy
-// ; op on the copy") counts the pair. Both sources have fixed XMM register indices, including
-// memory-backed XMM8-15. Destinations use classes 0-7/M. The operations retain FXI's semantics.
+// ; op on the copy") counts the pair. All operands have fixed XMM register indices,
+// including memory-backed XMM8-15. The operations retain FXI's semantics.
 
 #include "gpta_pin.h"
 
@@ -32,7 +32,7 @@
         GptaV s_ = XS_##S, x_ = XD_##X; XW_##D(X3_##OP(s_, x_)); PNEXT(); }
 #define DEF_X3_S(S, D, OP) R16C(DEF_X3, S, D, OP)
 #define DEF_X3_D(D, OP) R16B(DEF_X3_S, D, OP)
-#define DEF_X3_OP(OP) X9(DEF_X3_D, OP)
+#define DEF_X3_OP(OP) R16(DEF_X3_D, OP)
 DEF_X3_OP(addps) DEF_X3_OP(subps) DEF_X3_OP(mulps) DEF_X3_OP(divps) DEF_X3_OP(addpd) DEF_X3_OP(subpd)
 DEF_X3_OP(mulpd) DEF_X3_OP(divpd) DEF_X3_OP(addss) DEF_X3_OP(subss) DEF_X3_OP(mulss) DEF_X3_OP(divss)
 DEF_X3_OP(addsd) DEF_X3_OP(subsd) DEF_X3_OP(mulsd) DEF_X3_OP(divsd) DEF_X3_OP(pand) DEF_X3_OP(pandn)
@@ -40,8 +40,8 @@ DEF_X3_OP(por) DEF_X3_OP(pxor)
 #define E_X3(X, S, D, OP) p_x3_##OP##_##D##_##S##_##X,
 #define ROW_X3_S(S, D, OP) { R16C(E_X3, S, D, OP) },
 #define ROW_X3_D(D, OP) { R16B(ROW_X3_S, D, OP) },
-#define T_X3(OP) { X9(ROW_X3_D, OP) },
-const PFn t_x3[20][9][16][16] = {   // [x3_index][D class][S][X]
+#define T_X3(OP) { R16(ROW_X3_D, OP) },
+const PFn t_x3[20][16][16][16] = {   // [x3_index][D][S][X]
     T_X3(addps) T_X3(subps) T_X3(mulps) T_X3(divps) T_X3(addpd) T_X3(subpd) T_X3(mulpd) T_X3(divpd)
     T_X3(addss) T_X3(subss) T_X3(mulss) T_X3(divss) T_X3(addsd) T_X3(subsd) T_X3(mulsd) T_X3(divsd)
     T_X3(pand) T_X3(pandn) T_X3(por) T_X3(pxor)
