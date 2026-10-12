@@ -290,7 +290,7 @@ static void rmap_init(void) {
     RMAP(t_xl_movx); RMAP(t_xs_movx); RMAP(t_xl_movxz); RMAP(t_xs_movxz); RMAP(t_xl_movss); RMAP(t_xl_movsd); RMAP(t_xs_movss); RMAP(t_xs_movsd);
     RMAP(t_xlt_movss); RMAP(t_xlt_movsd); RMAP(t_xlt_movlps); RMAP(t_xlt_movhps); RMAP(t_xst_movss); RMAP(t_xst_movsd);
     RMAP(t_xst_movhps); RMAP(t_xst_movx); RMAP(t_xg); RMAP(t_xgt); RMAP(t_gx);
-    RMAP(t_xmemi); RMAP(t_xmemb);
+    RMAP(t_xmemi0); RMAP(t_xmemi1); RMAP(t_xmemi2); RMAP(t_xmemi3); RMAP(t_xmemb);
     for (size_t i = 0; i < gpta_n_xops; i++) {
         rmap_tab(&gpta_xops[i].rr[0][0], &gpta_xops_r1[i].rr[0][0], 256);
         rmap_tab(gpta_xops[i].rt, gpta_xops_r1[i].rt, 9);
@@ -597,7 +597,10 @@ static void lower_one(Out *o, const Uop *u) {
             if (!strcmp(x->name, "movx")) { put_uop(o, u, (lean(u) ? t_xl_movxz : t_xl_movx[u->scale])[dc][u->base][u->index]); return; }
             int xm = xmem_index(x->name);
             if (xm >= 0 && simple_mem(u)) { put_uop(o, u, t_xmemb[xm][dc][u->base]); return; }
-            if (xm >= 0) { put_uop(o, u, t_xmemi[xm][u->scale][dc][u->base][u->index]); return; }
+            if (xm >= 0) {
+                static const PFn (*const scale[4])[9][17][17] = { t_xmemi0, t_xmemi1, t_xmemi2, t_xmemi3 };
+                put_uop(o, u, scale[u->scale][xm][dc][u->base][u->index]); return;
+            }
             y = with_ea(o, u, x->rt[dc]);
         }
         if (d->c2) { uint8_t ix[16]; gpta_xshuffle_index(x->name, (unsigned)u->imm, ix); memcpy(y->xidx, ix, 16); }

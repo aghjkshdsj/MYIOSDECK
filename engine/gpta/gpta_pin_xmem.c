@@ -4,6 +4,21 @@
 // No guest sequence, loop, address, constant or program identity is recognized.
 #include "gpta_pin.h"
 
+// Separate translation units keep each compiler process bounded as the static
+// scale specializations grow. Only scale zero also emits base-only handlers.
+#ifndef GPTA_XMEM_SCALE
+#define GPTA_XMEM_SCALE 0
+#endif
+#if GPTA_XMEM_SCALE == 0
+#define XM_TABLE t_xmemi0
+#elif GPTA_XMEM_SCALE == 1
+#define XM_TABLE t_xmemi1
+#elif GPTA_XMEM_SCALE == 2
+#define XM_TABLE t_xmemi2
+#else
+#define XM_TABLE t_xmemi3
+#endif
+
 #define XM_addps(D, S) ((GptaV)((VF)(D) + (VF)(S)))
 #define XM_subps(D, S) ((GptaV)((VF)(D) - (VF)(S)))
 #define XM_mulps(D, S) ((GptaV)((VF)(D) * (VF)(S)))
@@ -26,24 +41,29 @@
     PH xmi##SC##_##OP##_##D##_##B##_##I(GPTA_PARAMS) { \
         GptaV s = xldn(g##B + (g##I << SC) + (uint64_t)u->disp, W); XKEEP_##D; \
         XW_##D(XM_##OP(XD_##D, s)); PNEXT(); }
-#define XM_SCALES(B, D, OP, W) \
-    R17B(XM_INDEX, B, D, OP, W, 0) R17B(XM_INDEX, B, D, OP, W, 1) \
-    R17B(XM_INDEX, B, D, OP, W, 2) R17B(XM_INDEX, B, D, OP, W, 3)
-#define XM_BASE(B, D, OP, W) XM_SCALES(B, D, OP, W) \
+#define XM_BASE(B, D, OP, W, SC) R17B(XM_INDEX, B, D, OP, W, SC)
+#define XM_DST(D, OP, W, SC) R17(XM_BASE, D, OP, W, SC)
+#define XM_DEF(OP, W) X9(XM_DST, OP, W, GPTA_XMEM_SCALE)
+XM_LIST(XM_DEF)
+
+#if GPTA_XMEM_SCALE == 0
+#define XM_BBASE(B, D, OP, W) \
     PH xmb_##OP##_##D##_##B(GPTA_PARAMS) { \
         GptaV s = xldn(g##B + (uint64_t)u->disp, W); XKEEP_##D; \
         XW_##D(XM_##OP(XD_##D, s)); PNEXT(); }
-#define XM_DST(D, OP, W) R17(XM_BASE, D, OP, W)
-#define XM_DEF(OP, W) X9(XM_DST, OP, W)
-XM_LIST(XM_DEF)
+#define XM_BDST(D, OP, W) R17(XM_BBASE, D, OP, W)
+#define XM_BDEF(OP, W) X9(XM_BDST, OP, W)
+XM_LIST(XM_BDEF)
+#endif
 
 #define XM_ELEM(I, B, D, OP, SC) xmi##SC##_##OP##_##D##_##B##_##I,
 #define XM_ROW(B, D, OP, SC) { R17B(XM_ELEM, B, D, OP, SC) },
 #define XM_PLANE(D, OP, SC) { R17(XM_ROW, D, OP, SC) },
-#define XM_ENTRY(OP, W) { { X9(XM_PLANE, OP, 0) }, { X9(XM_PLANE, OP, 1) }, \
-    { X9(XM_PLANE, OP, 2) }, { X9(XM_PLANE, OP, 3) } },
-const PFn t_xmemi[12][4][9][17][17] = { XM_LIST(XM_ENTRY) };
+#define XM_ENTRY(OP, W) { X9(XM_PLANE, OP, GPTA_XMEM_SCALE) },
+const PFn XM_TABLE[12][9][17][17] = { XM_LIST(XM_ENTRY) };
+#if GPTA_XMEM_SCALE == 0
 #define XM_BELEM(B, D, OP) xmb_##OP##_##D##_##B,
 #define XM_BROW(D, OP) { R17(XM_BELEM, D, OP) },
 #define XM_BENTRY(OP, W) { X9(XM_BROW, OP) },
 const PFn t_xmemb[12][9][17] = { XM_LIST(XM_BENTRY) };
+#endif
