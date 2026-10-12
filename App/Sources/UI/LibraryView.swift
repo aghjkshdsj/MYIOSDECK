@@ -114,13 +114,12 @@ struct LibraryView: View {
             .confirmationDialog(surfaceTitle, isPresented: $showGameMenu, titleVisibility: .visible) {
                 Button("Resume") {}
                 Button("Controller: \(Self.controllerNames[WineController.controllerAPI(for: wine.sessionProgramID)] ?? "XInput")…") {
-                    openingControllerMenu = true
+                    openingSubmenu = true
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { showControllerMenu = true }
                 }
-                Button(GameInput.shared.touchMode == .trackpad
-                       ? "Touch: trackpad with cursor (switch to tap where you click)"
-                       : "Touch: tap where you click (switch to trackpad with cursor)") {
-                    GameInput.shared.touchMode = GameInput.shared.touchMode == .trackpad ? .direct : .trackpad
+                Button("Touch mouse: \(Self.touchNames[GameInput.shared.touchMode] ?? "Off")…") {
+                    openingSubmenu = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { showTouchMenu = true }
                 }
                 Button("Hide game (keeps running)") { showSurface = false }
                 Button("Quit game and close MYIOSDECK", role: .destructive) { CrashReporter.shared.quitApp() }
@@ -139,24 +138,41 @@ struct LibraryView: View {
             } message: {
                 Text("XInput and Keyboard and mouse switch at once. DirectInput and HID modes need the game to start with them, so they apply at the next launch. The choice is remembered for this game.")
             }
+            .confirmationDialog("Touch mouse", isPresented: $showTouchMenu, titleVisibility: .visible) {
+                ForEach(GameInput.TouchMode.allCases, id: \.self) { mode in
+                    Button((mode == GameInput.shared.touchMode ? "✓ " : "") + (Self.touchNames[mode] ?? mode.rawValue)) {
+                        GameInput.shared.setTouchMode(mode)
+                    }
+                }
+            } message: {
+                Text("Off: touching the game does nothing, so holding the phone never clicks. A three-finger tap opens this menu in every mode. The choice is remembered for this game.")
+            }
             .onChange(of: showGameMenu) { _, open in
                 dlog("[ui] game menu \(open ? "shown" : "closed")")
-                if !open, showSurface, !openingControllerMenu { GameHostView.shared.isHidden = false }
+                if !open, showSurface, !openingSubmenu { GameHostView.shared.isHidden = false }
             }
             .onChange(of: showControllerMenu) { _, open in
-                if open { openingControllerMenu = false }
+                if open { openingSubmenu = false }
+                if !open, showSurface { GameHostView.shared.isHidden = false }
+            }
+            .onChange(of: showTouchMenu) { _, open in
+                if open { openingSubmenu = false }
                 if !open, showSurface { GameHostView.shared.isHidden = false }
             }
     }
 
     @State private var showGameMenu = false
     @State private var showControllerMenu = false
-    @State private var openingControllerMenu = false
+    @State private var showTouchMenu = false
+    @State private var openingSubmenu = false   // the game menu closes before a submenu opens
 
     private static let controllerOrder = ["xinput", "dinput", "hid", "dualsense", "keyboard"]
     private static let controllerNames = [
         "xinput": "Xbox (XInput)", "dinput": "XInput + DirectInput", "hid": "HID gamepad",
         "dualsense": "DualSense (PS5)", "keyboard": "Keyboard and mouse",
+    ]
+    private static let touchNames: [GameInput.TouchMode: String] = [
+        .off: "Off", .trackpad: "Trackpad with cursor", .direct: "Tap where you click",
     ]
 
     /// Stage 4: Steam account (SwiftSteam, from Madeira). The owned library and

@@ -6,10 +6,11 @@ import UIKit
 /// Keyboard and mouse for Windows programs (launchers, menus, games without controller
 /// support), on the game view (GameHostView). Ported in part from Madeira's
 /// HardwareInput.swift and ContentView.swift (GPL-3.0-or-later):
-/// - Touch, as a trackpad (default: a drawn cursor that one finger moves, a tap clicks where it
-///   is, a tap then hold drags) or direct (a tap is a left click where the finger is; holding
-///   or moving drags); in both a two-finger tap is a right click, a two-finger drag the wheel,
-///   and a three-finger tap opens the game menu.
+/// - Touch, per game: off (the default: nothing reaches the program, so a hand on the screen
+///   while holding a controller never clicks), a trackpad (a drawn cursor that one finger
+///   moves, a tap clicks where it is, a tap then hold drags) or direct (a tap is a left click
+///   where the finger is; holding or moving drags); in the last two a two-finger tap is a right
+///   click and a two-finger drag the wheel. In all three a three-finger tap opens the game menu.
 /// - Hardware keyboard (GCKeyboard: raw HID usages, modifiers as keys, no repeat) and mouse
 ///   (GCMouse: deltas posted relative, buttons, wheel), only while the game view is shown and
 ///   the app is active; losing that releases everything that was posted down.
@@ -98,20 +99,35 @@ final class GameInput {
 
     // MARK: - touch (called by GameHostView)
 
-    /// How a finger drives the mouse (the game menu switches it; remembered):
+    /// How a finger drives the mouse, per game (the game menu switches it; remembered):
+    /// - off (the default): touches reach nothing but the three-finger tap (the game menu);
     /// - trackpad: a drawn cursor; one finger moves it, a tap clicks where it is, a
     ///   two-finger tap right-clicks, a tap then hold drags, two fingers scroll;
     /// - direct: the finger is the pointer (tap where you click, hold or drag to drag).
-    enum TouchMode: String { case trackpad, direct }
-    var touchMode = TouchMode(rawValue: UserDefaults.standard.string(forKey: "touchMode") ?? "") ?? .trackpad {
-        didSet {
-            UserDefaults.standard.set(touchMode.rawValue, forKey: "touchMode")
-            resetGesture(); resetTrackpad()
-            GameHostView.shared.showCursor(nil)
-            surfaceShown()
-        }
-    }
+    enum TouchMode: String, CaseIterable { case off, trackpad, direct }
+    private(set) var touchMode = TouchMode.off
+    private var programID = ""
     private var cursorPlaced = false
+
+    /// A session starts (WineController): its program's own touch mode, off unless chosen.
+    func load(for programID: String) {
+        self.programID = programID
+        apply(TouchMode(rawValue: UserDefaults.standard.string(forKey: "touchMode.\(programID)") ?? "") ?? .off)
+    }
+
+    /// The game menu's choice, remembered for this game.
+    func setTouchMode(_ mode: TouchMode) {
+        if !programID.isEmpty { UserDefaults.standard.set(mode.rawValue, forKey: "touchMode.\(programID)") }
+        dlog("[input] touch for this game: \(mode.rawValue)")
+        apply(mode)
+    }
+
+    private func apply(_ mode: TouchMode) {
+        touchMode = mode
+        resetGesture(); resetTrackpad(); resetOff()
+        GameHostView.shared.showCursor(nil)
+        surfaceShown()
+    }
 
     /// The game view is on screen: in trackpad mode the cursor is drawn (the first time at the
     /// desktop's centre, which the program is told too).
@@ -123,16 +139,60 @@ final class GameInput {
     }
 
     func touchesBegan(_ touches: Set<UITouch>, _ event: UIEvent?, in view: UIView) {
-        if touchMode == .trackpad { trackpadBegan(fingers(touches), event, in: view) } else { directBegan(touches, in: view) }
+        switch touchMode {
+        case .off: offBegan(fingers(touches), event, in: view)
+        case .trackpad: trackpadBegan(fingers(touches), event, in: view)
+        case .direct: directBegan(touches, in: view)
+        }
     }
     func touchesMoved(_ touches: Set<UITouch>, _ event: UIEvent?, in view: UIView) {
-        if touchMode == .trackpad { trackpadMoved(fingers(touches), event, in: view) } else { directMoved(touches, event, in: view) }
+        switch touchMode {
+        case .off: offMoved(fingers(touches), in: view)
+        case .trackpad: trackpadMoved(fingers(touches), event, in: view)
+        case .direct: directMoved(touches, event, in: view)
+        }
     }
     func touchesEnded(_ touches: Set<UITouch>, _ event: UIEvent?, in view: UIView) {
-        if touchMode == .trackpad { trackpadEnded(event) } else { directEnded(touches, event, in: view) }
+        switch touchMode {
+        case .off: offEnded(event)
+        case .trackpad: trackpadEnded(event)
+        case .direct: directEnded(touches, event, in: view)
+        }
     }
     func touchesCancelled(_ touches: Set<UITouch>, in view: UIView) {
-        if touchMode == .trackpad { trackpadCancelled() } else { directCancelled(touches, in: view) }
+        switch touchMode {
+        case .off: resetOff()
+        case .trackpad: trackpadCancelled()
+        case .direct: directCancelled(touches, in: view)
+        }
+    }
+
+    // Off: nothing is posted; only a quick three-finger tap is watched for (the game menu).
+    private var offPoints: [ObjectIdentifier: CGPoint] = [:]
+    private var offStart: TimeInterval = 0
+    private var offSlid = false
+
+    private func resetOff() { offPoints.removeAll(); offSlid = false }
+
+    private func offBegan(_ touches: Set<UITouch>, _ event: UIEvent?, in view: UIView) {
+        if offPoints.isEmpty { offStart = ProcessInfo.processInfo.systemUptime }
+        for t in touches { offPoints[ObjectIdentifier(t)] = t.location(in: view) }
+    }
+
+    private func offMoved(_ touches: Set<UITouch>, in view: UIView) {
+        for t in touches {
+            guard let start = offPoints[ObjectIdentifier(t)] else { continue }
+            let p = t.location(in: view)
+            if hypot(p.x - start.x, p.y - start.y) > Self.slop { offSlid = true }
+        }
+    }
+
+    private func offEnded(_ event: UIEvent?) {
+        guard liveTouches(event).isEmpty, !offPoints.isEmpty else { return }   // wait for every finger
+        if !offSlid, offPoints.count >= 3, ProcessInfo.processInfo.systemUptime - offStart < Self.menuTapTime {
+            GameHostView.onMenu?()
+        }
+        resetOff()
     }
 
     // Trackpad: Madeira's desktop-session trackpad (ContentView.swift), with a tap then hold as

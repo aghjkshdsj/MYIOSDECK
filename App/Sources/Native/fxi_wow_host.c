@@ -563,8 +563,10 @@ static int tracing(void) {
 // NtUserCallTwoParam_GetGamepadState = 10), Madeira's host snapshot read behind XInput (and its
 // DirectInput joystick). The first query and every change of what came back for slot 0 (result,
 // buttons, left stick) are logged, 40 lines per run: a pad the game ignores shows its presses
-// here; one that never reaches it does not.
-static void note_gamepad(wow_thread *t, uint32_t esp, uint32_t status) {
+// here; one that never reaches it does not. So is the code that reads it, once per program and
+// return address (xinput1_3.dll is XInput, DINPUT8.dll the DirectInput joystick), and again at
+// its 600th read: a game polling the pad reaches that within seconds.
+static void note_gamepad(wow_thread *t, uint32_t esp, uint32_t caller, uint32_t status) {
     static int lines;
     static uint32_t last = ~0u;
     static uint64_t seen_base[8];   // processes (windows) that queried already: a launcher and its game
@@ -572,6 +574,23 @@ static void note_gamepad(wow_thread *t, uint32_t esp, uint32_t status) {
     uint32_t arg1 = rd_guest32(base, esp + 8), buf = rd_guest32(base, esp + 12);
     uint32_t index = arg1 & 0xff, op = (arg1 >> 8) & 0xff;
     static int vib_lines;
+    {
+        static struct { uint64_t base; uint32_t caller, reads; } readers[32];
+        static int nreaders;
+        static wow_module rmods[160];
+        pthread_mutex_lock(&g_note_lock);
+        int i = 0;
+        while (i < nreaders && (readers[i].base != base || readers[i].caller != caller)) i++;
+        if (i == nreaders && nreaders < 32) { readers[i].base = base; readers[i].caller = caller; readers[i].reads = 0; nreaders++; }
+        if (i < nreaders && (++readers[i].reads == 1 || readers[i].reads == 600)) {
+            char where[128];
+            int nm = wow_modules(base, t->teb32, rmods, 160);
+            describe(base, rmods, nm, caller, where, sizeof where);
+            mid_log("[fxi-wow] pad: %s by %s (program at B=%#llx, index %u, op %u)",
+                    readers[i].reads == 1 ? "read" : "read 600 times", where, (unsigned long long)base, index, op);
+        }
+        pthread_mutex_unlock(&g_note_lock);
+    }
     int known = 0;
     for (int i = 0; i < 8 && !known; i++) {
         if (seen_base[i] == base) known = 1;
@@ -667,7 +686,7 @@ static void note_call(wow_thread *t, int unix_call, uint32_t num, uint32_t esp, 
         }
         pthread_mutex_unlock(&g_note_lock);
     }
-    if (!unix_call && num == g_twoparam_num && rd_guest32(t->proc->base, esp + 16) == 10) note_gamepad(t, esp, status);
+    if (!unix_call && num == g_twoparam_num && rd_guest32(t->proc->base, esp + 16) == 10) note_gamepad(t, esp, caller, status);
     // win32u calls return values (handles, lengths), not NTSTATUS: only the trace shows them.
     if (!unix_call && num >= 0x1000) return;
     if (status < 0xC0000000u && !create) return;

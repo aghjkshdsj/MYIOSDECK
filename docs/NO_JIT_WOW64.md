@@ -366,12 +366,15 @@ kernelbase, user32, DXMT d3d11/dxgi/winemetal and hello-x86.exe decode 100%.
   `MADEIRA_WAIT_CHILDREN=1` (WineController): the session waits for the children it started.
 - **Run 14 (build 143): Steins;Gate plays without JIT**, launcher to game, at a steady 60 fps
   (user report, 2026-10-11): FXI32 for both processes, DXMT's D3D9 frontend, touch as mouse.
-- **Run 15–17 (builds 144–146): input.** Forager's XInput pad works. Steins;Gate acquires
-  Madeira's DirectInput pad (`joystick_ios.c`), reads it once, then waits on its
-  SetEventNotification event, which nothing signals: that pad is sampled only inside the game's
-  own GetDeviceState/Poll and has no read_event. `patches/dinput_ios_events.py` (i386 dinput
-  only) gives it an 8 ms waitable timer as read_event while acquired; dinput's input thread then
-  samples it and signals the game's event on a change, as the HID joystick does.
+- **Runs 15–18 (builds 144–147): input.** Forager's XInput pad works. Steins;Gate acquires
+  Madeira's DirectInput pad (`joystick_ios.c`, DIJOYSTATE) at start and then never reads it:
+  no Poll/GetDeviceState/GetDeviceData from its own threads, and no SetEventNotification
+  event. Build 147 gave the pad an 8 ms read timer in dinput's input thread; the presses then
+  reached the device and the game still ignored them, and the launcher once hung on a first
+  launch: on iOS every Wine message wait drains the app's touch ring (`message_ios.c`
+  process_driver_events), and the timer made dinput's input thread one of those waits while the
+  launcher was still talking to it. Reverted. The host now logs which DLL reads the pad
+  (`fxi_wow_host.c` note_gamepad), so the next log tells XInput from DirectInput.
 
 ### Stage 6: speed
 - FXR32 (guest registers pinned, as FXR), native fast paths for hot 32-bit system functions

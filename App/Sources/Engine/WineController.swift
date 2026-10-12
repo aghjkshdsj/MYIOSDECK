@@ -285,6 +285,8 @@ final class WineController: ObservableObject, @unchecked Sendable {
         // DirectInput joystick are created at session start.
         let api = Self.controllerAPI(for: program.id)
         sessionProgramID = program.id
+        let touchProgram = program.id
+        Task { @MainActor in GameInput.shared.load(for: touchProgram) }   // its touch mode: off unless chosen
         unsetenv("MADEIRA_DINPUT_PAD"); unsetenv("MADEIRA_HIDPAD"); unsetenv("MADEIRA_HIDPAD_NAME")
         // DirectInput view of the pad; its trace (Madeira's joystick_ios.c, rate-limited: what the
         // game reads once it has acquired the pad) shows in the log whether it ever does.
