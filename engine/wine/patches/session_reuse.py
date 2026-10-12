@@ -213,11 +213,12 @@ NTDLL_FIXES = [
 # 64 KB (never code), are logged as [winproc] lines, 300 per run.
 WIN32U_HELPER = MARK + r'''
 extern ULONG_PTR ios_wow_base(void);
+extern void mid_log( const char *fmt, ... );   /* the app's log (App/Sources/Native/jit_core.c): not through madeira-log.txt */
 static unsigned int myiosdeck_winproc_lines;
 static void myiosdeck_winproc_note( const WINDOWPROC *proc, WNDPROC func, BOOL ansi, void *caller )
 {
     if (__atomic_fetch_add( &myiosdeck_winproc_lines, 1, __ATOMIC_RELAXED ) >= 300) return;
-    fprintf( stderr, "[winproc] new %#x %c %p (peb %p, B %#lx, caller %p)\n",
+    mid_log( "[winproc] new %#x %c %p (peb %p, B %#lx, caller %p)",
              (unsigned int)(proc - winproc_array), ansi ? 'A' : 'W', func, NtCurrentTeb()->Peb,
              (unsigned long)ios_wow_base(), caller );
 }
@@ -247,8 +248,8 @@ WIN32U_FIXES = [
      "        {\n"
      "            WINDOWPROC *p = get_winproc_ptr( params->func );\n"
      "            int idx = (p && p != WINPROC_PROC16) ? (int)(p - winproc_array) : -1;\n"
-     "            fprintf( stderr, \"[winproc] BAD hwnd %p msg %#x func %p -> A %p W %p ansi %d ansi_dst %d \"\n"
-     "                     \"entry %d (A %p W %p) used %u peb %p own-builtins %d B %#lx\\n\",\n"
+     "            mid_log( \"[winproc] BAD hwnd %p msg %#x func %p -> A %p W %p ansi %d ansi_dst %d \"\n"
+     "                     \"entry %d (A %p W %p) used %u peb %p own-builtins %d B %#lx\",\n"
      "                     params->hwnd, params->msg, params->func, params->procA, params->procW,\n"
      "                     params->ansi, params->ansi_dst, idx, idx >= 0 ? p->procA : NULL,\n"
      "                     idx >= 0 ? p->procW : NULL, winproc_used, NtCurrentTeb()->Peb,\n"

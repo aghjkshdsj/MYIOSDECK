@@ -806,6 +806,33 @@ static long host_simulate(void *entry_ctx) {
 // session went to guest 0x42, build 155). How it got there, the first 4 times per run: the
 // registers, the last jumps, the return addresses on the stack (a call through a bad pointer
 // leaves its own on top), the last system calls.
+#if MYIOSDECK_WITH_WINE
+// win32u's unix side (Wine, linked into this binary): what it holds for a window.
+typedef struct { unsigned short len, max; unsigned short *buf; } wow_ustr;   // UNICODE_STRING
+extern int NtUserGetClassName(void *hwnd, int real, wow_ustr *name);
+extern uintptr_t get_window_long_ptr(void *hwnd, int offset, int ansi);
+extern uintptr_t get_class_long_ptr(void *hwnd, int offset, int ansi);
+extern unsigned int get_window_thread(void *hwnd, unsigned int *process);
+
+// The window a bad window procedure was called for (user32's WINPROC_wrapper and its callers keep
+// the window in edx): its class, its procedures as win32u resolves them, its thread and process.
+static void window_report(uint32_t hwnd) {
+    void *h = (void *)(uintptr_t)hwnd;
+    unsigned short name[64];
+    wow_ustr us = { 0, sizeof name, name };
+    int n = NtUserGetClassName(h, 0, &us);
+    char cls[64];
+    int k = 0;
+    for (; k < n && k < 63; k++) cls[k] = name[k] && name[k] < 0x80 ? (char)name[k] : '?';
+    cls[k] = 0;
+    unsigned int pid = 0, tid = get_window_thread(h, &pid);
+    mid_log("[fxi-wow]   window %#x: class \"%s\", thread %04x process %04x; wndproc A %#llx W %#llx, class wndproc A %#llx W %#llx",
+            hwnd, cls, tid, pid, (unsigned long long)get_window_long_ptr(h, -4 /* GWLP_WNDPROC */, 1),
+            (unsigned long long)get_window_long_ptr(h, -4, 0), (unsigned long long)get_class_long_ptr(h, -24 /* GCLP_WNDPROC */, 1),
+            (unsigned long long)get_class_long_ptr(h, -24, 0));
+}
+#endif
+
 static void fetch_fault_report(wow_thread *t) {
     static int reports;
     if (__atomic_fetch_add(&reports, 1, __ATOMIC_RELAXED) >= 4) return;
@@ -819,6 +846,17 @@ static void fetch_fault_report(wow_thread *t) {
     int nm = wow_modules(t->proc->base, t->teb32, mods, 160);
     mid_log("[fxi-wow]   return addresses on the x86 stack, innermost first:");
     stack_report(t, mods, nm, 16);
+    // The stack itself: user32's window-procedure frames and dispatch_message's win_proc_params
+    // (func, hwnd, msg, wparam, lparam, ansi, ansi_dst, mapping, dpi, procA, procW) are in here.
+    uint32_t esp = fx32_wow_reg(c, FX32_ESP), w[8];
+    for (uint32_t off = 0; off < 0x240; off += 32) {
+        if (!rd_guest(t->proc->base, esp + off, w, sizeof w)) break;
+        mid_log("[fxi-wow]   stack %08x: %08x %08x %08x %08x %08x %08x %08x %08x", esp + off, w[0], w[1], w[2], w[3],
+                w[4], w[5], w[6], w[7]);
+    }
+#if MYIOSDECK_WITH_WINE
+    if (fx32_wow_eip(c) < 0x10000) window_report(fx32_wow_reg(c, FX32_EDX));
+#endif
     fatal_report(t);   // eip, the last jumps with their code, the last system calls, the modules
     pthread_mutex_unlock(&g_note_lock);
 }
