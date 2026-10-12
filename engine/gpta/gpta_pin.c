@@ -300,6 +300,7 @@ static void rmap_init(void) {
     RMAP(t_ldi); RMAP(t_ldz8s); RMAP(t_stx); RMAP(t_sri); RMAP(t_sii); RMAP(t_3op); RMAP(t_op3r);
     // gpta_pin_br.c, gpta_pin_step1.c, gpta_pin_step2.c: the branches that most often close a loop
     RMAP(t_fjc_rr); RMAP(t_fjc_ri); RMAP(t_fjt_ri); RMAP(t_fjt_rr); RMAP(t_fjt_rrx); RMAP(t_sic); RMAP(t_sicr);
+    RMAP(t_sii_trace); RMAP(t_sri_trace);
 }
 // u: `copies` copies of M uops (a block: one copy). A handler at several places in a copy takes
 // the replica at every second place. When every handler of the copy has a replica, those at a
@@ -757,12 +758,16 @@ static int try_fuse(Out *o, const Uop *u, uint32_t left) {
         b->fam == FAM_FJCC && b->a == 0 && b->c2 == (a->c2 == 3) && cc10(b->d) >= 0) {
         int op = a->a == ALU_SUB, s64 = a->c2 == 3, si = a->c2, ci = cc10(b->d), cd = greg(v->dst), cs = greg(v->src);
         if (a->b == F_RI) {
-            if (b->b && cd == D) { x = put_uop(o, v, t_sii[op][s64][ci][D]); fs = t_fs_subi[si][D]; }
+            if (b->b && cd == D) {
+                x = put_uop(o, v, t_sii[op][s64][ci][D]); fs = t_fs_subi[si][D];
+                x->base = (uint8_t)D; x->index = 16;
+            }
             else if (!b->b && cd == D && cs >= 0) { x = put_uop(o, v, t_sic[op][s64][ci][D][cs]); fs = t_fs_sub[si][D][cs]; }
             else if (!b->b && cs == D && cd >= 0) { x = put_uop(o, v, t_sicr[op][s64][ci][D][cd]); fs = t_fs_sub[si][cd][D]; }
             if (x) x->fimm = (int32_t)u->imm;
         } else if (a->b == F_RR && S >= 0 && b->b && cd == D) {
             x = put_uop(o, v, t_sri[op][s64][ci][D][S]);
+            x->base = (uint8_t)D; x->index = (uint8_t)S;
             fs = t_fs_subi[si][D];
         }
         if (x) { if (fd) edge_stubs(o, fd, fs); return 2; }
@@ -1063,6 +1068,20 @@ static int find_trace(struct Fxi *vm, Block *b, Block **seg, int *edge) {
     return 0;
 }
 
+// The register metadata is recorded only for these pair forms. Match the
+// original handler as well; a coincidental base/index on another uop cannot opt in.
+static PFn step_trace_handler(const Uop *u, unsigned edge) {
+    unsigned D = u->base, S = u->index;
+    if (D >= 16) return u->p;
+    for (int op = 0; op < 2; op++)
+        for (int sz = 0; sz < 2; sz++)
+            for (int cc = 0; cc < 10; cc++) {
+                if (S == 16 && u->p == t_sii[op][sz][cc][D]) return t_sii_trace[edge][op][sz][cc][D];
+                if (S < 16 && u->p == t_sri[op][sz][cc][D][S]) return t_sri_trace[edge][op][sz][cc][D][S];
+            }
+    return u->p;
+}
+
 Block *gpta_lower(struct Fxi *vm, Block *b) {
     pthread_once(&g_once, init_desc);
     g_win = (vm && vm->windows) || g_win_force;
@@ -1122,6 +1141,7 @@ Block *gpta_lower(struct Fxi *vm, Block *b) {
                         }
                 }
                 if (to == t + 1) {
+                    t->p = step_trace_handler(t, (unsigned)edge[i]);
                     for (int si = 0; si < 4; si++)
                         for (int cc = 0; cc < 6; cc++)
                             if (t->p == t_jresult[si][cc]) t->p = t_jresult_trace[edge[i]][si][cc];

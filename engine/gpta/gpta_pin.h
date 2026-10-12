@@ -495,6 +495,7 @@ typedef struct { const char *name; PFn rr[16][16]; PFn rt[9]; } XOp;
 typedef struct { const char *name; PFn h[9]; } XShift;
 #define GPTA_TABLES(X) \
     X(t_fcj_trace, [2][2][16][16][16]) \
+    X(t_sii_trace, [2][2][2][10][16]) X(t_sri_trace, [2][2][2][10][16][16]) \
     X(t_nrr, [2][ALU_COUNT][2][20][20]) X(t_nri, [2][ALU_COUNT][2][20]) X(t_nmov, [2][20][20]) X(t_nmovi, [2][20]) \
     X(t_setcc, [16][16]) X(t_alu_rr, [2][ALU_COUNT][2][16][16]) X(t_alu_ri, [2][ALU_COUNT][2][16]) \
     X(t_alu_rt, [2][ALU_COUNT][2][16]) X(t_alu_tr, [2][ALU_COUNT][4][16]) X(t_alu_ti, [2][ALU_COUNT][4]) \
@@ -610,6 +611,8 @@ GPTA_TABLES(GPTA_DECL_TABLE)
 #define t_sicr GPTA_T(t_sicr)
 #define t_sii GPTA_T(t_sii)
 #define t_sri GPTA_T(t_sri)
+#define t_sii_trace GPTA_T(t_sii_trace)
+#define t_sri_trace GPTA_T(t_sri_trace)
 #define t_3op GPTA_T(t_3op)
 #define t_fs_sub GPTA_T(t_fs_sub)
 #define t_fs_and GPTA_T(t_fs_and)

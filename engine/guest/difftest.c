@@ -893,6 +893,34 @@ static void gpta_fcj_trace(void) {
     out("gpta_fcj_trace", h);
 }
 
+// Adjacent trace edges for add/sub + immediate compare. The outer counter is
+// independent, so every condition terminates even for wraparound and aliases.
+#define STEP_TRACE_CASE(CC, OP, SUF, DST, SRC, LIMIT) do { \
+    u64 r = (i & 1) ? val() : (u64)i, s = (i & 1) ? val() : 3, score; \
+    __asm__ volatile("movl $9, %%ecx\n\txorl %%ebx, %%ebx\n1:\t" \
+        OP SUF " " SRC ", %%" DST "\n\tcmp" SUF " $" LIMIT ", %%" DST "\n\tj" #CC " 2f\n\t" \
+        "addq $3, %%rbx\n\tjmp 3f\n2:\taddq $5, %%rbx\n3:\tdecl %%ecx\n\tjnz 1b" \
+        : "+a"(r), "=&b"(score) : "d"(s) : "rcx", "cc", "memory"); \
+    h = mix(mix(h, r), score); \
+} while (0)
+#define STEP_TRACE_FORMS(CC, OP) \
+    STEP_TRACE_CASE(CC, OP, "q", "rax", "$-7", "13"); \
+    STEP_TRACE_CASE(CC, OP, "l", "eax", "$7", "-13"); \
+    STEP_TRACE_CASE(CC, OP, "q", "rax", "%%rdx", "13"); \
+    STEP_TRACE_CASE(CC, OP, "l", "eax", "%%edx", "-13"); \
+    STEP_TRACE_CASE(CC, OP, "q", "rax", "%%rax", "-13"); \
+    STEP_TRACE_CASE(CC, OP, "l", "eax", "%%eax", "13")
+#define STEP_TRACE_COND(CC) STEP_TRACE_FORMS(CC, "add"); STEP_TRACE_FORMS(CC, "sub")
+static void gpta_step_trace(void) {
+    u64 h = 14695981039346656037ull;
+    for (int i = 0; i < N; i++) {
+        STEP_TRACE_COND(b); STEP_TRACE_COND(ae); STEP_TRACE_COND(e); STEP_TRACE_COND(ne);
+        STEP_TRACE_COND(be); STEP_TRACE_COND(a); STEP_TRACE_COND(l); STEP_TRACE_COND(ge);
+        STEP_TRACE_COND(le); STEP_TRACE_COND(g);
+    }
+    out("gpta_step_trace", h);
+}
+
 #define JRESULT_TRACE_CASE(CC, OP) do { \
     u64 a = val(), r; \
     __asm__ volatile("movl $13, %%ecx\n\txorl %%edx, %%edx\n1:\t" OP "\n\tj" #CC " 2f\n\t" \
@@ -989,7 +1017,7 @@ static const test_fn kTests[] = {
     fz_o, fz_no, fz_b, fz_ae, fz_e, fz_ne, fz_be, fz_a, fz_s, fz_ns, fz_p, fz_np, fz_l, fz_ge, fz_le, fz_g,
     fc_o, fc_no, fc_b, fc_ae, fc_e, fc_ne, fc_be, fc_a, fc_s, fc_ns, fc_p, fc_np, fc_l, fc_ge, fc_le, fc_g,
     fz_call, fz_index, fz_xindex, fz_3op, fz_3gap, fz_x3, fz_hoist, gpta_xmem, gpta_result_flags, gpta_xhigh, gpta_cf_flow,
-    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow, gpta_fcj_trace, gpta_jresult_trace, gpta_immstores, gpta_x3high,
+    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow, gpta_fcj_trace, gpta_jresult_trace, gpta_immstores, gpta_x3high, gpta_step_trace,
 };
 
 int guest_main(int argc, char **argv) {
