@@ -864,6 +864,84 @@ static void fetch_fault_report(wow_thread *t) {
     pthread_mutex_unlock(&g_note_lock);
 }
 
+// A program that does not end after Quit game (docs/SESSION_REUSE.md, builds 159-160: Steins;Gate
+// and Forager started second in a kept session): where each thread of the 32-bit programs is. Its
+// system call in progress, or the x86 code it runs; the native function it is in (a unix call);
+// the return addresses on its x86 stack. Other threads' CPUs are read without stopping them, so a
+// running thread's picture is approximate; Wine's thread registry gives every thread's TEB.
+#if MYIOSDECK_WITH_WINE
+#include <dlfcn.h>
+extern int ios_thread_registry_count(void);
+extern uintptr_t ios_thread_registry_teb(int i);
+extern thread_t ios_thread_registry_mach(int i);
+
+static const char *native_name(uint64_t pc, char *buf, size_t len) {
+    Dl_info info;
+    if (!pc || !dladdr((const void *)(uintptr_t)pc, &info)) { snprintf(buf, len, "%#llx", (unsigned long long)pc); return buf; }
+    const char *lib = info.dli_fname ? strrchr(info.dli_fname, '/') : NULL;
+    snprintf(buf, len, "%s`%s", lib ? lib + 1 : "?", info.dli_sname ? info.dli_sname : "?");
+    return buf;
+}
+#endif
+
+void mid_wow_thread_report(const char *why) {
+#if MYIOSDECK_WITH_WINE
+    int count = ios_thread_registry_count(), shown = 0;
+    pthread_mutex_lock(&g_note_lock);
+    mid_log("[quit-watch] %s: the threads of the 32-bit programs", why);
+    for (int i = 0; i < count && shown < 64; i++) {
+        uintptr_t teb = ios_thread_registry_teb(i);
+        thread_t port = ios_thread_registry_mach(i);
+        struct thread_basic_info info;
+        mach_msg_type_number_t n = THREAD_BASIC_INFO_COUNT;
+        if (!teb || !port || thread_info(port, THREAD_BASIC_INFO, (thread_info_t)&info, &n) != KERN_SUCCESS) continue;
+        wow_thread *tp = NULL, t;
+        wow_process proc;
+        vm_size_t got = 0;
+        if (vm_read_overwrite(mach_task_self(), (vm_address_t)&TLS_SLOT((uint8_t *)teb, WOW_THREAD_SLOT), sizeof tp,
+                              (vm_address_t)&tp, &got) != KERN_SUCCESS || !tp ||
+            vm_read_overwrite(mach_task_self(), (vm_address_t)tp, sizeof t, (vm_address_t)&t, &got) != KERN_SUCCESS ||
+            got != sizeof t || !t.proc || !t.cpu ||
+            vm_read_overwrite(mach_task_self(), (vm_address_t)t.proc, sizeof proc, (vm_address_t)&proc, &got) != KERN_SUCCESS)
+            continue;
+        t.proc = &proc;
+        shown++;
+        uint32_t tid = 0;
+        vm_read_overwrite(mach_task_self(), (vm_address_t)(teb + 0x48), 4, (vm_address_t)&tid, &got);   // ClientId.UniqueThread
+        arm_thread_state64_t st;
+        mach_msg_type_number_t cnt = ARM_THREAD_STATE64_COUNT;
+        char pc_name[160] = "?", lr_name[160] = "?";
+        if (thread_get_state(port, ARM_THREAD_STATE64, (thread_state_t)&st, &cnt) == KERN_SUCCESS) {
+            native_name(arm_thread_state64_get_pc(st), pc_name, sizeof pc_name);
+            native_name(arm_thread_state64_get_lr(st), lr_name, sizeof lr_name);
+        }
+        static wow_module mods[160];
+        int nm = wow_modules(proc.base, t.teb32, mods, 160);
+        char where[128], state[200];
+        const uint32_t k = (t.ring_n - 1) & 31;
+        if (t.in_x86) {
+            uint32_t eip = fx32_wow_eip(t.cpu);
+            snprintf(state, sizeof state, "runs x86 code at %08x %s", eip, describe(proc.base, mods, nm, eip, where, sizeof where));
+        } else if (t.ring_n && t.ring[k].status == ~0u) {
+            const char *name = sysname(&t, t.ring[k].num);
+            snprintf(state, sizeof state, "in system call %s (%#x) from %s", name ? name : "?", t.ring[k].num,
+                     describe(proc.base, mods, nm, t.ring[k].caller, where, sizeof where));
+        } else {
+            snprintf(state, sizeof state, "outside x86 code, not in a system call (a unix call?)");
+        }
+        mid_log("[quit-watch] thread %04x (TEB %#lx, B=%#llx, %s): %s; native %s (lr %s); %llu system calls, %llu unix calls",
+                tid, (unsigned long)teb, (unsigned long long)proc.base,
+                info.run_state == TH_STATE_RUNNING ? "running" : info.run_state == TH_STATE_WAITING ? "waiting" : "stopped",
+                state, pc_name, lr_name, (unsigned long long)t.syscalls, (unsigned long long)t.unixcalls);
+        stack_report(&t, mods, nm, 8);
+    }
+    mid_log("[quit-watch] %d thread(s) with an x86 CPU", shown);
+    pthread_mutex_unlock(&g_note_lock);
+#else
+    (void)why;
+#endif
+}
+
 // Every exception the 64-bit side dispatches. One raised while this thread interprets x86 code
 // (a host fault in guest memory) becomes the guest's: the state at the faulting instruction goes
 // to the CPU area, and dispatch continues from BTCpuSimulate's frame, where wow64's handler

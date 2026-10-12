@@ -28,6 +28,10 @@ bool mid_wine_boot(const char *prefix, const char *exe, const char *args, char *
 /// MYIOSDECK_SESSION_REUSE=1 kept the wineserver (mid_wine_boot also wants a no-JIT session).
 int mid_wine_session_reusable(void);
 
+/// Force quit in a kept session: the wineserver terminates the running programs as
+/// TerminateProcess does; the session stays. 1 when it was asked.
+int mid_wine_force_quit(void);
+
 /// Create the prefix from the bundled template if it is new (idempotent), so
 /// files can be placed in drive_c before Wine first boots. No-op without Wine.
 void mid_wine_seed_prefix(const char *prefix);
@@ -89,6 +93,10 @@ int mid_game_picture_rect(int dw, int dh, int *x, int *y, int *w, int *h);
 /// Diagnostics (fxi_wow_host.c): log every system and unix call of a 32-bit program for this
 /// long after a click or key press (bounded per input and per run).
 void mid_wow_trace_calls(double seconds);
+
+/// Diagnostics (fxi_wow_host.c): where every thread of the 32-bit programs is (its system call in
+/// progress or its x86 code, the return addresses on its stack), as [quit-watch] lines.
+void mid_wow_thread_report(const char *why);
 
 /// The guest's virtual monitor in pixels (1024x768 unless a program changes it).
 void mid_display_screen_size(int *w, int *h);

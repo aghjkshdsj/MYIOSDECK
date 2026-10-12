@@ -100,6 +100,8 @@ struct LibraryView: View {
                 session.shown = false
                 session.title = ""
                 GameHostView.shared.setStatus(nil)   // Quit game's "Closing…"
+                quitStuck = false
+                quitAttempt += 1
             default: break
             }
         }
@@ -134,10 +136,15 @@ struct LibraryView: View {
                 Button("Hide game (keeps running)") { session.shown = false }
                 if wine.sessionKept {
                     Button("Quit game") { requestQuit() }
+                    if quitStuck {
+                        Button("Force quit", role: .destructive) { forceQuit() }
+                    }
                 }
                 Button("Quit game and close MYIOSDECK", role: .destructive) { CrashReporter.shared.quitApp() }
             } message: {
-                if wine.sessionKept {
+                if wine.sessionKept && quitStuck {
+                    Text("\(session.title) has not closed. Force quit ends it at once (unsaved progress is lost) and MYIOSDECK stays open for the next game.")
+                } else if wine.sessionKept {
                     Text("Quit game asks the game to close, as its window's close button does: confirm in the game if it asks. MYIOSDECK stays open for the next game. Quit game and close MYIOSDECK stops it at once; unsaved progress is lost.")
                 } else {
                     Text("A Windows game can only be stopped by closing MYIOSDECK; unsaved progress is lost.")
@@ -181,6 +188,8 @@ struct LibraryView: View {
     @State private var showControllerMenu = false
     @State private var showTouchMenu = false
     @State private var openingSubmenu = false   // the game menu closes before a submenu opens
+    @State private var quitStuck = false        // Quit game did not end the game: Force quit is offered
+    @State private var quitAttempt = 0          // the latest Quit game / Force quit (its watchdog's)
 
     /// Quit game with session reuse: asks the game to close with Alt+F4 through its normal input,
     /// as Madeira's Quit game does (Library.swift requestQuit), so it can save and run its own exit
@@ -190,6 +199,33 @@ struct LibraryView: View {
         mid_post_key(0x12, 1); mid_post_key(0x73, 1)   // VK_MENU, VK_F4
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { mid_post_key(0x73, 0); mid_post_key(0x12, 0) }
         GameHostView.shared.setStatus("Closing \(session.title)… confirm in the game if it asks")
+        // Still running 10 s later (a game can hang on its way out, or wait in a dialog): say where
+        // its threads are in the log, and offer Force quit in the game menu.
+        quitAttempt += 1
+        let attempt = quitAttempt, title = session.title
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
+            guard attempt == quitAttempt, session.title == title, case .running = wine.state else { return }
+            dlog("[ui] \(title) is still running 10 s after Quit game")
+            mid_wow_thread_report("\(title) still runs 10 s after Quit game")
+            quitStuck = true
+            GameHostView.shared.setStatus("\(title) has not closed. Open the menu to force quit it.")
+        }
+    }
+
+    /// Force quit (kept sessions): the Wine server ends the game's processes as TerminateProcess
+    /// does; the session stays for the next game (docs/SESSION_REUSE.md).
+    private func forceQuit() {
+        dlog("[ui] force quit requested for \(session.title)")
+        quitAttempt += 1
+        guard wine.forceQuit() else { quitStuck = false; return }
+        GameHostView.shared.setStatus("Ending \(session.title)…")
+        let attempt = quitAttempt, title = session.title
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) {
+            guard attempt == quitAttempt, session.title == title, case .running = wine.state else { return }
+            dlog("[ui] \(title) is still running 8 s after Force quit")
+            mid_wow_thread_report("\(title) still runs 8 s after Force quit")
+            GameHostView.shared.setStatus("\(title) could not be ended. Quit game and close MYIOSDECK stops it.")
+        }
     }
 
     private static let controllerOrder = ["xinput", "dinput", "hid", "dualsense", "keyboard"]

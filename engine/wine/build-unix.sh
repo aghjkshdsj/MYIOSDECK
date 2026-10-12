@@ -85,9 +85,12 @@ step_ntdll() {
     # No-JIT step B: map PE images from signed dylibs when WINE_IOS_NOJIT=1
     # (engine/wine/patches/nojit_dylib.py). Start from the pristine file: the checkout is cached.
     git -C "$M" checkout -- build/ntdll-unix/virtual_ios.c build/ntdll-unix/loader_ios.c build/ntdll-unix/process_ios.c \
-        build/ntdll-unix/env_ios.c build/ntdll-unix/signal_arm64_ios.c build/ntdll-unix/server_ios.c
+        build/ntdll-unix/env_ios.c build/ntdll-unix/signal_arm64_ios.c build/ntdll-unix/server_ios.c \
+        build/ntdll-unix/thread_ios.c
+    git -C "$W" checkout -- dlls/ntdll/unix/sync.c
     python3 "$HERE/patches/nojit_dylib.py" "$M"
-    # Another game in the running session: process socket entries reused (engine/wine/patches/session_reuse.py).
+    # Another game in the running session: process socket entries reused, a killed main thread ends its
+    # process, an exited process's sleeping threads are ended (engine/wine/patches/session_reuse.py).
     python3 "$HERE/patches/session_reuse.py" "$M" ntdll
     # putenv() must not keep stack/freed buffers: iOS has no exec (engine/wine/patches/putenv_lifetime.py).
     python3 "$HERE/patches/putenv_lifetime.py" "$M"
@@ -140,6 +143,11 @@ build_wineserver() {
         -DBINDIR=\"/usr/local/bin\" -DDATADIR=\"/usr/local/share\"
         -D__WINESRC__ -DWINE_IOS=1 -Dmain=wineserver_main
         -Wno-implicit-function-declaration -Wno-int-conversion)
+    # The app's Force quit for a kept session (engine/wine/patches/session_reuse.py). Start from the
+    # pristine files: the checkout is cached.
+    git -C "$M" checkout -- build/wineserver/request_ios.c build/wineserver/fd_ios.c
+    git -C "$W" checkout -- server/process.c
+    python3 "$HERE/patches/session_reuse.py" "$M" server
     local fail=0 src name repl
     for src in "$W"/server/*.c; do
         name="$(basename "$src" .c)"

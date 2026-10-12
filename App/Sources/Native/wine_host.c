@@ -192,6 +192,17 @@ int mid_wine_session_reusable(void) {
     return g_reuse_armed && g_booted && wine_session_reusable();
 }
 
+/* Force quit: the in-process wineserver terminates every program of the session as
+ * TerminateProcess does (engine/wine/patches/session_reuse.py, myiosdeck_kill_programs), on its own
+ * thread. Kept sessions only: a killed program's main thread then ends it through its exit path. */
+extern void wineserver_kill_programs(int exit_code);
+int mid_wine_force_quit(void) {
+    if (!g_reuse_armed || !g_booted || !mid_wine_running()) return 0;
+    mid_log("[session-reuse] force quit: the Wine server terminates the running programs");
+    wineserver_kill_programs(1);
+    return 1;
+}
+
 static int reuse_requested(void) {
     const char *reuse = getenv("MYIOSDECK_SESSION_REUSE");
     return reuse && *reuse == '1';
@@ -325,6 +336,7 @@ void mid_display_layout(double fx, double fy, double fw, double fh,
 bool mid_wine_linked(void) { return false; }
 int mid_wine_running(void) { return 0; }
 int mid_wine_session_reusable(void) { return 0; }
+int mid_wine_force_quit(void) { return 0; }
 int wine_crash_exit_status(uint32_t *status) { (void)status; return 0; }
 bool mid_wine_boot(const char *prefix, const char *exe, const char *args, char *err, size_t errlen) {
     (void)prefix; (void)exe; (void)args;

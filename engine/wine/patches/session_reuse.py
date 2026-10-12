@@ -20,12 +20,18 @@ loader builds its process from argv and the environment, as for the session's fi
   ntdll  build/ntdll-unix/server_ios.c (engine/wine/build-unix.sh): the process socket table
          (64 entries, never reused) reuses the entries of exited processes once it is full, and
          the session's first program closes its socket for good when it exits (fd_socket = -1, so
-         a late thread of it cannot close a number another process got since).
+         a late thread of it cannot close a number another process got since). A process's main
+         thread that the server killed ends its process through the normal exit path (KILLED_*).
+         wine/dlls/ntdll/unix/sync.c, build/ntdll-unix/signal_arm64_ios.c and virtual_ios.c: the
+         threads an exited process left asleep in its guest window are ended (REAP_*), so the
+         window and its memory go back when the next 32-bit program starts.
+  server wine/server/process.c, build/wineserver/request_ios.c and fd_ios.c: the app's Force
+         quit ends every program of the session, as TerminateProcess does (FORCE_*).
   win32u wine/dlls/win32u/window.c (engine/wine/build-unix.sh): a window's client object (WND) is
          taken from the shared slot only when it is that window's (WINDOW_FIXES, below); and
          build/win32u-unix/class_ios.c: [winproc] diagnostics.
 
-Usage: session_reuse.py <madeira checkout> app|ntdll|win32u. Idempotent (marker line).
+Usage: session_reuse.py <madeira checkout> app|ntdll|server|win32u. Idempotent (marker line).
 """
 import sys
 
@@ -205,6 +211,312 @@ NTDLL_FIXES = [
      "        if (wine_launched_process_did_exit) wine_launched_process_did_exit( status );\n"
      "        if (fd_socket >= 0) close( fd_socket );\n"
      "        fd_socket = -1;   " + MARK + "\n"),
+    # A killed main thread ends its process (KILLED_FIXES has the call).
+    ('    wine_log_write("[Wine ntdll/server] process_exit_wrapper(%d)", status );\n'
+     "    exit( status );  /* on iOS, wine_ios_exit shim longjmps back to wine_process_thread */\n"
+     "}\n",
+     '    wine_log_write("[Wine ntdll/server] process_exit_wrapper(%d)", status );\n'
+     "    exit( status );  /* on iOS, wine_ios_exit shim longjmps back to wine_process_thread */\n"
+     "}\n"
+     r'''
+#ifdef WINE_IOS
+/* MYIOSDECK session-reuse (engine/wine/patches/session_reuse.py): the server killed this process
+ * (a parent's TerminateProcess, the app's Force quit) while its main thread waited for it.
+ * abort_thread() ended that thread alone (pthread_exit), so the boot thread never got back to its
+ * setjmp: the process's slot, socket and guest window stayed taken and the app never learnt that
+ * the program had ended. The main thread ends the process instead, as exit_process() does. Its
+ * requests fail from here on instead of ending the thread (the deferred-abort state of a section,
+ * above): the server has let go of it, and process_exit_wrapper() only closes and releases what
+ * this side holds. */
+void myiosdeck_main_thread_killed( int status )
+{
+    static _Thread_local int dying;
+    static int logged;
+    const char *reuse = getenv( "MYIOSDECK_SESSION_REUSE" );
+
+    if (!reuse || reuse[0] != '1') return;
+    if (!wine_ios_exit_initialized || !pthread_equal( pthread_self(), wine_ios_main_thread )) return;
+    if (dying++) return;   /* the exit path itself was cut short: the thread just ends */
+    ios_section_set_state( IOS_SECTION_ABORT | IOS_SECTION_EXITING | 1 );
+    if (__sync_fetch_and_add( &logged, 1 ) < 16)
+        dprintf( 2, "[session-reuse] the main thread of process %04x was killed (status %#x): the process "
+                    "ends through its exit path\n", (unsigned int)GetCurrentProcessId(), (unsigned int)status );
+    process_exit_wrapper( status ? status : 1 );
+}
+#endif
+'''),
+]
+
+KILLED_FIXES = [
+    ("void abort_thread( int status )\n"
+     "{\n"
+     "    pthread_sigmask( SIG_BLOCK, &server_block_set, NULL );\n",
+     "void abort_thread( int status )\n"
+     "{\n"
+     "    pthread_sigmask( SIG_BLOCK, &server_block_set, NULL );\n"
+     "    {   " + MARK + "\n"
+     "        extern void myiosdeck_main_thread_killed( int status );\n"
+     "        myiosdeck_main_thread_killed( status );   /* a pseudo-process's main thread: its process ends */\n"
+     "    }\n"),
+]
+
+
+# The threads an exited process leaves asleep. A process ends (ExitProcess, TerminateProcess) by
+# the server killing its threads; a thread learns it from its next server request (the pipe is
+# closed) and exits there. DXMT's encode, finish and other worker threads sleep in address waits
+# (NtWaitForAlertByThreadId) or delays that never ask the server, so they stayed (6 per D3D game,
+# build 159), their TEBs inside the guest window, and Madeira keeps a window while a thread of it
+# lives (ios_thread_registry_range_busy): its gigabytes never came back. myiosdeck_reap_alert()
+# wakes such a thread and moves a generation; a thread that sees a new generation when it wakes
+# or enters a wait asks the server about itself, and a killed one exits right there (abort_thread)
+# as at any request.
+REAP_HELPERS = MARK + r'''
+/* MYIOSDECK session-reuse (engine/wine/patches/session_reuse.py): see myiosdeck_reap_range()
+ * (signal_arm64_ios.c) and myiosdeck_kill_programs() (the wineserver's process.c). */
+volatile LONG myiosdeck_reap_gen;
+static __thread LONG myiosdeck_reap_seen;
+
+void myiosdeck_reap_alert( unsigned int tid )
+{
+    InterlockedIncrement( &myiosdeck_reap_gen );
+    NtAlertThreadByThreadId( ULongToHandle( tid ) );
+}
+
+/* A new generation since this thread last looked: is it still alive? A killed thread's request
+ * finds its pipe closed and the thread exits in send_request (abort_thread). */
+static void myiosdeck_reap_check(void)
+{
+    LONG gen = myiosdeck_reap_gen;
+
+    if (gen == myiosdeck_reap_seen) return;
+    myiosdeck_reap_seen = gen;
+    SERVER_START_REQ( get_thread_info )
+    {
+        req->handle = wine_server_obj_handle( GetCurrentThread() );
+        req->access = THREAD_QUERY_LIMITED_INFORMATION;
+        wine_server_call( req );
+    }
+    SERVER_END_REQ;
+}
+
+'''
+
+REAP_SYNC_FIXES = [
+    ("/******************************************************************\n"
+     " *\t\tNtDelayExecution (NTDLL.@)\n"
+     " */\n"
+     "NTSTATUS WINAPI NtDelayExecution( BOOLEAN alertable, const LARGE_INTEGER *timeout )\n"
+     "{\n"
+     "    unsigned int status = STATUS_SUCCESS;\n"
+     "\n"
+     "    IOS_ECO_POLL();   /* ml1133 */\n",
+     REAP_HELPERS +
+     "/******************************************************************\n"
+     " *\t\tNtDelayExecution (NTDLL.@)\n"
+     " */\n"
+     "NTSTATUS WINAPI NtDelayExecution( BOOLEAN alertable, const LARGE_INTEGER *timeout )\n"
+     "{\n"
+     "    unsigned int status = STATUS_SUCCESS;\n"
+     "\n"
+     "    IOS_ECO_POLL();   /* ml1133 */\n"
+     "    myiosdeck_reap_check();   /* MYIOSDECK session-reuse */\n"),
+    ("    IOS_ECO_POLL();   /* ml1133 */\n"
+     "    __sync_fetch_and_add( &ios_alert_waits, 1 );   /* ml1115 */\n",
+     "    IOS_ECO_POLL();   /* ml1133 */\n"
+     "    __sync_fetch_and_add( &ios_alert_waits, 1 );   /* ml1115 */\n"
+     "    myiosdeck_reap_check();   /* MYIOSDECK session-reuse */\n"),
+    ("        if (ios_wslot >= 0) ios_alert_waiters[ios_wslot].addr = NULL;\n"
+     "        if (ios_marked && ios_alert_unix_n < 120) { InterlockedIncrement( &ios_alert_unix_n );\n"
+     "            ERR( \"[alert-unix] tid=%04x -> ALERTED\\n\",\n",
+     "        if (ios_wslot >= 0) ios_alert_waiters[ios_wslot].addr = NULL;\n"
+     "        myiosdeck_reap_check();   /* MYIOSDECK session-reuse: woken to end? */\n"
+     "        if (ios_marked && ios_alert_unix_n < 120) { InterlockedIncrement( &ios_alert_unix_n );\n"
+     "            ERR( \"[alert-unix] tid=%04x -> ALERTED\\n\",\n"),
+]
+
+# The reaper (build/ntdll-unix/signal_arm64_ios.c, next to the thread registry it walks).
+REAP_SIGNAL_FIXES = [
+    ("static int ios_lookup_thread(thread_t mach_thread, uintptr_t *teb_out, void **tramp_out)\n",
+     MARK + r'''
+/* MYIOSDECK session-reuse (engine/wine/patches/session_reuse.py): end the threads an exited
+ * process left asleep in its guest window, so the window can be torn down. With
+ * MYIOSDECK_SESSION_REUSE=1 only; called by the window reclaim (virtual_ios.c) for a window whose
+ * owner has exited.
+ *
+ * First every such thread is woken (myiosdeck_reap_alert, sync.c): one asleep in an address wait
+ * or a delay then asks the server about itself and, killed with its process, exits through
+ * Wine's own path. What is left after half a second sleeps where no alert reaches it (DXMT's
+ * shared-event listener runs a CFRunLoop in mach_msg): a thread suspended inside a system call
+ * holds no lock of this side, so its server pipes are closed and the thread is terminated.
+ * A thread running anything else is left alone, and keeps the window as before. */
+static int myiosdeck_thread_alive( thread_t port )
+{
+    struct thread_basic_info info;
+    mach_msg_type_number_t length = THREAD_BASIC_INFO_COUNT;
+    kern_return_t kr = thread_info( port, THREAD_BASIC_INFO, (thread_info_t)&info, &length );
+
+    return kr != KERN_INVALID_ARGUMENT && kr != MACH_SEND_INVALID_DEST && kr != KERN_TERMINATED;
+}
+
+int myiosdeck_reap_range( uintptr_t base, uintptr_t size )
+{
+    extern void myiosdeck_reap_alert( unsigned int tid );
+    extern void ios_thread_died( unsigned tid );
+    const char *reuse = getenv( "MYIOSDECK_SESSION_REUSE" );
+    int count = ios_thread_registry_count(), i, wait, woken = 0, stopped = 0, left = 0;
+    mach_port_t self;
+
+    if (!reuse || reuse[0] != '1') return 0;
+    self = mach_thread_self();
+    for (i = 0; i < count; i++)
+    {
+        uintptr_t teb = ios_thread_registry[i].teb;
+        thread_t port = ios_thread_registry[i].mach_thread;
+
+        if (!port || port == self || !teb || teb < base || teb - base >= size) continue;
+        if (!myiosdeck_thread_alive( port )) continue;
+        myiosdeck_reap_alert( (unsigned int)(ULONG_PTR)((TEB *)teb)->ClientId.UniqueThread );
+        woken++;
+    }
+    for (wait = 0; woken && wait < 50 && ios_thread_registry_range_busy( base, size ); wait++) usleep( 10000 );
+    for (i = 0; woken && i < count; i++)
+    {
+        uintptr_t teb = ios_thread_registry[i].teb;
+        thread_t port = ios_thread_registry[i].mach_thread;
+        struct ntdll_thread_data *td;
+        arm_thread_state64_t st;
+        mach_msg_type_number_t cnt = ARM_THREAD_STATE64_COUNT;
+        struct thread_basic_info info;
+        mach_msg_type_number_t length = THREAD_BASIC_INFO_COUNT;
+        uint64_t pc;
+        uint32_t insn = 0;
+        mach_vm_size_t got = 0;
+        unsigned int tid;
+
+        if (!port || port == self || !teb || teb < base || teb - base >= size) continue;
+        if (!myiosdeck_thread_alive( port )) continue;
+        if (thread_suspend( port ) != KERN_SUCCESS) { left++; continue; }
+        if (thread_get_state( port, ARM_THREAD_STATE64, (thread_state_t)&st, &cnt ) != KERN_SUCCESS ||
+            thread_info( port, THREAD_BASIC_INFO, (thread_info_t)&info, &length ) != KERN_SUCCESS ||
+            info.run_state != TH_STATE_WAITING || !(pc = arm_thread_state64_get_pc( st )) ||
+            mach_vm_read_overwrite( mach_task_self(), pc - 4, 4, (mach_vm_address_t)&insn, &got ) != KERN_SUCCESS ||
+            got != 4 || insn != 0xd4001001 /* svc #0x80: inside a system call */)
+        {
+            thread_resume( port );
+            left++;
+            continue;
+        }
+        td = (struct ntdll_thread_data *)&((TEB *)teb)->GdiTebBatch;
+        tid = (unsigned int)(ULONG_PTR)((TEB *)teb)->ClientId.UniqueThread;
+        if (td->request_fd > 2) close( td->request_fd );
+        if (td->reply_fd > 2) close( td->reply_fd );
+        if (td->wait_fd[0] > 2) close( td->wait_fd[0] );
+        if (td->wait_fd[1] > 2) close( td->wait_fd[1] );
+        if (td->alert_fd > 2) close( td->alert_fd );
+        td->request_fd = td->reply_fd = td->wait_fd[0] = td->wait_fd[1] = td->alert_fd = -1;
+        if (thread_terminate( port ) != KERN_SUCCESS) { thread_resume( port ); left++; continue; }
+        ios_thread_died( tid );
+        stopped++;
+    }
+    for (wait = 0; stopped && wait < 20 && ios_thread_registry_range_busy( base, size ); wait++) usleep( 10000 );
+    mach_port_deallocate( mach_task_self(), self );
+    if (woken)
+        dprintf( 2, "[session-reuse] window B=%p: %d thread(s) the exited process left were woken to end "
+                    "themselves, %d asleep for good were stopped, %d still run there\n",
+                 (void *)base, woken, stopped, left );
+    return woken;
+}
+
+static int ios_lookup_thread(thread_t mach_thread, uintptr_t *teb_out, void **tramp_out)
+'''),
+]
+
+# The reclaim (build/ntdll-unix/virtual_ios.c) asks the reaper before keeping a window for its
+# live threads.
+REAP_VIRTUAL_FIXES = [
+    ("            if ((!env || strcmp( env, \"0\" )) &&\n"
+     "                ios_thread_registry_range_busy( base, IOS_WOW_WINDOW_SIZE ))\n",
+     "            extern int myiosdeck_reap_range( uintptr_t base, uintptr_t size );   " + MARK + "\n"
+     "            if ((!env || strcmp( env, \"0\" )) &&\n"
+     "                ios_thread_registry_range_busy( base, IOS_WOW_WINDOW_SIZE ) &&\n"
+     "                (!myiosdeck_reap_range( base, IOS_WOW_WINDOW_SIZE ) ||\n"
+     "                 ios_thread_registry_range_busy( base, IOS_WOW_WINDOW_SIZE )))\n"),
+]
+
+
+# The app's Force quit (the wineserver, on its own thread): every program of the session ends as
+# TerminateProcess ends it (wine/server/process.c), asked through a flag the server loop reads
+# (build/wineserver/request_ios.c, fd_ios.c), as the app hands it a new client socket. The
+# programs' threads that sleep where no server reply reaches them are woken to find out
+# (myiosdeck_reap_alert); a killed main thread ends its process (myiosdeck_main_thread_killed).
+FORCE_PROCESS_FIXES = [
+    ("/* kill all processes */\n"
+     "static void kill_all_processes(void)\n",
+     MARK + r'''
+/* MYIOSDECK session-reuse (engine/wine/patches/session_reuse.py): the app's Force quit. Every
+ * program of the session (not a system process) is terminated as TerminateProcess terminates it;
+ * then its threads are woken, so one asleep where no server reply reaches it learns it was killed
+ * (ntdll's sync.c). Runs on the server thread, from the main loop (fd_ios.c). */
+extern void myiosdeck_reap_alert( unsigned int tid );
+int myiosdeck_kill_programs( int exit_code )
+{
+    struct process *process, *victims[32];
+    struct thread *thread;
+    unsigned int tids[512];
+    int n = 0, nt = 0, i;
+
+    LIST_FOR_EACH_ENTRY( process, &process_list, struct process, entry )
+    {
+        if (process->is_system || !process->running_threads || n >= 32) continue;
+        victims[n++] = (struct process *)grab_object( process );
+        LIST_FOR_EACH_ENTRY( thread, &process->thread_list, struct thread, proc_entry )
+            if (nt < 512) tids[nt++] = thread->id;
+    }
+    for (i = 0; i < n; i++)
+    {
+        terminate_process( victims[i], NULL, exit_code );
+        release_object( victims[i] );
+    }
+    for (i = 0; i < nt; i++) myiosdeck_reap_alert( tids[i] );
+    return n;
+}
+
+/* kill all processes */
+static void kill_all_processes(void)
+'''),
+]
+
+FORCE_REQUEST_FIXES = [
+    ("    ws_log(\"[wineserver] inject_client_fd: fd=%d\", fd);\n"
+     "    g_injected_client_fd = fd;\n"
+     "}\n",
+     "    ws_log(\"[wineserver] inject_client_fd: fd=%d\", fd);\n"
+     "    g_injected_client_fd = fd;\n"
+     "}\n"
+     "\n" + MARK + "\n"
+     "/* The app's Force quit (engine/wine/patches/session_reuse.py): the server loop ends every\n"
+     " * program of the session (myiosdeck_kill_programs, process.c) on its own thread. */\n"
+     "volatile int g_myiosdeck_kill_programs = -1;\n"
+     "void wineserver_kill_programs(int exit_code)\n"
+     "{\n"
+     "    extern void ios_wineserver_wake(void);\n"
+     "    ws_log(\"[wineserver] kill_programs: exit code %d (the app's Force quit)\", exit_code);\n"
+     "    g_myiosdeck_kill_programs = exit_code;\n"
+     "    ios_wineserver_wake();\n"
+     "}\n"),
+]
+
+FORCE_FD_FIXES = [
+    ("            /* Check for injected client fd (socketpair bypass) */\n",
+     "            {   " + MARK + "   /* the app's Force quit (wineserver_kill_programs) */\n"
+     "                extern volatile int g_myiosdeck_kill_programs;\n"
+     "                extern int myiosdeck_kill_programs( int exit_code );\n"
+     "                int code = __atomic_exchange_n( &g_myiosdeck_kill_programs, -1, __ATOMIC_SEQ_CST );\n"
+     "                if (code >= 0)\n"
+     "                    ws_log( \"[wineserver] force quit: %d program process(es) terminated\",\n"
+     "                            myiosdeck_kill_programs( code ) );\n"
+     "            }\n"
+     "            /* Check for injected client fd (socketpair bypass) */\n"),
 ]
 
 
@@ -304,11 +616,19 @@ def main():
         apply(root + "/app/Madeira/WineProcessBridge.m", APP_FIXES, what)
     elif what == "ntdll":
         apply(root + "/build/ntdll-unix/server_ios.c", NTDLL_FIXES, what)
+        apply(root + "/build/ntdll-unix/thread_ios.c", KILLED_FIXES, what + " thread_ios.c")
+        apply(root + "/wine/dlls/ntdll/unix/sync.c", REAP_SYNC_FIXES, what + " sync.c")
+        apply(root + "/build/ntdll-unix/signal_arm64_ios.c", REAP_SIGNAL_FIXES, what + " signal_arm64_ios.c")
+        apply(root + "/build/ntdll-unix/virtual_ios.c", REAP_VIRTUAL_FIXES, what + " virtual_ios.c")
+    elif what == "server":
+        apply(root + "/wine/server/process.c", FORCE_PROCESS_FIXES, what + " process.c")
+        apply(root + "/build/wineserver/request_ios.c", FORCE_REQUEST_FIXES, what + " request_ios.c")
+        apply(root + "/build/wineserver/fd_ios.c", FORCE_FD_FIXES, what + " fd_ios.c")
     elif what == "win32u":
         apply(root + "/build/win32u-unix/class_ios.c", WIN32U_FIXES, what)
         apply(root + "/wine/dlls/win32u/window.c", WINDOW_FIXES, what + " window.c")
     else:
-        sys.exit("usage: session_reuse.py <madeira checkout> app|ntdll|win32u")
+        sys.exit("usage: session_reuse.py <madeira checkout> app|ntdll|server|win32u")
 
 
 if __name__ == "__main__":

@@ -147,10 +147,21 @@ final class WineController: ObservableObject, @unchecked Sendable {
     /// The running (or last) session stays when its game ends: Quit game can then leave
     /// MYIOSDECK open.
     @Published private(set) var sessionKept = false
+    /// Force quit was asked for the running game (its end is reported as that, not as a crash).
+    private let forceQuitAsked = OSAllocatedUnfairLock(initialState: false)
     /// Wine's per-process tables hold a handful of games' processes (docs/SESSION_REUSE.md).
     static let maxProgramsPerRun = 8
     /// A 64-bit game's memory stays in use until MYIOSDECK closes: the next one needs this much free.
     static let minFreeMB = 1536
+
+    /// Force quit (a kept session's game that does not close after Quit game): the Wine server
+    /// terminates the session's programs as TerminateProcess does, and the session stays for the
+    /// next game (docs/SESSION_REUSE.md). False when there is nothing to end.
+    func forceQuit() -> Bool {
+        guard sessionKept, mid_wine_running() != 0 else { return false }
+        forceQuitAsked.withLock { $0 = true }
+        return mid_wine_force_quit() != 0
+    }
 
     static func hidPad(_ api: String) -> String {
         api == "hid" ? "generic" : api == "dualsense" ? "dualsense" : ""
@@ -321,6 +332,7 @@ final class WineController: ObservableObject, @unchecked Sendable {
         dockActive = launch == .dock
         customActive = launch == .custom
         dockFailure = nil
+        forceQuitAsked.withLock { $0 = false }
         // The bridge keeps the wineserver when this program ends (WineProcessBridge.m as patched by
         // engine/wine/patches/session_reuse.py), so the next game can start in the session.
         let keep = noJITSession && Self.reuseEnabled
@@ -476,9 +488,11 @@ final class WineController: ObservableObject, @unchecked Sendable {
             done.wait()
         }
         var status: UInt32 = 0
-        let crashed = wine_crash_exit_status(&status) != 0
+        let forced = forceQuitAsked.withLock { $0 }
+        let crashed = !forced && wine_crash_exit_status(&status) != 0
         let secs = String(format: "%.1f s", Date().timeIntervalSince(started))
-        let how = crashed ? String(format: "ended with error 0x%08X after %@", status, secs) : "exited normally after \(secs)"
+        let how = forced ? "was force-quit after \(secs)"
+            : crashed ? String(format: "ended with error 0x%08X after %@", status, secs) : "exited normally after \(secs)"
         dlog("[wine] \(title) \(how)")
         // Test programs write their report to C:\myiosdeck-output.txt: proof that does not
         // depend on where the console's output goes.
