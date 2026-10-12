@@ -37,7 +37,7 @@ static struct Fxi *process_vm(uint64_t gbase, uint32_t bop) {
     for (int i = 0; i < MAX_PROCESSES && !vm; i++)
         if (g_procs[i].vm && g_procs[i].gbase == gbase) vm = g_procs[i].vm;
     if (!vm) {
-        // A window freed by an exited process can be taken again: the newest entry wins.
+        // A free entry (fx32_wow_process_start frees an exited process's); slot 0 when full.
         int slot = 0;
         for (int i = 0; i < MAX_PROCESSES; i++) if (!g_procs[i].vm) { slot = i; break; }
         vm = fxi_vm_new();
@@ -49,6 +49,24 @@ static struct Fxi *process_vm(uint64_t gbase, uint32_t bop) {
     }
     pthread_mutex_unlock(&g_procs_lock);
     return vm;
+}
+
+// Wine hands a window an exited process left to the next 32-bit process once no thread of the
+// old one is in it (it tears the window down first). The old instance's blocks are that
+// process's code, its exit blocks (the BOP stops, never invalidated) sit at its BOP page, which
+// the new process allocates anew, and process_vm would find it by the window: drop it from the
+// table (not freed: nothing may run in it any more, but it is small).
+int fx32_wow_process_start(uint64_t gbase) {
+    int dropped = 0;
+    pthread_mutex_lock(&g_procs_lock);
+    for (int i = 0; i < MAX_PROCESSES; i++)
+        if (g_procs[i].vm && g_procs[i].gbase == gbase) {
+            g_procs[i].vm = NULL;
+            g_procs[i].gbase = 0;
+            dropped = 1;
+        }
+    pthread_mutex_unlock(&g_procs_lock);
+    return dropped;
 }
 
 Fx32Cpu *fx32_wow_cpu_new(uint64_t gbase, uint32_t bop) {

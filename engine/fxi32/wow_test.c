@@ -228,6 +228,29 @@ int main(void) {
     check("single-step traps (TF, icebp)", why == FX32_RUN_EXCEPTION && e1.code == 0x80000004 && e1.eip == CODE + 0x309 &&
           esp1 == esp0 && why2 == FX32_RUN_EXCEPTION && e2.code == 0x80000004 && e2.eip == CODE + 0x30b, d);
 
+    // 9. A new process in the same window (an exited process's window handed on, as Wine does
+    //    for the next 32-bit process): its BOP page is elsewhere and the old one's address holds
+    //    ordinary code. fx32_wow_process_start drops the old instance, so that code runs and the
+    //    new BOP page stops.
+    enum { BOP2 = DATA + 0x2000 };
+    put32(BOP2, 0x2ecd2ecd);
+    const uint8_t at_old_bop[] = { 0xb8, 0x05, 0x00, 0x00, 0x00, 0x0f, 0x0b };   // mov eax, 5; ud2
+    put(BOP, at_old_bop, sizeof at_old_bop);
+    int had = fx32_wow_process_start((uint64_t)(uintptr_t)g_base);
+    int again = fx32_wow_process_start((uint64_t)(uintptr_t)g_base);
+    Fx32Cpu *c2 = fx32_wow_cpu_new((uint64_t)(uintptr_t)g_base, BOP2);
+    fx32_wow_load_context(c2, ctx, TEB32);
+    fx32_wow_set_eip(c2, BOP);
+    why = fx32_wow_run(c2);
+    if (why == FX32_RUN_EXCEPTION) fx32_wow_exception(c2, &e); else memset(&e, 0, sizeof e);
+    uint32_t eax5 = fx32_wow_reg(c2, FX32_EAX);
+    fx32_wow_set_eip(c2, BOP2);
+    why2 = fx32_wow_run(c2);
+    snprintf(d, sizeof d, "dropped %d then %d; old BOP address: why %d eax %u ud2 at %#x; new BOP: why %d eip %#x", had,
+             again, why, eax5, e.eip, why2, fx32_wow_eip(c2));
+    check("a new process in the same window", had == 1 && again == 0 && why == FX32_RUN_EXCEPTION && eax5 == 5 &&
+          e.eip == BOP + 5 && why2 == FX32_RUN_SYSCALL && fx32_wow_eip(c2) == BOP2, d);
+
     printf("wow_test: %s\n", g_fail ? "FAILED" : "all checks passed");
     return g_fail;
 }

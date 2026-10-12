@@ -6,6 +6,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "fxi.h"
 #include "jit_core.h"
 
 #include <fcntl.h>
@@ -76,7 +77,8 @@ static void *wine_log_follower(void *arg) {
         ssize_t n = read(fd, buf, sizeof buf);
         if (n <= 0) {
             usleep(100000);
-            if (++idle > 600 && !mid_wine_running()) break; /* 60 s quiet after exit */
+            /* 60 s quiet after exit, unless the session stays for another program (the file goes on) */
+            if (++idle > 600 && !mid_wine_running() && !mid_wine_session_reusable()) break;
             continue;
         }
         idle = 0;
@@ -114,6 +116,8 @@ static void follow_wine_log(const char *prefix) {
 #include "WineServerBridge.h"
 
 static int g_booted;
+static int g_programs;     /* Windows programs started in this app run (session reuse) */
+static int g_reuse_armed;  /* the running session started with MYIOSDECK_SESSION_REUSE=1 */
 
 /* Madeira's IOSDisplayShim.m and Winios.m (staged app sources). */
 extern void madeira_display_set_layer(void *layer);
@@ -181,11 +185,46 @@ void mid_display_layout(double fx, double fy, double fw, double fh,
 bool mid_wine_linked(void) { return true; }
 int mid_wine_running(void) { return wine_process_is_running(); }
 
-bool mid_wine_boot(const char *prefix, const char *exe, const char *args, char *err, size_t errlen) {
-    if (g_booted) {
+/* Session reuse (docs/SESSION_REUSE.md): WineProcessBridge.m as patched by
+ * engine/wine/patches/session_reuse.py. */
+extern int wine_session_reusable(void);
+int mid_wine_session_reusable(void) {
+    return g_reuse_armed && g_booted && wine_session_reusable();
+}
+
+static int reuse_requested(void) {
+    const char *reuse = getenv("MYIOSDECK_SESSION_REUSE");
+    return reuse && *reuse == '1';
+}
+
+/* Another program in the running session: a new top-level Windows process (the bridge boots it
+ * like a child of no one). Nothing of the session's own start runs again: the JIT pool, the
+ * wineserver, the log (it goes on in the same file). */
+static bool boot_next(const char *prefix, const char *exe, const char *args, char *err, size_t errlen) {
+    const char *nojit = getenv("WINE_IOS_NOJIT");
+    if (!mid_wine_session_reusable() || !nojit || *nojit != '1') {
         snprintf(err, errlen, "Wine already ran in this app session; restart MYIOSDECK to start another program");
         return false;
     }
+    wine_exit_status_reset();   /* the last program's error is not this one's */
+    setenv("MADEIRA_EXE", exe, 1);
+    if (args && *args) setenv("MADEIRA_ARGS", args, 1); else unsetenv("MADEIRA_ARGS");
+    /* FXI's x64 blocks are shared by the session's processes: an earlier program's code may be
+     * gone and its addresses reused by this one. */
+    unsigned dropped = fxi_win_invalidate_all();
+    g_reuse_armed = reuse_requested();   /* what the bridge does when this program ends */
+    if (wine_process_start(prefix) != 0) {
+        snprintf(err, errlen, "Wine process failed to start");
+        return false;
+    }
+    g_programs++;
+    mid_log("[session-reuse] started %s in the running Wine session (program %d of this app run; %u x64 blocks dropped)",
+            exe, g_programs, dropped);
+    return true;
+}
+
+bool mid_wine_boot(const char *prefix, const char *exe, const char *args, char *err, size_t errlen) {
+    if (g_booted) return boot_next(prefix, exe, args, err, errlen);
     /* No-JIT (docs/NO_JIT_WINDOWS.md step B): the caller set WINE_IOS_NOJIT=1 and
      * MYIOSDECK_PE_DIR; Wine maps its DLLs from the signed dylibs there and gets no pool. */
     const char *nojit = getenv("WINE_IOS_NOJIT");
@@ -248,12 +287,14 @@ bool mid_wine_boot(const char *prefix, const char *exe, const char *args, char *
         snprintf(err, errlen, "wineserver did not become ready in 6 s");
         return false;
     }
+    g_reuse_armed = no_jit && reuse_requested();   /* the bridge keeps the wineserver when it ends */
     if (wine_process_start(prefix) != 0) {
         snprintf(err, errlen, "Wine process failed to start");
         return false;
     }
     g_booted = 1;
-    mid_log("[wine] started %s", exe);
+    g_programs = 1;
+    mid_log("[wine] started %s%s", exe, g_reuse_armed ? " (session reuse: the session stays when it ends)" : "");
     return true;
 }
 
@@ -283,6 +324,7 @@ void mid_display_layout(double fx, double fy, double fw, double fh,
 
 bool mid_wine_linked(void) { return false; }
 int mid_wine_running(void) { return 0; }
+int mid_wine_session_reusable(void) { return 0; }
 int wine_crash_exit_status(uint32_t *status) { (void)status; return 0; }
 bool mid_wine_boot(const char *prefix, const char *exe, const char *args, char *err, size_t errlen) {
     (void)prefix; (void)exe; (void)args;

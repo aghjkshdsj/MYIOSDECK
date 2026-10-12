@@ -45,6 +45,9 @@ final class Settings: ObservableObject {
     @Published var noJITMuteAudio: Bool { didSet { d.set(noJITMuteAudio, forKey: "noJITMuteAudio") } }
     /// Without JIT, run Windows games' x64 code with FXR instead of FXI (experimental). Read at launch.
     @Published var winFXR: Bool { didSet { d.set(winFXR, forKey: "winFXR") } }
+    /// Without JIT, keep the Wine session when a game ends, so the next game starts without
+    /// closing MYIOSDECK (experimental, docs/SESSION_REUSE.md). Read at launch (WineController).
+    @Published var sessionReuse: Bool { didSet { d.set(sessionReuse, forKey: "sessionReuse") } }
     /// How Steam games start: "ask" (a choice at every Play), "dock" (Madeira Dock: Valve's own
     /// Steam client signs in and starts the game, for games that need Steam running) or "direct"
     /// (the game's program starts on its own: faster, DRM-free games).
@@ -57,7 +60,8 @@ final class Settings: ObservableObject {
         // Wine copies every loaded DLL's code into the pool: give it room by default.
         d.register(defaults: ["jitPoolMB": mid_wine_linked() ? 1024 : 512, "fexPreset": FEXPreset.fast.rawValue, "multiblock": true,
                               "maxInst": 5000, "showHUD": true, "frameCap": 120, "verboseFEXLog": false,
-                              "benchInterpreter": true, "useFXR": false, "noJITMuteAudio": false, "winFXR": false, "steamLaunchMode": "ask", "controllerAPI": "xinput"])
+                              "benchInterpreter": true, "useFXR": false, "noJITMuteAudio": false, "winFXR": false, "sessionReuse": false,
+                              "steamLaunchMode": "ask", "controllerAPI": "xinput"])
         jitPoolMB = d.integer(forKey: "jitPoolMB")
         fexPreset = FEXPreset(rawValue: d.integer(forKey: "fexPreset")) ?? .fast
         multiblock = d.bool(forKey: "multiblock")
@@ -69,6 +73,7 @@ final class Settings: ObservableObject {
         useFXR = d.bool(forKey: "useFXR")
         noJITMuteAudio = d.bool(forKey: "noJITMuteAudio")
         winFXR = d.bool(forKey: "winFXR")
+        sessionReuse = d.bool(forKey: "sessionReuse")
         steamLaunchMode = d.string(forKey: "steamLaunchMode") ?? "ask"
         controllerAPI = d.string(forKey: "controllerAPI") ?? "xinput"
     }

@@ -2,9 +2,11 @@
 import Foundation
 import GameController
 import UIKit
+import os
 
 /// Stage 2: runs Windows x86-64 programs through Wine ARM64EC + FEX (xtajit64)
-/// in-process, using a slice of the JIT pool. One Wine session per app run.
+/// in-process, using a slice of the JIT pool. One Wine session per app run; with session reuse
+/// (Settings, docs/SESSION_REUSE.md) later games start in that session.
 final class WineController: ObservableObject, @unchecked Sendable {
     enum State: Equatable { case idle, booting(String), running(String), finished(String, String), failed(String) }
 
@@ -124,6 +126,78 @@ final class WineController: ObservableObject, @unchecked Sendable {
     }
     let linked = mid_wine_linked()
 
+    // ---- Session reuse (docs/SESSION_REUSE.md) ----
+
+    /// Settings › Without JIT › Play another game without restarting (experimental): when a game
+    /// ends, its Wine session stays, and the next game starts in it as a new Windows process.
+    static var reuseEnabled: Bool { UserDefaults.standard.bool(forKey: "sessionReuse") }
+
+    /// What Wine sets up once, for the session's first program: a later game can start in the
+    /// session only when it needs the same.
+    struct SessionKind: Equatable {
+        var noJIT: Bool       // Wine's DLLs from the signed dylibs (WINE_IOS_NOJIT)
+        var aarch64: Bool     // the aarch64 farm (32-bit games through WoW64), else ARM64EC (64-bit)
+        var hidPad: String    // the HID gamepad the wineserver makes when it starts ("" for none)
+        var fxr: Bool         // FXR as the x64 CPU (Settings › Windows games: FXR)
+    }
+    /// The running session's kind (nil before the first program).
+    private(set) var sessionKind: SessionKind?
+    /// Windows programs started in this app run.
+    private(set) var programsThisRun = 0
+    /// The running (or last) session stays when its game ends: Quit game can then leave
+    /// MYIOSDECK open.
+    @Published private(set) var sessionKept = false
+    /// Wine's per-process tables hold a handful of games' processes (docs/SESSION_REUSE.md).
+    static let maxProgramsPerRun = 8
+    /// A 64-bit game's memory stays in use until MYIOSDECK closes: the next one needs this much free.
+    static let minFreeMB = 1536
+
+    static func hidPad(_ api: String) -> String {
+        api == "hid" ? "generic" : api == "dualsense" ? "dualsense" : ""
+    }
+
+    /// Why another game cannot start now (nil: it can, as far as is known without the game;
+    /// `kind` adds the game's own checks).
+    func nextGameRefusal(_ kind: SessionKind? = nil) -> String? {
+        let restart = "To play another, swipe MYIOSDECK away in the app switcher and open it again."
+        guard Self.reuseEnabled else {
+            return "MYIOSDECK runs one Windows game per launch. \(restart) (Settings › Without JIT › Play another game without restarting lets the next game start without that.)"
+        }
+        guard let session = sessionKind, session.noJIT, sessionKept else {
+            return "This Wine session was not kept for another game (it started with JIT, or before Play another game without restarting was on). \(restart)"
+        }
+        guard mid_wine_session_reusable() != 0 else {
+            return "The last game's Wine session is no longer running. \(restart)"
+        }
+        guard programsThisRun < Self.maxProgramsPerRun else {
+            return "\(programsThisRun) games have run in this Wine session, the most it takes. \(restart)"
+        }
+        if let kind {
+            if !kind.noJIT {
+                return "Another game can start in the running Wine session only without JIT. \(restart)"
+            }
+            if kind.aarch64 != session.aarch64 {
+                let was = session.aarch64 ? "32-bit" : "64-bit", now = kind.aarch64 ? "32-bit" : "64-bit"
+                return "The running Wine session is for \(was) games and this one is \(now): Wine sets that up once per session. \(restart)"
+            }
+            if kind.hidPad != session.hidPad {
+                return "This game's controller mode (\(kind.hidPad.isEmpty ? "not a HID gamepad" : "HID gamepad")) differs from the running Wine session's, which Wine sets up when it starts. Choose the same mode for it, or: \(restart)"
+            }
+            if kind.fxr != session.fxr {
+                return "Settings › Windows games: FXR changed since this Wine session started. \(restart)"
+            }
+        }
+        let freeMB = os_proc_available_memory() >> 20
+        if freeMB < Self.minFreeMB {
+            return "Only \(freeMB) MB of memory is free: an earlier game's memory stays in use until MYIOSDECK closes. \(restart)"
+        }
+        return nil
+    }
+
+    /// What kind of start run() is doing (set by the run* helpers just before it).
+    private enum Launch { case program, steam, custom, dock }
+    private var nextLaunch = Launch.program
+
     private let queue = DispatchQueue(label: "myiosdeck.wine", qos: .userInitiated)
 
     var prefixURL: URL {
@@ -150,6 +224,7 @@ final class WineController: ObservableObject, @unchecked Sendable {
         setenv("MADEIRA_STEAM_APPID", String(appID), 1)
         setenv("MADEIRA_STEAM_APPPATH", plan.appPath, 1)
         setenv("MADEIRA_WORKDIR", plan.workingFolder, 1)
+        nextLaunch = .steam
         run(Program(id: plan.exe, title: title, detail: "", graphics: true, noJIT: noJIT, aarch64: is32), args: plan.arguments)
     }
 
@@ -169,11 +244,11 @@ final class WineController: ObservableObject, @unchecked Sendable {
         }
         for k in ["MADEIRA_STEAM_APPID", "MADEIRA_STEAM_APPPATH"] { unsetenv(k) }
         setenv("MADEIRA_WORKDIR", game.windowsWorkdir, 1)
-        customActive = true
+        nextLaunch = .custom
         run(Program(id: game.windowsExe, title: game.name, detail: "", graphics: true, noJIT: noJIT, aarch64: is32), args: game.arguments)
     }
 
-    /// Set while an added game's session runs (no Steam identity for it).
+    /// Set while an added game runs (no Steam identity for it).
     private(set) var customActive = false
 
     /// A Steam game started through Madeira Dock (App/Sources/Steam/MadeiraDock.swift): Wine runs
@@ -191,11 +266,11 @@ final class WineController: ObservableObject, @unchecked Sendable {
         // Our dockhost (engine/pedylib/madeira-dock-signin-wait.patch) reads a longer wait here.
         if noJIT { setenv("MADEIRA_DOCK_SIGNIN_MS", "480000", 1) } else { unsetenv("MADEIRA_DOCK_SIGNIN_MS") }
         dlog("[dock-launch] app=\(game.id) launch-option=\(launchOption) noJIT=\(noJIT ? 1 : 0) signin-wait=\(noJIT ? 480 : 90)s")
-        dockActive = true
+        nextLaunch = .dock
         run(Program(id: MadeiraDock.executable, title: title, detail: "", graphics: true, noJIT: noJIT))
     }
 
-    /// Set while a Dock session runs: watch() polls the host's report (C:\madeira-dock.txt).
+    /// Set while a Dock game runs: watch() polls the host's report (C:\madeira-dock.txt).
     private(set) var dockActive = false
     /// The host's failure, in words, when its report ended with a nonzero result.
     @Published private(set) var dockFailure: String?
@@ -214,6 +289,8 @@ final class WineController: ObservableObject, @unchecked Sendable {
     }
 
     func run(_ program: Program, args: String = "") {
+        let launch = nextLaunch
+        nextLaunch = .program
         // Per-launch variables (runSteamGame) must not outlive a launch that never boots.
         func refuse(_ why: String) {
             for k in ["MADEIRA_STEAM_APPID", "MADEIRA_STEAM_APPPATH", "MADEIRA_WORKDIR"] { unsetenv(k) }
@@ -226,12 +303,26 @@ final class WineController: ObservableObject, @unchecked Sendable {
             // .failed here closed its view and hid the Return bar). Play says why (LibraryView).
             dlog("[wine] start of \(program.title) refused: a program is still running")
             return
-        case .finished:
-            // Madeira's wineserver keeps the first session's permanent objects (a second start
-            // aborts in init_registry); Madeira asks for a restart too (LibraryModel.sessionsThisRun).
-            return refuse("MYIOSDECK runs one Windows game per launch. To play another, swipe MYIOSDECK away in the app switcher and open it again.")
         default: break
         }
+        // Madeira's wineserver cannot start twice in one process (init_registry aborts on
+        // "\Registry"), so a later game either joins the running session (session reuse,
+        // docs/SESSION_REUSE.md) or needs a restart (nextGameRefusal says which, and why).
+        let api = Self.controllerAPI(for: program.id)
+        let noJITSession = program.noJIT && !mid_jit_pool_ready()
+        let kind = SessionKind(noJIT: noJITSession, aarch64: program.aarch64, hidPad: Self.hidPad(api),
+                               fxr: noJITSession && UserDefaults.standard.bool(forKey: "winFXR"))
+        if programsThisRun > 0, let why = nextGameRefusal(kind) {
+            dlog("[session-reuse] \(program.title) not started: \(why)")
+            return refuse(why)
+        }
+        dockActive = launch == .dock
+        customActive = launch == .custom
+        dockFailure = nil
+        // The bridge keeps the wineserver when this program ends (WineProcessBridge.m as patched by
+        // engine/wine/patches/session_reuse.py), so the next game can start in the session.
+        let keep = noJITSession && Self.reuseEnabled
+        if keep { setenv("MYIOSDECK_SESSION_REUSE", "1", 1) } else { unsetenv("MYIOSDECK_SESSION_REUSE") }
         // No JIT: Wine maps its DLLs from the signed dylibs and loads the stub x64 emulator.
         // With JIT, every program (this one too) takes the usual JIT-pool path.
         if program.noJIT && !mid_jit_pool_ready() {
@@ -288,10 +379,9 @@ final class WineController: ObservableObject, @unchecked Sendable {
         // An added (non-Steam) game gets none either.
         if dockActive || customActive { setenv("MADEIRA_DOCK_SESSION", "1", 1) } else { unsetenv("MADEIRA_DOCK_SESSION") }
         state = .booting(program.title)
-        // Controller API for this session (Settings › Controller). Must be in the
+        // Controller API for this session (Settings › Controller, `api` above). Must be in the
         // environment before the wineserver starts: the HID device and the
         // DirectInput joystick are created at session start.
-        let api = Self.controllerAPI(for: program.id)
         sessionProgramID = program.id
         let touchProgram = program.id
         Task { @MainActor in GameInput.shared.load(for: touchProgram) }   // its touch mode: off unless chosen
@@ -319,14 +409,20 @@ final class WineController: ObservableObject, @unchecked Sendable {
             dlog("[display] virtual monitor \(w)x\(h) for \(program.title)")
         }
         let prefix = prefixURL.path
-        dlog("[wine] booting \(program.exe) in \(prefix)")
+        dlog("[wine] booting \(program.exe) in \(prefix)\(programsThisRun > 0 ? " (in the running session, program \(programsThisRun + 1) of this app run)" : "")")
         queue.async {
             var err = [CChar](repeating: 0, count: 512)
             let ok = mid_wine_boot(prefix, program.exe, args, &err, err.count)
             let msg = String(cString: err)
             DispatchQueue.main.async {
                 self.state = ok ? .running(program.title) : .failed(msg)
-                if !ok { dlog("[wine] boot failed: \(msg)") }
+                if ok {
+                    if self.programsThisRun == 0 { self.sessionKind = kind }
+                    self.programsThisRun += 1
+                    self.sessionKept = keep
+                } else {
+                    dlog("[wine] boot failed: \(msg)")
+                }
             }
             if ok { self.watch(program.title) }
         }

@@ -731,6 +731,12 @@ static long host_process_init(const wow_process *p) {
             "TEB slot %#x", (unsigned long long)p->base, (unsigned long long)p->bop, p->tsd_offset);
     if (!fxi_win_tsd_offset) fxi_win_tsd_offset = (int)p->tsd_offset;
     g_last_base = p->base;
+    // A window an exited process left is handed to the next 32-bit process (Wine tears it down
+    // first), and FXI32 finds its instance by the window: that one holds the old process's
+    // blocks and BOP page, so this process's first thread gets a fresh one (docs/SESSION_REUSE.md).
+    if (fx32_wow_process_start(p->base))
+        mid_log("[fxi-wow] window B=%#llx was an exited process's: its FXI32 instance (decoded blocks, BOP page) dropped",
+                (unsigned long long)p->base);
     return 0;
 }
 

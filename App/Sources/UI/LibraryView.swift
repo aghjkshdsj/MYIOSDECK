@@ -99,6 +99,7 @@ struct LibraryView: View {
                 showGameMenu = false; showControllerMenu = false; showTouchMenu = false
                 session.shown = false
                 session.title = ""
+                GameHostView.shared.setStatus(nil)   // Quit game's "Closing…"
             default: break
             }
         }
@@ -131,9 +132,16 @@ struct LibraryView: View {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { showTouchMenu = true }
                 }
                 Button("Hide game (keeps running)") { session.shown = false }
+                if wine.sessionKept {
+                    Button("Quit game") { requestQuit() }
+                }
                 Button("Quit game and close MYIOSDECK", role: .destructive) { CrashReporter.shared.quitApp() }
             } message: {
-                Text("A Windows game can only be stopped by closing MYIOSDECK; unsaved progress is lost.")
+                if wine.sessionKept {
+                    Text("Quit game asks the game to close, as its window's close button does: confirm in the game if it asks. MYIOSDECK stays open for the next game. Quit game and close MYIOSDECK stops it at once; unsaved progress is lost.")
+                } else {
+                    Text("A Windows game can only be stopped by closing MYIOSDECK; unsaved progress is lost.")
+                }
             }
             .confirmationDialog("Controller", isPresented: $showControllerMenu, titleVisibility: .visible) {
                 ForEach(Self.controllerOrder, id: \.self) { api in
@@ -173,6 +181,16 @@ struct LibraryView: View {
     @State private var showControllerMenu = false
     @State private var showTouchMenu = false
     @State private var openingSubmenu = false   // the game menu closes before a submenu opens
+
+    /// Quit game with session reuse: asks the game to close with Alt+F4 through its normal input,
+    /// as Madeira's Quit game does (Library.swift requestQuit), so it can save and run its own exit
+    /// dialog. Its view stays up until the session ends; the Wine session stays for the next game.
+    private func requestQuit() {
+        dlog("[ui] quit requested: Alt+F4 to \(session.title)")
+        mid_post_key(0x12, 1); mid_post_key(0x73, 1)   // VK_MENU, VK_F4
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { mid_post_key(0x73, 0); mid_post_key(0x12, 0) }
+        GameHostView.shared.setStatus("Closing \(session.title)… confirm in the game if it asks")
+    }
 
     private static let controllerOrder = ["xinput", "dinput", "hid", "dualsense", "keyboard"]
     private static let controllerNames = [
@@ -260,9 +278,9 @@ struct LibraryView: View {
         switch wine.state {
         case .booting, .running:
             return "\(session.title.isEmpty ? "A game" : session.title) is still running: Return to it at the top of the screen."
-        case .finished:
-            return "MYIOSDECK runs one Windows game per launch. To play another, swipe MYIOSDECK away in the app switcher and open it again."
-        default: return nil
+        default:
+            // After a game: another can start in the same Wine session (session reuse), or not.
+            return wine.programsThisRun > 0 ? wine.nextGameRefusal() : nil
         }
     }
 
@@ -407,7 +425,12 @@ struct LibraryView: View {
                         .font(.caption).foregroundStyle(Deck.dim)
                 case .booting(let t): HStack { ProgressView(); Text("Starting Wine for \(t)…").foregroundStyle(Deck.dim) }
                 case .running(let t): StatusRow(label: "Running \(t)", detail: "Watch the Logs tab for its output.", level: .good)
-                case .finished(let t, let how): StatusRow(label: "\(t) finished", detail: "\(how). Its output is in the Logs tab. Restart MYIOSDECK to run another Windows program.", level: how.contains("error") ? .warn : .good)
+                case .finished(let t, let how):
+                    StatusRow(label: "\(t) finished",
+                              detail: "\(how). Its output is in the Logs tab. " + (wine.nextGameRefusal() == nil
+                                  ? "Another program can start now, in the same Wine session."
+                                  : "Restart MYIOSDECK to run another Windows program."),
+                              level: how.contains("error") ? .warn : .good)
                 case .failed(let why): StatusRow(label: "Wine failed", detail: why, level: .bad)
                 }
             }

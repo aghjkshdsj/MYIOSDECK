@@ -52,6 +52,14 @@ Block *fxi_win_exit_block(uint64_t rip) {
     return b;
 }
 
+// Another program starts in the running Wine session (docs/SESSION_REUSE.md): no block of an
+// earlier one is known to be valid. fxi_invalidate frees nothing, so threads still inside a
+// dropped block (a process that has not finished exiting) translate again from its start.
+unsigned fxi_win_invalidate_all(void) {
+    struct Fxi *vm = __atomic_load_n(&g_win_vm, __ATOMIC_ACQUIRE);
+    return vm ? fxi_invalidate(vm, 0, 0) : 0;
+}
+
 FxiCpu *fxi_win_cpu_new(void) {
     pthread_once(&g_win_once, win_vm_init);
     FxiCpu *c = NULL;

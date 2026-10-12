@@ -19,8 +19,14 @@ bool mid_wine_linked(void);
 /// Boot Wine with `prefix` (created from the bundled template on first use)
 /// and run `exe` (a path inside the prefix, e.g. "C:\\windows\\system32\\cmd.exe",
 /// or a bare name looked up in system32). Requires the JIT pool. Wine can only
-/// be started once per app run. Returns false and fills err on failure.
+/// be started once per app run; with MYIOSDECK_SESSION_REUSE=1 a later call starts `exe` in
+/// the running session instead, once mid_wine_session_reusable() (docs/SESSION_REUSE.md).
+/// Returns false and fills err on failure.
 bool mid_wine_boot(const char *prefix, const char *exe, const char *args, char *err, size_t errlen);
+
+/// 1 when another program can start in the running Wine session now: the last one ended and
+/// MYIOSDECK_SESSION_REUSE=1 kept the wineserver (mid_wine_boot also wants a no-JIT session).
+int mid_wine_session_reusable(void);
 
 /// Create the prefix from the bundled template if it is new (idempotent), so
 /// files can be placed in drive_c before Wine first boots. No-op without Wine.

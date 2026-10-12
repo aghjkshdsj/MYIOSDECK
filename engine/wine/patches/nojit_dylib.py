@@ -58,7 +58,11 @@ struct ios_nojit_pe_instance
 };
 extern _Bool mid_pe_dylib_instance( void *handle, const char *path, struct ios_nojit_pe_instance *out,
                                     char *err, size_t errlen );
-static struct ios_nojit_image ios_nojit_images[512];
+/* One entry per DLL per Windows process (each process maps its own instance): a game loads a
+ * hundred or so, and with session reuse (docs/SESSION_REUSE.md) every game of an app run adds its
+ * own. Entries are never freed: an exited process's instances stay mapped. */
+#define IOS_NOJIT_MAX_IMAGES 4096
+static struct ios_nojit_image ios_nojit_images[IOS_NOJIT_MAX_IMAGES];
 static int ios_nojit_count;
 static pthread_mutex_t ios_nojit_lock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -256,7 +260,7 @@ static struct ios_nojit_image *ios_nojit_load( const UNICODE_STRING *nt_name, un
             {
                 pthread_mutex_unlock( &ios_nojit_lock );
                 ios_nojit_trace( "[nojit] %s: mapped again, and another instance failed: %s\n", name,
-                                 ios_nojit_count >= 512 ? "too many images" : err );
+                                 ios_nojit_count >= IOS_NOJIT_MAX_IMAGES ? "too many images" : err );
                 return NULL;
             }
             *in.teb_offset = ios_teb_tls_slot_offset;

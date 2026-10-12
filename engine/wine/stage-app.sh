@@ -155,6 +155,24 @@ int winios_game_picture_rect(int dw, int dh, int *x, int *y, int *w, int *h) {
     open(p, "w").write(s)
 PY
 
+# Another game in the running Wine session (docs/SESSION_REUSE.md): with MYIOSDECK_SESSION_REUSE=1
+# a session's end keeps the wineserver, and the next program boots as a new top-level process.
+python3 "$HERE/patches/session_reuse.py" "$M" app
+
+# Winios keeps the client rects of game-mode windows (above); a new session starts without the
+# previous game's, as it does without its Metal windows (winios_session_reset).
+python3 - "$A/Winios/Winios.m" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+mark = "[g_game_clients removeAllObjects]"
+anchor = "        [g_game_metal removeAllObjects];\n"
+if mark not in s:
+    assert s.count(anchor) == 1 and "static NSMutableDictionary<NSNumber *, NSValue *> *g_game_clients;" in s, "Winios.m session reset"
+    s = s.replace(anchor, anchor + "        [g_game_clients removeAllObjects];   /* MYIOSDECK (engine/wine/stage-app.sh) */\n")
+    open(p, "w").write(s)
+PY
+
 LINK=""
 for f in "$LIBS"/*.a; do LINK="$LINK \$(SRCROOT)/${f#"$ROOT/"}"; done
 mkdir -p "$ROOT/Config" "$ROOT/App/Generated"

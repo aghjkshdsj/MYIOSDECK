@@ -69,6 +69,10 @@ int fxi_win_df_source(FxiCpu *c, uint64_t *rip);
 uint64_t fxi_win_profile(FxiCpu *c, uint64_t *lookups, uint64_t *exits, uint64_t *blocks);
 /// Profiler: calls into native code per target since the previous call (racy by design).
 int fxi_win_exit_counts(FxiCpu *c, uint64_t *targets, uint64_t *counts, int max);
+/// Drops every translated block (another program starts in the running Wine session: an earlier
+/// one's code may be gone and its addresses taken). A thread inside a dropped block translates
+/// again from its start. Returns the number dropped.
+unsigned fxi_win_invalidate_all(void);
 
 #ifdef __cplusplus
 }
