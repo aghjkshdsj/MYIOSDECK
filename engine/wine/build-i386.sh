@@ -64,6 +64,10 @@ for e in "${SKIP_REASON[@]}"; do IFS='|' read -r -a n <<< "${e%%=*}"; SKIP+=("${
 is_in() { local x="$1"; shift; for y in "$@"; do [ "$x" = "$y" ] && return 0; done; return 1; }
 
 step_wine() {
+    # The 32-bit dinput's iOS pad gets an Rz axis and trigger buttons (patches/dinput_ios_pad.py),
+    # from the pristine file. 64-bit games keep Madeira's prebuilt dinput.
+    git -C "$W" checkout -- dlls/dinput/joystick_ios.c
+    python3 "$ROOT/engine/wine/patches/dinput_ios_pad.py" "$W"
     mkdir -p "$B"
     cd "$B"
     if [ ! -f config.status ]; then

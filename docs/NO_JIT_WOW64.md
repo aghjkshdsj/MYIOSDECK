@@ -375,6 +375,12 @@ kernelbase, user32, DXMT d3d11/dxgi/winemetal and hello-x86.exe decode 100%.
   process_driver_events), and the timer made dinput's input thread one of those waits while the
   launcher was still talking to it. Reverted. The host now logs which DLL reads the pad
   (`fxi_wow_host.c` note_gamepad), so the next log tells XInput from DirectInput.
+- **Run 19 (build 148):** the game reads the pad once its launcher's PAD Setting names "Madeira
+  Gamepad" (600 reads by DINPUT8.dll in 3 s). Its stock preset is a PlayStation-style
+  DirectInput pad (confirm on button 3, the circle), and its menus scrolled with nothing held:
+  the device has no Rz, so DIJOYSTATE.lRz reads 0, a range end, where that layout keeps the
+  right stick's vertical. `patches/dinput_ios_pad.py` (i386 dinput only) adds Rz as the right
+  stick's vertical, centred at rest, and the triggers as buttons 11 and 12.
 
 ### Stage 6: speed
 - FXR32 (guest registers pinned, as FXR), native fast paths for hot 32-bit system functions

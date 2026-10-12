@@ -8,6 +8,7 @@ on:
   push:
     branches: ["main", "claude/**"]
     paths: ["engine/wine/build-i386.sh", "engine/wine/PIN", "engine/dxmt/PIN", "engine/wine/patches/wow64win_atoms.py",
+            "engine/wine/patches/dinput_ios_pad.py",
             ".github/workflows/wine-i386.yml"]
   workflow_dispatch:
 
