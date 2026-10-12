@@ -99,9 +99,19 @@ changes how the first game boots. B is used instead: the first game boots exactl
 **32-bit and 64-bit.** A session is ARM64EC (64-bit games, `MADEIRA_USE_ARM64EC=1`, the
 `arm64ec-windows` farm in `system32`) or aarch64 (32-bit games through WoW64, the `aarch64-windows`
 farm). The main image sets `main_image_info`, `is_arm64ec()` and the farm the bridge links, and
-nothing switches them later. Madeira has cross-architecture children (`ios_load_child_ec_ntdll`
-for an x64 child of an aarch64 session), but the farm in `system32` is the session's, so a later
-game must be of the session's kind; a game of the other kind needs a restart, as before.
+nothing switches them later. A later game of the other kind runs the way Madeira's
+cross-architecture children do, and the bridge keeps the session's farm in `system32` for it
+(it relinked `system32` for every launch, which would swap the running session's DLLs):
+- a 64-bit game in a 32-bit (aarch64) session gets its own ARM64EC ntdll
+  (`ios_load_child_ec_ntdll`, which every no-JIT process takes anyway, `nojit_child.py`) and
+  finds the ARM64EC system DLLs in `sysx64` when the `system32` name is the aarch64 one;
+- a 32-bit game in a 64-bit (ARM64EC) session gets the aarch64 ntdll (`nojit_child.py`) and
+  `wow64.dll`, `wow64win.dll` and `xtajit.dll`, which only the aarch64 farm has and which the
+  bridge links into an ARM64EC `system32` as non-colliding names; its guest window is reserved
+  when it starts (a 64-bit session arms the WoW64 windows lazily).
+The no-JIT map hook picks each DLL's signed dylib by that DLL's machine, not by the session. This
+is new ground for the 32-bit-after-64-bit order (Madeira calls that direction "future" for its
+JIT path): the phone decides.
 
 ## 3. What was implemented
 
@@ -118,7 +128,7 @@ game must be of the session's kind; a game of the other kind needs a restart, as
 | `engine/fxi/fxi_win.c` | `fxi_win_invalidate_all()`: the app drops FXI's x64 blocks before a later game starts (an earlier game's freed code ranges may hold the new game's code). `fxi_invalidate` frees nothing, so a thread still inside a dropped block translates again. |
 | `engine/fxi32/fxi_wow.c`, `App/Sources/Native/fxi_wow_host.c` | `fx32_wow_process_start()` at `BTCpuProcessInit`: a window an exited process left gets a fresh FXI32 instance. The old one held that process's blocks and its BOP page address (the new process allocates its own), and its BOP exit blocks are never invalidated. Tested in `wow_test.c` (check 9). |
 | `App/Sources/Native/wine_host.c` | `mid_wine_boot` for a later program: no JIT slice, no server start, no log truncation; resets the exit status, flushes FXI, starts the program in the session. The log follower keeps reading while a session is kept. |
-| `App/Sources/Engine/WineController.swift` | `SessionKind` (no JIT, ARM64EC or aarch64, HID pad, FXR) recorded at the first program; `nextGameRefusal` says why a later game cannot join (setting off, session not kept, kind differs, FXR on for a 64-bit game, 8 programs already, less than 1.5 GB free) or nil. The Dock/added-game flags are now per launch (they stayed set for the whole app run). |
+| `App/Sources/Engine/WineController.swift` | `SessionKind` (no JIT, ARM64EC or aarch64, HID pad, FXR) recorded at the first program; `nextGameRefusal` says why a later game cannot join (setting off, session not kept, kind differs, FXR on for a 64-bit game, less than 1.5 GB free) or nil. There is no limit on the number of games. The Dock/added-game flags are now per launch (they stayed set for the whole app run). |
 | `App/Sources/UI/LibraryView.swift`, `SettingsView.swift` | The setting; Play is enabled again after a game ends when another can join; the game menu gets **Quit game**, which asks the game to close with Alt+F4 through its normal input (as Madeira's own Quit game does, `Library.swift` `requestQuit`), keeps its view up with "Closing…" until it exits, and leaves MYIOSDECK open. If the game still runs 10 s later the log gets a `[quit-watch]` report (`mid_wow_thread_report`, `fxi_wow_host.c`: each 32-bit thread's system call in progress or x86 code, its native function, the return addresses on its stack) and the menu offers **Force quit** (`WineController.forceQuit`, the server's Force quit above); the library then says the game "was force-quit". **Quit game and close MYIOSDECK** stays for a game even Force quit does not end. |
 | `engine/wine/stage-app.sh` | Winios's per-window client rects are dropped at a new session's start, with its Metal windows. |
 
@@ -157,10 +167,13 @@ RAM"), and the frozen picture is the shared game layer's last frame while nothin
   game leaves running (not asleep) still keep its window, as before.
 - **Metal objects of an ended 32-bit game are not released**: winemetal keeps no list per
   process, so the textures and buffers behind an exited game's handles stay with the window gone.
-- **Same kind only**: no JIT, the same 32-bit/64-bit class, the same HID pad mode (DirectInput
-  and XInput are per process and can differ), and FXI rather than FXR for 64-bit games (FXR has
-  no way to drop code it translated). At most 8 programs per app run (the process tables
-  hold that many games with their helpers).
+- **What a later game must share**: no JIT, the same HID pad mode (DirectInput and XInput are
+  per process and can differ), and FXI rather than FXR for 64-bit games (FXR has no way to drop
+  code it translated). 32-bit and 64-bit games may follow each other (section 2), and there is
+  no limit on the number of games: what stops another game is memory (a 64-bit game's stays in
+  use, and less than 1.5 GB free asks for a restart). Concurrent 32-bit windows are limited to 8
+  (Madeira's map): a window an ended game cannot give back (a thread still running x86 code in
+  it) uses one up.
 - **Idle server**: between games the wineserver thread wakes every millisecond, as it does
   during a game.
 
@@ -172,7 +185,9 @@ RAM"), and the frozen picture is the shared game layer's last frame while nothin
    another program can start.
 3. Start the other 64-bit game. Log lines to look for: `[session-reuse] ... starts in the running
    Wine session as a new top-level process`, `[Wine child] ... PE loaded`, `x64 blocks dropped`.
-4. Quit it, then try a 32-bit game: MYIOSDECK asks for a restart (the session is 64-bit).
+4. Quit it, then start a 32-bit game (Forager) in the same session: look for `[session-reuse]
+   ... starts in the running Wine session as a new top-level process (32-bit` and `[wow-window]
+   reserved`. Then a 64-bit game again.
 5. After a restart: Steins;Gate, Quit game, Steins;Gate again (a 32-bit session): look for
    `[wow-window] ... released` and, at the second start, `FXI32 instance ... dropped`.
 6. The game's own quit (from its menu) ends the session the same way.

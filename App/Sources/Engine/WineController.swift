@@ -149,9 +149,9 @@ final class WineController: ObservableObject, @unchecked Sendable {
     @Published private(set) var sessionKept = false
     /// Force quit was asked for the running game (its end is reported as that, not as a crash).
     private let forceQuitAsked = OSAllocatedUnfairLock(initialState: false)
-    /// Wine's per-process tables hold a handful of games' processes (docs/SESSION_REUSE.md).
-    static let maxProgramsPerRun = 8
-    /// A 64-bit game's memory stays in use until MYIOSDECK closes: the next one needs this much free.
+    /// No limit on the number of games: an ended 32-bit game's window comes back when the next
+    /// one starts (docs/SESSION_REUSE.md). A 64-bit game's memory still stays in use until
+    /// MYIOSDECK closes, so the next game needs this much free (iOS ends an app that runs out).
     static let minFreeMB = 1536
 
     /// Force quit (a kept session's game that does not close after Quit game): the Wine server
@@ -180,17 +180,12 @@ final class WineController: ObservableObject, @unchecked Sendable {
         guard mid_wine_session_reusable() != 0 else {
             return "The last game's Wine session is no longer running. \(restart)"
         }
-        guard programsThisRun < Self.maxProgramsPerRun else {
-            return "\(programsThisRun) games have run in this Wine session, the most it takes. \(restart)"
-        }
         if let kind {
             if !kind.noJIT {
                 return "Another game can start in the running Wine session only without JIT. \(restart)"
             }
-            if kind.aarch64 != session.aarch64 {
-                let was = session.aarch64 ? "32-bit" : "64-bit", now = kind.aarch64 ? "32-bit" : "64-bit"
-                return "The running Wine session is for \(was) games and this one is \(now): Wine sets that up once per session. \(restart)"
-            }
+            // A 64-bit game after a 32-bit one, or the reverse, runs as Madeira's cross-architecture
+            // processes do (the bridge keeps the session's system32; docs/SESSION_REUSE.md).
             if kind.hidPad != session.hidPad {
                 return "This game's controller mode (\(kind.hidPad.isEmpty ? "not a HID gamepad" : "HID gamepad")) differs from the running Wine session's, which Wine sets up when it starts. Choose the same mode for it, or: \(restart)"
             }

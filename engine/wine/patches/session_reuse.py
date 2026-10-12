@@ -49,6 +49,7 @@ APP_HELPERS = MARK + r'''
 static int g_session_booted;      /* __wine_main has run in this app run */
 static int g_next_fd = -1;        /* a later program's end of its server socketpair */
 static int g_stale_children;      /* children of earlier programs still listed when this one started */
+static BOOL g_session_arm64ec;    /* the first program's farm in system32: ARM64EC (64-bit) or aarch64 */
 extern void wine_ios_child_main(int argc, char *argv[], int child_fd_socket);   /* loader_ios.c */
 extern _Thread_local uint16_t ios_child_main_machine;   /* process_ios.c (WORD) */
 extern void ios_child_boot_unlock(void);                 /* loader_ios.c */
@@ -78,6 +79,16 @@ APP_FIXES = [
     ('    setenv("WINESERVERSOCKET", fd_str, 1);\n',
      '    if (g_session_booted) g_next_fd = pair[1];   /* MYIOSDECK session reuse: a later program */\n'
      '    else setenv("WINESERVERSOCKET", fd_str, 1);\n'),
+    # A later program of the other kind (a 64-bit game after a 32-bit one, or the reverse) runs as
+    # Madeira's cross-architecture children do: system32 stays the session's farm, whose ntdll and
+    # system DLLs the running session uses (an x64 process finds its own in sysx64, a 32-bit one
+    # its wow64 DLLs, which only the aarch64 farm has and which are linked into an ARM64EC
+    # system32 as non-colliding names). Relinking it to the new program's farm would swap the
+    # session's DLLs under it.
+    ("        if (is_i386_target) use_arm64ec = NO;\n",
+     "        if (is_i386_target) use_arm64ec = NO;\n"
+     "        if (g_session_booted) use_arm64ec = g_session_arm64ec;   /* MYIOSDECK session reuse */\n"
+     "        else g_session_arm64ec = use_arm64ec;\n"),
     # argv and the image path stay readable after the boot (main_argv points at them).
     ("        char exe_path[512];\n", "        static char exe_path[512];   /* MYIOSDECK session reuse: main_argv[1] */\n"),
     ("        char *argv[72];\n", "        static char *argv[72];   /* MYIOSDECK session reuse: main_argv */\n"),
