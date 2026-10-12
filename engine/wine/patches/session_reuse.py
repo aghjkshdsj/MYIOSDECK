@@ -21,8 +21,9 @@ loader builds its process from argv and the environment, as for the session's fi
          (64 entries, never reused) reuses the entries of exited processes once it is full, and
          the session's first program closes its socket for good when it exits (fd_socket = -1, so
          a late thread of it cannot close a number another process got since).
+  win32u build/win32u-unix/class_ios.c (engine/wine/build-unix.sh): [winproc] diagnostics, below.
 
-Usage: session_reuse.py <madeira checkout> app|ntdll. Idempotent (marker line).
+Usage: session_reuse.py <madeira checkout> app|ntdll|win32u. Idempotent (marker line).
 """
 import sys
 
@@ -44,6 +45,7 @@ extern void wine_ios_child_main(int argc, char *argv[], int child_fd_socket);   
 extern _Thread_local uint16_t ios_child_main_machine;   /* process_ios.c (WORD) */
 extern void ios_child_boot_unlock(void);                 /* loader_ios.c */
 extern void ios_wow_window_release_current(void);        /* virtual_ios.c */
+extern void ios_wow_window_retire_current(void);         /* virtual_ios.c */
 extern pthread_key_t ios_teb_tls_key;
 extern int madeira_live_game_children(char *buf, int len, double max_age);   /* process_ios.c */
 static int myiosdeck_session_reuse(void)
@@ -133,6 +135,12 @@ APP_FIXES = [
      '        dprintf(STDERR_FILENO, "[WineProc] stopping wineserver...\\n");\n'
      '        wineserver_stop();\n',
      '        if (keep_session) {\n'
+     '            /* The first program\'s guest window is never handed on (it holds the PEB every later\n'
+     '             * process is cloned from), but it must stop answering for this thread\'s pthread_t:\n'
+     '             * ios_wow_slot_current() falls back to the slot\'s boot thread, and a later boot thread\n'
+     '             * can get the same pthread_t (build 156: Forager booted into Steins;Gate\'s launcher\'s\n'
+     '             * window). Retired, the slot keeps its memory and matches nothing. */\n'
+     '            if (!next_program) ios_wow_window_retire_current();\n'
      '            dprintf(STDERR_FILENO, "[session-reuse] the wineserver keeps running: another program can start "\n'
      '                    "in this session\\n");\n'
      '        } else {\n'
@@ -198,6 +206,59 @@ NTDLL_FIXES = [
 ]
 
 
+# Diagnostics (win32u's build/win32u-unix/class_ios.c, from build-unix.sh): Forager started as the
+# second program of a kept session (build 156) dispatched a message to a window procedure that is
+# 0x3c in its guest window. Every window procedure allocated in win32u's session-wide table (index,
+# value, process, caller), and every dispatch whose procedure converts to a guest address below
+# 64 KB (never code), are logged as [winproc] lines, 300 per run.
+WIN32U_HELPER = MARK + r'''
+extern ULONG_PTR ios_wow_base(void);
+static unsigned int myiosdeck_winproc_lines;
+static void myiosdeck_winproc_note( const WINDOWPROC *proc, WNDPROC func, BOOL ansi, void *caller )
+{
+    if (__atomic_fetch_add( &myiosdeck_winproc_lines, 1, __ATOMIC_RELAXED ) >= 300) return;
+    fprintf( stderr, "[winproc] new %#x %c %p (peb %p, B %#lx, caller %p)\n",
+             (unsigned int)(proc - winproc_array), ansi ? 'A' : 'W', func, NtCurrentTeb()->Peb,
+             (unsigned long)ios_wow_base(), caller );
+}
+
+'''
+
+WIN32U_FIXES = [
+    ("static inline WINDOWPROC *alloc_winproc_ptr( WNDPROC func, BOOL ansi )\n",
+     WIN32U_HELPER + "static inline WINDOWPROC *alloc_winproc_ptr( WNDPROC func, BOOL ansi )\n"),
+    ("            if (ansi) proc->procA = func;\n"
+     "            else proc->procW = func;\n"
+     "            TRACE_(win)( \"allocated %p for %c %p (%d/%d used)\\n\",\n",
+     "            if (ansi) proc->procA = func;\n"
+     "            else proc->procW = func;\n"
+     "            myiosdeck_winproc_note( proc, func, ansi, __builtin_return_address( 0 ) );\n"
+     "            TRACE_(win)( \"allocated %p for %c %p (%d/%d used)\\n\",\n"),
+    ("    if (!params->procA) params->procA = params->func;\n"
+     "    if (!params->procW) params->procW = params->func;\n"
+     "}\n",
+     "    if (!params->procA) params->procA = params->func;\n"
+     "    if (!params->procW) params->procW = params->func;\n"
+     "    {   /* MYIOSDECK diagnostics: a 32-bit program's procedure below 64 KB is never code */\n"
+     "        ULONG_PTR b = ios_wow_base();\n"
+     "        ULONG a = (ULONG)(ULONG_PTR)params->procA, w = (ULONG)(ULONG_PTR)params->procW;\n"
+     "        if (b && ((params->procA && a < 0x10000) || (params->procW && w < 0x10000)) &&\n"
+     "            __atomic_fetch_add( &myiosdeck_winproc_lines, 1, __ATOMIC_RELAXED ) < 300)\n"
+     "        {\n"
+     "            WINDOWPROC *p = get_winproc_ptr( params->func );\n"
+     "            int idx = (p && p != WINPROC_PROC16) ? (int)(p - winproc_array) : -1;\n"
+     "            fprintf( stderr, \"[winproc] BAD hwnd %p msg %#x func %p -> A %p W %p ansi %d ansi_dst %d \"\n"
+     "                     \"entry %d (A %p W %p) used %u peb %p own-builtins %d B %#lx\\n\",\n"
+     "                     params->hwnd, params->msg, params->func, params->procA, params->procW,\n"
+     "                     params->ansi, params->ansi_dst, idx, idx >= 0 ? p->procA : NULL,\n"
+     "                     idx >= 0 ? p->procW : NULL, winproc_used, NtCurrentTeb()->Peb,\n"
+     "                     ios_client_procs_for_peb() != NULL, (unsigned long)b );\n"
+     "        }\n"
+     "    }\n"
+     "}\n"),
+]
+
+
 def apply(path, fixes, what):
     s = open(path).read()
     if MARK in s:
@@ -217,8 +278,10 @@ def main():
         apply(root + "/app/Madeira/WineProcessBridge.m", APP_FIXES, what)
     elif what == "ntdll":
         apply(root + "/build/ntdll-unix/server_ios.c", NTDLL_FIXES, what)
+    elif what == "win32u":
+        apply(root + "/build/win32u-unix/class_ios.c", WIN32U_FIXES, what)
     else:
-        sys.exit("usage: session_reuse.py <madeira checkout> app|ntdll")
+        sys.exit("usage: session_reuse.py <madeira checkout> app|ntdll|win32u")
 
 
 if __name__ == "__main__":
