@@ -1148,7 +1148,9 @@ Block *gpta_lower(struct Fxi *vm, Block *b) {
                         }
                 }
                 if (to == t + 1) {
-                    t->p = step_trace_handler(t, (unsigned)edge[i]);
+                    // Arithmetic adjacent-edge handlers remain compiled for
+                    // comparison, but the measured front-end regression in
+                    // iteration 21 warrants reverting their selection.
                     for (int si = 0; si < 4; si++)
                         for (int cc = 0; cc < 6; cc++)
                             if (t->p == t_jresult[si][cc]) t->p = t_jresult_trace[edge[i]][si][cc];

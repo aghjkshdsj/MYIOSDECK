@@ -9,7 +9,8 @@ executable code.
 
 Both suites remain below the 50% target. These are ARM64 Linux arithmetic means
 of exact native/engine median ratios; displayed values are truncated. All
-required Linux, Windows-state and iOS compile gates passed through a8564c7.
+required Linux, Windows-state and iOS compile gates passed on every measured
+row below, including f7548e5. Interrupted or defective trials are recorded separately.
 
 | Commit | CI run | Standard GPTA | Held-out GPTA | Standard FXI | Held-out FXI |
 |---|---|---:|---:|---:|---:|
@@ -29,6 +30,7 @@ required Linux, Windows-state and iOS compile gates passed through a8564c7.
 | 21b3843 | [38138628709](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38138628709) | 26.30% | 29.83% | 8.33% | 14.03% |
 | c5e05cd | [38138855206](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38138855206) | 26.76% | 29.89% | 8.30% | 13.96% |
 | a8564c7 | [38139160111](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38139160111) | 26.25% | 30.52% | 8.20% | 13.98% |
+| f7548e5 | [38196176226](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38196176226) | 24.71% | 30.18% | 8.29% | 13.99% |
 
 The third trial (result-width branches and simplified floating comparisons)
 regressed. Its ARM64, x86 and iOS gates passed. That trial is rolled back in
@@ -82,6 +84,22 @@ including all high XMM sources. All gates passed. The next trial specializes
 single-instruction SSE memory arithmetic across all four address scales.
 The standard SIMD perf profile and disassembly identify runtime scale loads
 in those handlers; its speed effect remains unmeasured until CI completes.
+
+The combined f7548e5 trial adds static ARM64 scalar floating branches, adjacent
+arithmetic trace edges, and fixed XMM destination offsets. The first attempts
+at 8bd055a and 5c001ab lost their ARM runners during compilation (x86 and iOS
+passed); their ARM retries are pending. fb5901c introduced a replication bug:
+the last trace copy inherited an adjacent-only branch from the first copy,
+causing the standard memory workload to crash. Its run and the superseded
+470a08d/cc644e1 runs are invalid, not speed results. f7548e5 fixes per-copy
+replication, adds direct backedge regression cases, and passes all gates.
+Compilers now process the SSE scale variants in separate translation units
+with bounded parallelism.
+
+The corrected combined trial regresses the standard mean. Its standard branch
+profile retires fewer instructions but shows much higher front-end stalls.
+The next comparison disables arithmetic adjacent-edge handler selection while
+retaining the replication correctness fix. No held-out internals informed it.
 
 Raw per-sample nanoseconds, checksums, commands and return codes are in each
 run's `gpta-evidence-ubuntu-24.04-arm` artifact (`gpta-results.json`). The first

@@ -158,12 +158,28 @@ jobs:
     timeout-minutes: 75
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/gpta-ios-ccache
+          key: gpta-ios-ccache-macos26-v1-${{ github.sha }}
+          restore-keys: gpta-ios-ccache-macos26-v1-
+      - name: Cache unchanged iOS compiler inputs
+        run: |
+          brew list ccache >/dev/null 2>&1 || brew install ccache
+          echo "CCACHE_DIR=$HOME/.cache/gpta-ios-ccache" >> "$GITHUB_ENV"
+          CCACHE_DIR="$HOME/.cache/gpta-ios-ccache" ccache --set-config=max_size=512M
+          CCACHE_DIR="$HOME/.cache/gpta-ios-ccache" ccache --set-config=compiler_check=content
+          cat > "$RUNNER_TEMP/ios-clang-cached" <<'EOF'
+          #!/bin/sh
+          exec ccache "$(xcrun -sdk iphoneos --find clang)" -isysroot "$(xcrun -sdk iphoneos --show-sdk-path)" "$@"
+          EOF
+          chmod +x "$RUNNER_TEMP/ios-clang-cached"
       - name: Compile GPTA for iOS arm64
         run: |
           cd engine/gpta
           xcrun -sdk iphoneos clang --version | head -1
           srcs="gpta_pin_step_trace.c gpta_pin_step_trace_r1.c gpta_pin_fcj_trace.c gpta_pin_narrow.c gpta_pin_op3r.c gpta_pin_op3r_r1.c gpta_pin_xmem.c gpta_pin_xmem_r1.c gpta_pin_xmem_s1.c gpta_pin_xmem_s1_r1.c gpta_pin_xmem_s2.c gpta_pin_xmem_s2_r1.c gpta_pin_xmem_s3.c gpta_pin_xmem_s3_r1.c gpta_pin_x3.c gpta_pin_arj.c gpta_pin_lcj.c gpta_pin_stub.c gpta_pin_step1.c gpta_pin_step2.c gpta_pin_step3.c gpta_pin_mem.c gpta_pin_mem2.c gpta_pin_fuse.c gpta_pin_sse.c gpta_pin_alu.c gpta_pin_br.c gpta_pin.c gpta_pin_alu_r1.c gpta_pin_sse_r1.c gpta_pin_mem_r1.c gpta_pin_mem2_r1.c gpta_pin_step3_r1.c gpta_pin_br_r1.c gpta_pin_step1_r1.c gpta_pin_step2_r1.c fxi_core.c fxi_decode.c fxi_flags.c fxi_ops.c fxi_sse.c fxi_atomic.c fxi_x87.c fxi_win.c"
-          printf '%s\n' $srcs | xargs -P 2 -I{} sh -c 'xcrun -sdk iphoneos clang -arch arm64 -O2 -std=gnu11 -ffp-contract=off -mllvm -enable-tail-merge=false -miphoneos-version-min=17.0 -c "{}" -o "/tmp/$(basename {} .c).o"'
+          printf '%s\n' $srcs | xargs -P 2 -I{} sh -c '"$RUNNER_TEMP/ios-clang-cached" -arch arm64 -O2 -std=gnu11 -ffp-contract=off -mllvm -enable-tail-merge=false -miphoneos-version-min=17.0 -c "{}" -o "/tmp/$(basename {} .c).o"'
           echo "preserve_none: $(echo '__attribute__((preserve_none)) void f(void){}' | xcrun -sdk iphoneos clang -arch arm64 -x c -c - -o /dev/null 2>&1 && echo supported || echo NOT supported)"
           bash probe_cc.sh "xcrun -sdk iphoneos clang -arch arm64" || true
           ls -la /tmp/gpta_pin*.o
