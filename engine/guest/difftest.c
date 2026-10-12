@@ -911,12 +911,31 @@ static void gpta_fcj_trace(void) {
     STEP_TRACE_CASE(CC, OP, "q", "rax", "%%rax", "-13"); \
     STEP_TRACE_CASE(CC, OP, "l", "eax", "%%eax", "13")
 #define STEP_TRACE_COND(CC) STEP_TRACE_FORMS(CC, "add"); STEP_TRACE_FORMS(CC, "sub")
+#define STEP_BACKEDGE(OP, SUF, DST, SRC, START, LIMIT, CC) do { \
+    u64 r = START; \
+    __asm__ volatile("1:\t" OP SUF " " SRC ", %%" DST "\n\tcmp" SUF \
+        " $" LIMIT ", %%" DST "\n\tj" #CC " 1b" \
+        : "+a"(r) : "d"((u64)3) : "cc"); \
+    h = mix(h, r); \
+} while (0)
 static void gpta_step_trace(void) {
     u64 h = 14695981039346656037ull;
     for (int i = 0; i < N; i++) {
         STEP_TRACE_COND(b); STEP_TRACE_COND(ae); STEP_TRACE_COND(e); STEP_TRACE_COND(ne);
         STEP_TRACE_COND(be); STEP_TRACE_COND(a); STEP_TRACE_COND(l); STEP_TRACE_COND(ge);
         STEP_TRACE_COND(le); STEP_TRACE_COND(g);
+        // All handlers in these one-block traces have replicas. The last copy
+        // must retain its linked backedge instead of stepping past the block.
+        STEP_BACKEDGE("add", "q", "rax", "$3", 0, "19", b);
+        STEP_BACKEDGE("sub", "l", "eax", "$3", 30, "13", ae);
+        STEP_BACKEDGE("add", "q", "rax", "%%rdx", 0, "18", be);
+        STEP_BACKEDGE("sub", "l", "eax", "%%edx", 30, "12", a);
+        STEP_BACKEDGE("add", "l", "eax", "$1", 0, "17", ne);
+        STEP_BACKEDGE("add", "q", "rax", "$1", ~0ull, "0", e);
+        STEP_BACKEDGE("add", "q", "rax", "%%rdx", (u64)-20, "7", l);
+        STEP_BACKEDGE("sub", "l", "eax", "%%edx", 20, "-7", ge);
+        STEP_BACKEDGE("add", "l", "eax", "$3", (u64)-20, "7", le);
+        STEP_BACKEDGE("sub", "q", "rax", "$3", 20, "-7", g);
     }
     out("gpta_step_trace", h);
 }

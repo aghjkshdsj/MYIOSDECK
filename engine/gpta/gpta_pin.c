@@ -316,10 +316,14 @@ static void replicate(Uop *u, int M, int copies) {
         if (!rmap_get(u[j].p)) all = 0;
     }
     for (int j = 0; j < M; j++) {
-        PFn r = rmap_get(u[j].p);
-        if (!r) continue;
-        for (int c = 0; c < copies; c++)
-            if (k[j] ? k[j] == 2 : all && (c & 1)) u[c * M + j].p = r;
+        for (int c = 0; c < copies; c++) {
+            if (!(k[j] ? k[j] == 2 : all && (c & 1))) continue;
+            // The final copy can have a non-adjacent backedge where earlier
+            // copies have an adjacent-only handler. Replicate this copy's
+            // actual handler, never overwrite it with the first copy's kind.
+            PFn r = rmap_get(u[c * M + j].p);
+            if (r) u[c * M + j].p = r;
+        }
     }
     free(k);
 }
