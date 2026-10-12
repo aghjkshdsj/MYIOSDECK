@@ -9,8 +9,7 @@ executable code.
 
 Both suites remain below the 50% target. These are ARM64 Linux arithmetic means
 of exact native/engine median ratios; displayed values are truncated. All
-required Linux, Windows-state and iOS compile gates passed through 92c2ee4.
-The last listed run has passed ARM64; x86 and iOS were pending at this update.
+required Linux, Windows-state and iOS compile gates passed through a8564c7.
 
 | Commit | CI run | Standard GPTA | Held-out GPTA | Standard FXI | Held-out FXI |
 |---|---|---:|---:|---:|---:|
@@ -24,7 +23,12 @@ The last listed run has passed ARM64; x86 and iOS were pending at this update.
 | 75b2c45 | [38104450060](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38104450060) | 25.07% | 23.73% | 8.28% | 13.95% |
 | b6ce108 | [38105141310](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38105141310) | 26.82% | 24.14% | 8.20% | 13.99% |
 | 828ed0e | [38137673954](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38137673954) | 25.72% | 24.48% | 8.37% | 14.04% |
-| 6bb20ff (iOS gate pending) | [38137973007](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38137973007) | 25.50% | 29.74% | 8.22% | 14.00% |
+| 6bb20ff | [38137973007](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38137973007) | 25.50% | 29.74% | 8.22% | 14.00% |
+| bcef2e9 | [38138298861](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38138298861) | 26.45% | 28.78% | 8.25% | 13.90% |
+| 9aac850 | [38138524225](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38138524225) | 25.80% | 29.46% | 8.22% | 14.00% |
+| 21b3843 | [38138628709](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38138628709) | 26.30% | 29.83% | 8.33% | 14.03% |
+| c5e05cd | [38138855206](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38138855206) | 26.76% | 29.89% | 8.30% | 13.96% |
+| a8564c7 | [38139160111](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38139160111) | 26.25% | 30.52% | 8.20% | 13.98% |
 
 The third trial (result-width branches and simplified floating comparisons)
 regressed. Its ARM64, x86 and iOS gates passed. That trial is rolled back in
@@ -65,13 +69,19 @@ held-out mean increased. The trace trials retain each guest branch and
 specialize only an adjacent successor proven during ordinary trace construction.
 A subsequent isolated code-layout trial aligns static handler entries to 32
 bytes, motivated by front-end stalls in the standard memory/branch profiles.
-It has no measured result yet.
+Its measured results are recorded above; both means remain below 50%.
 
-The narrow-register trial passes ARM64 and x86 gates (iOS pending). The
+The narrow-register trial passes all gates. The
 standard branch profile also identifies indexed immediate stores as costly;
 the next trial specializes all four address scales for every immediate-store
 width and adds exact-fault sites 20-23. The held-out source remains frozen and
 is not used to select these changes.
+
+a8564c7 fixes both source-register offsets for SSE copy/arithmetic pairs,
+including all high XMM sources. All gates passed. The next trial specializes
+single-instruction SSE memory arithmetic across all four address scales.
+The standard SIMD perf profile and disassembly identify runtime scale loads
+in those handlers; its speed effect remains unmeasured until CI completes.
 
 Raw per-sample nanoseconds, checksums, commands and return codes are in each
 run's `gpta-evidence-ubuntu-24.04-arm` artifact (`gpta-results.json`). The first

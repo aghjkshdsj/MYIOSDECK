@@ -596,7 +596,7 @@ static void lower_one(Out *o, const Uop *u) {
             if (!strcmp(x->name, "movx")) { put_uop(o, u, (lean(u) ? t_xl_movxz : t_xl_movx[u->scale])[dc][u->base][u->index]); return; }
             int xm = xmem_index(x->name);
             if (xm >= 0 && simple_mem(u)) { put_uop(o, u, t_xmemb[xm][dc][u->base]); return; }
-            if (xm >= 0) { put_uop(o, u, t_xmemi[xm][dc][u->base][u->index]); return; }
+            if (xm >= 0) { put_uop(o, u, t_xmemi[xm][u->scale][dc][u->base][u->index]); return; }
             y = with_ea(o, u, x->rt[dc]);
         }
         if (d->c2) { uint8_t ix[16]; gpta_xshuffle_index(x->name, (unsigned)u->imm, ix); memcpy(y->xidx, ix, 16); }

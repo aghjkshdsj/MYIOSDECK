@@ -625,6 +625,10 @@ static void fz_xindex(void) {
     XM_CASE(OP, "xmm7", "16(%[p],%[k],2)", 8); \
     XM_CASE(OP, "xmm8", "-16(%[p],%[k],4)", 12); \
     XM_CASE(OP, "xmm15", "16(%[p],%[k],8)", 4); \
+    XM_CASE(OP, "xmm15", "-16(%[p],%[k])", 48); \
+    XM_CASE(OP, "xmm8", "-16(%[p],%[k],2)", 24); \
+    XM_CASE(OP, "xmm7", "16(%[p],%[k],4)", 8); \
+    XM_CASE(OP, "xmm0", "-16(%[p],%[k],8)", 6); \
     XM_CASE(OP, "xmm3", "16(%[p])", 0); \
 } while (0)
 static void gpta_xmem(void) {
