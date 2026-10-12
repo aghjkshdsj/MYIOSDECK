@@ -126,7 +126,7 @@ jobs:
           "$RUNNER_TEMP/winstate_test" guests/winstate.elf loop || rc=1
           "$RUNNER_TEMP/winstate_test" guests/winstate.elf winexit || rc=1
           "$RUNNER_TEMP/winstate_test" guests/winstate.elf winnative || rc=1
-          for s in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23; do "$RUNNER_TEMP/winstate_test" guests/winstate.elf fault $s || rc=1; done
+          for s in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29; do "$RUNNER_TEMP/winstate_test" guests/winstate.elf fault $s || rc=1; done
           objdump -d --no-show-raw-insn -j gpta_h "$RUNNER_TEMP/gpta/gpta" > /tmp/gpta_h.txt
           python3 engine/gpta-probe/precise.py /tmp/gpta_h.txt || rc=1
           exit $rc
@@ -178,7 +178,7 @@ jobs:
         run: |
           cd engine/gpta
           xcrun -sdk iphoneos clang --version | head -1
-          srcs="gpta_pin_unary_stub.c gpta_pin_shconst.c gpta_pin_shconst_r1.c gpta_pin_step_trace.c gpta_pin_step_trace_r1.c gpta_pin_fcj_trace.c gpta_pin_narrow.c gpta_pin_op3r.c gpta_pin_op3r_r1.c gpta_pin_xmem.c gpta_pin_xmem_r1.c gpta_pin_xmem_s1.c gpta_pin_xmem_s1_r1.c gpta_pin_xmem_s2.c gpta_pin_xmem_s2_r1.c gpta_pin_xmem_s3.c gpta_pin_xmem_s3_r1.c gpta_pin_x3.c gpta_pin_arj.c gpta_pin_lcj.c gpta_pin_stub.c gpta_pin_step1.c gpta_pin_step2.c gpta_pin_step3.c gpta_pin_mem.c gpta_pin_mem2.c gpta_pin_fuse.c gpta_pin_sse.c gpta_pin_alu.c gpta_pin_br.c gpta_pin.c gpta_pin_alu_r1.c gpta_pin_sse_r1.c gpta_pin_mem_r1.c gpta_pin_mem2_r1.c gpta_pin_step3_r1.c gpta_pin_br_r1.c gpta_pin_step1_r1.c gpta_pin_step2_r1.c fxi_core.c fxi_decode.c fxi_flags.c fxi_ops.c fxi_sse.c fxi_atomic.c fxi_x87.c fxi_win.c"
+          srcs="gpta_pin_xzero.c gpta_pin_xzero_r1.c gpta_pin_unary_stub.c gpta_pin_shconst.c gpta_pin_shconst_r1.c gpta_pin_step_trace.c gpta_pin_step_trace_r1.c gpta_pin_fcj_trace.c gpta_pin_narrow.c gpta_pin_op3r.c gpta_pin_op3r_r1.c gpta_pin_xmem.c gpta_pin_xmem_r1.c gpta_pin_xmem_s1.c gpta_pin_xmem_s1_r1.c gpta_pin_xmem_s2.c gpta_pin_xmem_s2_r1.c gpta_pin_xmem_s3.c gpta_pin_xmem_s3_r1.c gpta_pin_x3.c gpta_pin_arj.c gpta_pin_lcj.c gpta_pin_stub.c gpta_pin_step1.c gpta_pin_step2.c gpta_pin_step3.c gpta_pin_mem.c gpta_pin_mem2.c gpta_pin_fuse.c gpta_pin_sse.c gpta_pin_alu.c gpta_pin_br.c gpta_pin.c gpta_pin_alu_r1.c gpta_pin_sse_r1.c gpta_pin_mem_r1.c gpta_pin_mem2_r1.c gpta_pin_step3_r1.c gpta_pin_br_r1.c gpta_pin_step1_r1.c gpta_pin_step2_r1.c fxi_core.c fxi_decode.c fxi_flags.c fxi_ops.c fxi_sse.c fxi_atomic.c fxi_x87.c fxi_win.c"
           printf '%s\n' $srcs | xargs -P 2 -I{} sh -c '"$RUNNER_TEMP/ios-clang-cached" -arch arm64 -O2 -std=gnu11 -ffp-contract=off -mllvm -enable-tail-merge=false -miphoneos-version-min=17.0 -c "{}" -o "/tmp/$(basename {} .c).o"'
           echo "preserve_none: $(echo '__attribute__((preserve_none)) void f(void){}' | xcrun -sdk iphoneos clang -arch arm64 -x c -c - -o /dev/null 2>&1 && echo supported || echo NOT supported)"
           bash probe_cc.sh "xcrun -sdk iphoneos clang -arch arm64" || true

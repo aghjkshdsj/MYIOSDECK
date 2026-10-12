@@ -22,6 +22,7 @@
 #include "gpta_pin.h"
 #include "gpta_pin_shconst.h"
 #include "gpta_pin_unary_stub.h"
+#include "gpta_pin_xzero.h"
 
 static uint16_t k_cctab[16];   // cmov truth tables per condition code (pcond_tab)
 
@@ -304,6 +305,7 @@ static void rmap_init(void) {
     RMAP(t_fjc_rr); RMAP(t_fjc_ri); RMAP(t_fjt_ri); RMAP(t_fjt_rr); RMAP(t_fjt_rrx); RMAP(t_sic); RMAP(t_sicr);
     RMAP(t_sii_trace); RMAP(t_sri_trace);
     RMAP(t_shconst);
+    RMAP(t_xlz); RMAP(t_xsz);
 }
 // u: `copies` copies of M uops (a block: one copy). A handler at several places in a copy takes
 // the replica at every second place. When every handler of the copy has a replica, those at a
@@ -602,7 +604,11 @@ static void lower_one(Out *o, const Uop *u) {
             y = put_uop(o, u, x->rr[u->dst][u->src]);
         } else {
             if (!ea_ok(u)) break;      // fs/gs operand: FXI's handler
-            if (!strcmp(x->name, "movx")) { put_uop(o, u, (lean(u) ? t_xl_movxz : t_xl_movx[u->scale])[dc][u->base][u->index]); return; }
+            if (!strcmp(x->name, "movx")) {
+                const PFn (*tab)[17][17] = u->disp ? t_xl_movx[u->scale] :
+                    u->scale ? t_xlz[u->scale - 1] : t_xl_movxz;
+                put_uop(o, u, tab[dc][u->base][u->index]); return;
+            }
             int xm = xmem_index(x->name);
             if (xm >= 0 && simple_mem(u)) { put_uop(o, u, t_xmemb[xm][dc][u->base]); return; }
             if (xm >= 0) {
@@ -630,7 +636,11 @@ static void lower_one(Out *o, const Uop *u) {
         if (id >= XS_XG) { if (S < 0) break; put_uop(o, u, t_xg[id - XS_XG][dc][S]); return; }
         if (!ea_ok(u)) break;
         switch (id) {
-        case XS_MOVX_MR: put_uop(o, u, (lean(u) ? t_xs_movxz : t_xs_movx[u->scale])[sc][u->base][u->index]); return;
+        case XS_MOVX_MR: {
+            const PFn (*tab)[17][17] = u->disp ? t_xs_movx[u->scale] :
+                u->scale ? t_xsz[u->scale - 1] : t_xs_movxz;
+            put_uop(o, u, tab[sc][u->base][u->index]); return;
+        }
         case XS_MOVSS_RM: if (simple_mem(u)) put_uop(o, u, t_xl_movss[dc][u->base]); else with_ea(o, u, t_xlt_movss[dc]); return;
         case XS_MOVSD_RM: if (simple_mem(u)) put_uop(o, u, t_xl_movsd[dc][u->base]); else with_ea(o, u, t_xlt_movsd[dc]); return;
         case XS_MOVSS_MR: if (simple_mem(u)) put_uop(o, u, t_xs_movss[sc][u->base]); else with_ea(o, u, t_xst_movss[sc]); return;
@@ -1271,6 +1281,8 @@ static void hidx_build(void) {
     hidx_tab(&t_jresult_trace[0][0][0], 48);
     hidx_tab((const PFn *)t_shconst, sizeof t_shconst / sizeof(PFn));
     hidx_tab((const PFn *)t_fs_unary, sizeof t_fs_unary / sizeof(PFn));
+    hidx_tab((const PFn *)t_xlz, sizeof t_xlz / sizeof(PFn));
+    hidx_tab((const PFn *)t_xsz, sizeof t_xsz / sizeof(PFn));
     static const PFn one[] = { p_stop, p_nop, p_jmp, p_goto, p_call, p_ret, p_call_T, p_jmp_T, p_call_M, p_jmp_M, p_syscall,
                                p_nat_tlsget, p_nat_csenter, p_nat_csleave };
     hidx_tab(one, sizeof one / sizeof one[0]);

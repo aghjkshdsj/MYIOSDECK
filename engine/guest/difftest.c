@@ -739,6 +739,12 @@ static void gpta_cf_flow(void) {
         : : [p] "r"(arr), [k] "r"((u64)17) : REG, "memory"); \
     for (int q = 0; q < 48; q++) h = mix(h, arr[q]); \
 } while (0)
+#define SCALE_MOVE_ZERO(SCALE, REG) do { \
+    __asm__ volatile("movdqu (%[p],%[k]," #SCALE "), %%" REG \
+        "\n\tmovdqu %%" REG ", (%[s],%[k]," #SCALE ")" \
+        : : [p] "r"((char *)arr + 1), [s] "r"((char *)arr + 145), [k] "r"((u64)17) : REG, "memory"); \
+    for (int q = 0; q < 48; q++) h = mix(h, arr[q]); \
+} while (0)
 static void gpta_scaled_moves(void) {
     static u64 arr[48] __attribute__((aligned(16)));
     u64 h = 14695981039346656037ull;
@@ -746,6 +752,12 @@ static void gpta_scaled_moves(void) {
         for (int q = 0; q < 48; q++) arr[q] = val();
         SCALE_MOVE(1, "xmm0"); SCALE_MOVE(2, "xmm7");
         SCALE_MOVE(4, "xmm8"); SCALE_MOVE(8, "xmm15");
+        SCALE_MOVE_ZERO(1, "xmm0"); SCALE_MOVE_ZERO(2, "xmm7");
+        SCALE_MOVE_ZERO(4, "xmm8"); SCALE_MOVE_ZERO(8, "xmm15");
+        SCALE_MOVE_ZERO(2, "xmm0"); SCALE_MOVE_ZERO(4, "xmm7");
+        SCALE_MOVE_ZERO(8, "xmm8"); SCALE_MOVE_ZERO(2, "xmm15");
+        SCALE_MOVE_ZERO(4, "xmm0"); SCALE_MOVE_ZERO(8, "xmm7");
+        SCALE_MOVE_ZERO(2, "xmm8"); SCALE_MOVE_ZERO(4, "xmm15");
     }
     out("gpta_scaled_moves", h);
 }
