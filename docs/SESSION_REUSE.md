@@ -137,8 +137,8 @@ game must be of the session's kind; a game of the other kind needs a restart, as
   holds at most 8).
 - **Same kind only**: no JIT, the same 32-bit/64-bit class, the same HID pad mode (DirectInput
   and XInput are per process and can differ), and FXI rather than FXR for 64-bit games (FXR has
-  no way to drop code it translated). At most 8 programs per app
-  run (the process tables hold that many games with their helpers).
+  no way to drop code it translated). At most 8 programs per app run (the process tables
+  hold that many games with their helpers).
 - **Idle server**: between games the wineserver thread wakes every millisecond, as it does
   during a game.
 
