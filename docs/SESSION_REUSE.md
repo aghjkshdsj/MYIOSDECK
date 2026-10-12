@@ -108,7 +108,9 @@ game must be of the session's kind; a game of the other kind needs a restart, as
 | where | what |
 |---|---|
 | `engine/wine/patches/session_reuse.py app` (from `stage-app.sh`) | `WineProcessBridge.m`: with `MYIOSDECK_SESSION_REUSE=1` the end of a session leaves the wineserver running. The next `wine_process_start` gives the new program a socketpair of its own, injects the server end, and its thread calls `wine_ios_child_main` instead of `__wine_main`; `ios_main_image_i386` keeps the session's value. After the program ends (it longjmps back as before), the thread does what `ios_child_thread_entry` does for a child (boot lock, WoW window of a failed boot, TEB key) and reports the exit status, which ntdll reports only for the first program. Children of earlier games that never released their slot do not hold the session's `MADEIRA_WAIT_CHILDREN` wait. The running flag drops after the thread's own clean-up, so the next game's per-launch variables are not unset by the last one. `wine_session_reusable()` says whether a program can start now. |
+| same, `app` | When a kept session's first program ends, its 32-bit guest window is retired (`ios_wow_window_retire_current`): it keeps its memory and matches nothing. `ios_wow_slot_current()` falls back to a window's boot thread, and a later boot thread can get the same `pthread_t`: on the phone (build 156) Forager booted into Steins;Gate's dead launcher's window. |
 | `engine/wine/patches/session_reuse.py ntdll` (from `build-unix.sh`) | `server_ios.c`: the process socket table (64 entries, never reused, and readers walked past its end once a 65th process registered) reuses an exited process's entry once full; the first program's socket number is forgotten when it closes. |
+| `engine/wine/patches/session_reuse.py win32u` (from `build-unix.sh`) | Wine's `dlls/win32u/window.c`: win32u's client objects (`client_objects[]`, the WND behind each window handle index) are per process in Wine and shared by every pseudo-process here. A window the wineserver made for this process itself (its desktop and message windows) has no WND, and its index was usually an exited process's window, whose WND, freed or not, was still in the slot. The second Forager (build 158) dispatched WM_PARENTNOTIFY to its message window through such a WND and called its window procedure, read as 0x3c. A WND is now the window's only when its own handle is the window's full handle; window enumeration skips the others. Also `[winproc]` diagnostics in `class_ios.c` (window procedures allocated, and any dispatched below 64 KB). |
 | `engine/wine/patches/nojit_dylib.py` | The no-JIT image table, one entry per DLL per process, grows from 512 to 4096 entries. 512 lasted only a few processes. |
 | `engine/fxi/fxi_win.c` | `fxi_win_invalidate_all()`: the app drops FXI's x64 blocks before a later game starts (an earlier game's freed code ranges may hold the new game's code). `fxi_invalidate` frees nothing, so a thread still inside a dropped block translates again. |
 | `engine/fxi32/fxi_wow.c`, `App/Sources/Native/fxi_wow_host.c` | `fx32_wow_process_start()` at `BTCpuProcessInit`: a window an exited process left gets a fresh FXI32 instance. The old one held that process's blocks and its BOP page address (the new process allocates its own), and its BOP exit blocks are never invalidated. Tested in `wow_test.c` (check 9). |
@@ -118,6 +120,11 @@ game must be of the session's kind; a game of the other kind needs a restart, as
 | `engine/wine/stage-app.sh` | Winios's per-window client rects are dropped at a new session's start, with its Metal windows. |
 
 ## 4. Limits
+
+Phone results so far (Forager twice, Steins;Gate then Forager; builds 155-158): the second game
+boots in the kept session every time, and died about 4.5 s in on the stale WND above until
+that fix. Other per-process state that pseudo-processes share the same way is the main risk left
+(win32u's menus and icons share `client_objects[]` too, but they always have a client object).
 
 - **The first game is never reclaimed.** It is the session's initial process: no process socket
   entry, so none of the child exit clean-up. For a 32-bit first game its guest window also holds

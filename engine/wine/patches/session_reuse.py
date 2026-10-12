@@ -21,7 +21,9 @@ loader builds its process from argv and the environment, as for the session's fi
          (64 entries, never reused) reuses the entries of exited processes once it is full, and
          the session's first program closes its socket for good when it exits (fd_socket = -1, so
          a late thread of it cannot close a number another process got since).
-  win32u build/win32u-unix/class_ios.c (engine/wine/build-unix.sh): [winproc] diagnostics, below.
+  win32u wine/dlls/win32u/window.c (engine/wine/build-unix.sh): a window's client object (WND) is
+         taken from the shared slot only when it is that window's (WINDOW_FIXES, below); and
+         build/win32u-unix/class_ios.c: [winproc] diagnostics.
 
 Usage: session_reuse.py <madeira checkout> app|ntdll|win32u. Idempotent (marker line).
 """
@@ -260,6 +262,29 @@ WIN32U_FIXES = [
 ]
 
 
+# The fix (Wine's dlls/win32u/window.c, from build-unix.sh): win32u keeps one client object (the
+# WND) per user handle index, client_objects[], per process in Wine and shared by every
+# pseudo-process here, and takes the slot as this window's once the session's shared handle table
+# says the window belongs to this process. A window the wineserver itself made for this process
+# (its desktop and message windows, made for a process without them) has no client object, and its
+# index was usually an exited process's window: the slot still held that process's WND, freed or
+# not. Forager's second start in a kept session (build 158) dispatched WM_PARENTNOTIFY to its
+# message window through such a WND and called its window procedure, 0x3c. A WND is the window's
+# only if its own handle is the window's full handle (generation included); otherwise the window
+# has no client object here, as in Wine.
+WINDOW_FIXES = [
+    ("    else ptr = client_objects[index];\n",
+     "    else ptr = client_objects[index];\n"
+     "    " + MARK + "\n"
+     "    if (ptr && ptr != OBJ_OTHER_PROCESS && type == NTUSER_OBJ_WINDOW && ((WND *)ptr)->handle != handle)\n"
+     "        ptr = NULL;   /* another (exited) process's WND in this index's slot */\n"),
+    ("        if (tid != -1 && entry.tid != tid) continue;\n",
+     "        if (tid != -1 && entry.tid != tid) continue;\n"
+     "        if (type == NTUSER_OBJ_WINDOW && client_objects[i] &&\n"
+     "            ((WND *)client_objects[i])->handle != *handle) continue;   /* MYIOSDECK: another process's WND */\n"),
+]
+
+
 def apply(path, fixes, what):
     s = open(path).read()
     if MARK in s:
@@ -281,6 +306,7 @@ def main():
         apply(root + "/build/ntdll-unix/server_ios.c", NTDLL_FIXES, what)
     elif what == "win32u":
         apply(root + "/build/win32u-unix/class_ios.c", WIN32U_FIXES, what)
+        apply(root + "/wine/dlls/win32u/window.c", WINDOW_FIXES, what + " window.c")
     else:
         sys.exit("usage: session_reuse.py <madeira checkout> app|ntdll|win32u")
 

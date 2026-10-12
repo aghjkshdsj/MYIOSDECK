@@ -814,8 +814,8 @@ extern uintptr_t get_window_long_ptr(void *hwnd, int offset, int ansi);
 extern uintptr_t get_class_long_ptr(void *hwnd, int offset, int ansi);
 extern unsigned int get_window_thread(void *hwnd, unsigned int *process);
 
-// The window a bad window procedure was called for (user32's WINPROC_wrapper and its callers keep
-// the window in edx): its class, its procedures as win32u resolves them, its thread and process.
+// The window a bad window procedure was called for: its class, its procedures as win32u resolves
+// them, its thread and process.
 static void window_report(uint32_t hwnd) {
     void *h = (void *)(uintptr_t)hwnd;
     unsigned short name[64];
@@ -855,7 +855,10 @@ static void fetch_fault_report(wow_thread *t) {
                 w[4], w[5], w[6], w[7]);
     }
 #if MYIOSDECK_WITH_WINE
-    if (fx32_wow_eip(c) < 0x10000) window_report(fx32_wow_reg(c, FX32_EDX));
+    // A call through a bad window procedure: user32's WINPROC_wrapper pushed (hwnd, msg, wparam,
+    // lparam) for it, so the window is the first argument above the return address.
+    uint32_t hwnd = 0;
+    if (fx32_wow_eip(c) < 0x10000 && rd_guest(t->proc->base, esp + 4, &hwnd, 4) && hwnd) window_report(hwnd);
 #endif
     fatal_report(t);   // eip, the last jumps with their code, the last system calls, the modules
     pthread_mutex_unlock(&g_note_lock);
