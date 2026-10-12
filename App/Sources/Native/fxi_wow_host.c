@@ -449,11 +449,20 @@ static void find_terminate(wow_thread *t, uint32_t stub_ret) {
 }
 
 // The 32-bit program ends itself (NtTerminateProcess(0 or -1)): why is in its last steps. Once
-// per run: who called it (return addresses on the stack), its last system calls, its modules.
+// per process: who called it (return addresses on the stack), its last system calls, its modules.
 static void exit_report(wow_thread *t, uint32_t handle, uint32_t code) {
     if (handle && handle != 0xffffffffu) return;   // another process
-    static int reported;
-    if (__atomic_exchange_n(&reported, 1, __ATOMIC_ACQ_REL)) return;
+    // Once per process (its CPU module's process block), for the first 8: a launcher, its game,
+    // and the games after them in the same Wine session (docs/SESSION_REUSE.md).
+    static const void *reported[8];
+    int slot = -1;
+    for (int i = 0; i < 8 && slot < 0; i++) {
+        const void *r = __atomic_load_n(&reported[i], __ATOMIC_ACQUIRE);
+        if (r == t->proc) return;
+        if (!r && __atomic_compare_exchange_n(&reported[i], &r, t->proc, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) slot = i;
+        else if (r == t->proc) return;
+    }
+    if (slot < 0) return;
     uint64_t base = t->proc->base;
     mid_log("[fxi-wow] the 32-bit program ends itself: NtTerminateProcess(%s, exit code %#x = %u), %llu system calls and "
             "%llu unix calls on this thread", handle ? "self" : "0", code, code, (unsigned long long)t->syscalls,
@@ -793,6 +802,27 @@ static long host_simulate(void *entry_ctx) {
     }
 }
 
+// An x86 fault fetching code: a jump to an address with no code (Forager's second start in a kept
+// session went to guest 0x42, build 155). How it got there, the first 4 times per run: the
+// registers, the last jumps, the return addresses on the stack (a call through a bad pointer
+// leaves its own on top), the last system calls.
+static void fetch_fault_report(wow_thread *t) {
+    static int reports;
+    if (__atomic_fetch_add(&reports, 1, __ATOMIC_RELAXED) >= 4) return;
+    Fx32Cpu *c = t->cpu;
+    pthread_mutex_lock(&g_note_lock);   // the static buffers below and in the reports
+    mid_log("[fxi-wow]   eax %08x ecx %08x edx %08x ebx %08x esp %08x ebp %08x esi %08x edi %08x (TEB32 %#x, B=%#llx)",
+            fx32_wow_reg(c, FX32_EAX), fx32_wow_reg(c, FX32_ECX), fx32_wow_reg(c, FX32_EDX), fx32_wow_reg(c, FX32_EBX),
+            fx32_wow_reg(c, FX32_ESP), fx32_wow_reg(c, FX32_EBP), fx32_wow_reg(c, FX32_ESI), fx32_wow_reg(c, FX32_EDI),
+            t->teb32, (unsigned long long)t->proc->base);
+    static wow_module mods[160];
+    int nm = wow_modules(t->proc->base, t->teb32, mods, 160);
+    mid_log("[fxi-wow]   return addresses on the x86 stack, innermost first:");
+    stack_report(t, mods, nm, 16);
+    fatal_report(t);   // eip, the last jumps with their code, the last system calls, the modules
+    pthread_mutex_unlock(&g_note_lock);
+}
+
 // Every exception the 64-bit side dispatches. One raised while this thread interprets x86 code
 // (a host fault in guest memory) becomes the guest's: the state at the faulting instruction goes
 // to the CPU area, and dispatch continues from BTCpuSimulate's frame, where wow64's handler
@@ -823,6 +853,7 @@ static long host_reset(uint8_t **ptrs) {
         memcpy(&a, rec + 0x28, 8);
         mid_log("[fxi-wow] x86 fault %08x at %#x (address %#llx%s)", code, eip, (unsigned long long)a, fetch ? ", fetching code" : "");
     }
+    if (fetch) fetch_fault_report(t);
     memcpy(ctx, t->entry_ctx, 0x390);                           // ARM64_NT_CONTEXT
     return 0;
 }
