@@ -164,6 +164,8 @@ void mid_post_touch(int phase, int x, int y) {
 }
 extern void winios_game_overlay_show(int shown, void *window);   /* Winios.m, engine/wine/stage-app.sh */
 void mid_game_overlay_show(int shown, void *window) { winios_game_overlay_show(shown, window); }
+extern int winios_game_picture_rect(int dw, int dh, int *x, int *y, int *w, int *h);   /* Winios.m, engine/wine/stage-app.sh */
+int mid_game_picture_rect(int dw, int dh, int *x, int *y, int *w, int *h) { return winios_game_picture_rect(dw, dh, x, y, w, h); }
 
 extern void madeira_seed_prefix_if_needed(const char *prefix_path);
 void mid_wine_seed_prefix(const char *prefix) { madeira_seed_prefix_if_needed(prefix); }
@@ -263,6 +265,7 @@ void mid_post_mouse_button(unsigned int flags) { (void)flags; }
 void mid_post_pointer(int x, int y, unsigned int flags, int data) { (void)x; (void)y; (void)flags; (void)data; }
 void mid_post_touch(int phase, int x, int y) { (void)phase; (void)x; (void)y; }
 void mid_game_overlay_show(int shown, void *window) { (void)shown; (void)window; }
+int mid_game_picture_rect(int dw, int dh, int *x, int *y, int *w, int *h) { (void)dw; (void)dh; (void)x; (void)y; (void)w; (void)h; return 0; }
 void mid_pad_set(int slot, int connected, uint16_t buttons, uint8_t lt, uint8_t rt,
                  int16_t lx, int16_t ly, int16_t rx, int16_t ry) {
     (void)slot; (void)connected; (void)buttons; (void)lt; (void)rt; (void)lx; (void)ly; (void)rx; (void)ry;

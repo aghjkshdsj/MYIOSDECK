@@ -108,13 +108,14 @@ final class WineController: ObservableObject, @unchecked Sendable {
             ?? UserDefaults.standard.string(forKey: "controllerAPI") ?? "xinput"
     }
 
-    /// In-game switch (the game menu). Saved for the next launch either way, also as this
-    /// program's own choice; applied now unless the mode needs a device this session was not
-    /// started with. Returns whether it took effect now.
+    /// In-game switch (the game menu). Saved as this program's own choice for its next launch
+    /// (Settings › Controller stays the default of every other game: Steins;Gate's DirectInput
+    /// started Crab Game with it); applied now unless the mode needs a device this session was
+    /// not started with. Returns whether it took effect now.
     @discardableResult
     func switchController(to api: String) -> Bool {
-        UserDefaults.standard.set(api, forKey: "controllerAPI")
-        if !sessionProgramID.isEmpty { UserDefaults.standard.set(api, forKey: "controllerAPI.\(sessionProgramID)") }
+        if sessionProgramID.isEmpty { UserDefaults.standard.set(api, forKey: "controllerAPI") }
+        else { UserDefaults.standard.set(api, forKey: "controllerAPI.\(sessionProgramID)") }
         let needsStart = Self.sessionStartAPIs.contains(api) && api != sessionAPI
         dlog("[xinput] in-game switch to \(api)\(needsStart ? " (applies at next launch)" : "")")
         guard !needsStart else { return false }

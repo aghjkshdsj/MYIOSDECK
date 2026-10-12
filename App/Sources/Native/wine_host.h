@@ -74,6 +74,12 @@ void mid_post_touch(int phase, int x, int y);
 /// or before the first such window.
 void mid_game_overlay_show(int shown, void *window);
 
+/// The desktop rectangle the game view shows, in pixels: the client area of the window a game
+/// presents in (below the title bar of a window with a frame), found as the window presenting
+/// through Metal or, failing that, a visible window as large as the view's drawable (dw x dh).
+/// 0 when there is none (the view shows the whole desktop then). Main thread.
+int mid_game_picture_rect(int dw, int dh, int *x, int *y, int *w, int *h);
+
 /// Diagnostics (fxi_wow_host.c): log every system and unix call of a 32-bit program for this
 /// long after a click or key press (bounded per input and per run).
 void mid_wow_trace_calls(double seconds);

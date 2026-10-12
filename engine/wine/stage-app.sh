@@ -100,6 +100,61 @@ void winios_game_overlay_show(int shown, void *window) {
     open(p, "w").write(s)
 PY
 
+# The game view shows the client area of the window a game presents in, which is not the
+# desktop's corner when that window has a frame: Crab Game (Unity windowed, 1566x752 at 0,0)
+# draws from 3,29, and Steins;Gate's 1286x752 window holds a 1280x720 picture the view stretches
+# to the desktop's width, so taps and the drawn cursor missed what they pointed at. Winios keeps
+# game-mode windows' frames but not their client rects; this keeps the visible ones, and
+# winios_game_picture_rect() answers the presenting window's for GameInput.swift (main thread):
+# a window presenting through Metal (64-bit DXMT marks it), else a visible window as large as the
+# game view's drawable (DXMT sizes it to the back buffer; the 32-bit path marks no window) and at
+# least a quarter of the desktop, so a launcher's dialog never counts.
+python3 - "$A/Winios/Winios.m" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+mark = "winios_game_picture_rect"
+decl = "static NSMutableSet<NSNumber *> *g_game_metal;"
+frame = ("        if (g_comp_game) {   /* game-mode windows, see winios_game_window_shown */\n"
+         "            g_px_rects[key] = [NSValue valueWithCGRect:CGRectMake(x, y, w, h)];\n")
+if mark not in s:
+    assert s.count(decl) == 1 and s.count(frame) == 1, "Winios.m game-window anchors"
+    i = s.index("\n", s.index(decl)) + 1
+    s = s[:i] + r'''
+/* MYIOSDECK (engine/wine/stage-app.sh): game mode, visible top-level hwnd -> client rect in
+ * desktop pixels. */
+static NSMutableDictionary<NSNumber *, NSValue *> *g_game_clients;
+static void winios_note_game_client(NSNumber *key, int visible, int cx, int cy, int cw, int ch) {
+    if (!g_game_clients) g_game_clients = [NSMutableDictionary new];
+    if (visible && cw > 0 && ch > 0) g_game_clients[key] = [NSValue valueWithCGRect:CGRectMake(cx, cy, cw, ch)];
+    else [g_game_clients removeObjectForKey:key];
+}
+static CGRect winios_largest(CGRect a, CGRect b) {
+    if (CGRectIsNull(a)) return b;
+    return b.size.width * b.size.height > a.size.width * a.size.height ? b : a;
+}
+/* The presenting window's client rect, 0 when there is none. dw x dh: the game view's drawable. */
+int winios_game_picture_rect(int dw, int dh, int *x, int *y, int *w, int *h) {
+    CGRect metal = CGRectNull, sized = CGRectNull;
+    int sw = 0, sh = 0;
+    winios_screen_size(&sw, &sh);
+    for (NSNumber *key in g_game_clients) {
+        CGRect r = g_game_clients[key].CGRectValue;
+        if ([g_game_metal containsObject:key]) metal = winios_largest(metal, r);
+        else if ((int)r.size.width == dw && (int)r.size.height == dh && 4.0 * dw * dh >= (double)sw * sh)
+            sized = winios_largest(sized, r);
+    }
+    CGRect best = CGRectIsNull(metal) ? sized : metal;
+    if (CGRectIsNull(best)) return 0;
+    *x = (int)best.origin.x; *y = (int)best.origin.y;
+    *w = (int)best.size.width; *h = (int)best.size.height;
+    return 1;
+}
+''' + s[i:]
+    s = s.replace(frame, frame + "            winios_note_game_client(key, visible, cx, cy, cw, ch);   /* MYIOSDECK: winios_game_picture_rect */\n")
+    open(p, "w").write(s)
+PY
+
 LINK=""
 for f in "$LIBS"/*.a; do LINK="$LINK \$(SRCROOT)/${f#"$ROOT/"}"; done
 mkdir -p "$ROOT/Config" "$ROOT/App/Generated"

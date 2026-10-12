@@ -131,12 +131,11 @@ struct LibraryView: View {
                     let current = api == WineController.controllerAPI(for: wine.sessionProgramID)
                     let later = WineController.sessionStartAPIs.contains(api) && api != wine.sessionAPI
                     Button((current ? "✓ " : "") + (Self.controllerNames[api] ?? api) + (later ? " (next launch)" : "")) {
-                        settings.controllerAPI = api
                         wine.switchController(to: api)
                     }
                 }
             } message: {
-                Text("XInput and Keyboard and mouse switch at once. DirectInput and HID modes need the game to start with them, so they apply at the next launch. The choice is remembered for this game.")
+                Text("XInput and Keyboard and mouse switch at once. DirectInput and HID modes need the game to start with them, so they apply at the next launch. The choice is remembered for this game only; Settings › Controller is the default for the others.")
             }
             .confirmationDialog("Touch mouse", isPresented: $showTouchMenu, titleVisibility: .visible) {
                 ForEach(GameInput.TouchMode.allCases, id: \.self) { mode in

@@ -72,19 +72,49 @@ final class GameInput {
         return (CGFloat(max(w, 1)), CGFloat(max(h, 1)))
     }
 
-    /// A point on the game view in desktop pixels (the view is the desktop, letterboxed).
+    /// The desktop rectangle the game view shows: the client area of the window the game
+    /// presents in (a window with a frame draws its picture below its title bar, not from the
+    /// desktop's corner: Crab Game, Steins;Gate), else the whole desktop (a launcher's dialogs).
+    private static func picture() -> CGRect {
+        var x: Int32 = 0, y: Int32 = 0, w: Int32 = 0, h: Int32 = 0
+        let drawable = GameHostView.shared.metalLayer.drawableSize
+        if mid_game_picture_rect(Int32(drawable.width), Int32(drawable.height), &x, &y, &w, &h) != 0, w > 0, h > 0 {
+            return CGRect(x: CGFloat(x), y: CGFloat(y), width: CGFloat(w), height: CGFloat(h))
+        }
+        let d = desktop()
+        return CGRect(x: 0, y: 0, width: d.w, height: d.h)
+    }
+
+    /// Where the pointer can go: the picture, within the desktop (Windows keeps the cursor on
+    /// the screen, so the bottom of a picture that runs past it is out of reach).
+    private static func reach() -> CGRect {
+        let d = desktop(), screen = CGRect(x: 0, y: 0, width: d.w, height: d.h)
+        let r = picture().intersection(screen)
+        return r.isNull || r.isEmpty ? screen : r
+    }
+
+    private static func clamp(_ p: CGPoint, to r: CGRect) -> CGPoint {
+        CGPoint(x: min(max(p.x, r.minX), r.maxX - 1), y: min(max(p.y, r.minY), r.maxY - 1))
+    }
+
+    /// A desktop position as a fraction of the game view (where the arrow is drawn).
+    private static func viewUnit(_ p: CGPoint) -> CGPoint {
+        let r = picture()
+        return CGPoint(x: (p.x - r.minX) / r.width, y: (p.y - r.minY) / r.height)
+    }
+
+    /// A point on the game view in desktop pixels (the view shows the picture, letterboxed).
     func desktopPoint(_ p: CGPoint, in view: UIView) -> CGPoint {
-        let d = Self.desktop()
-        let x = p.x / max(view.bounds.width, 1) * d.w, y = p.y / max(view.bounds.height, 1) * d.h
-        return CGPoint(x: min(max(x.rounded(.down), 0), d.w - 1), y: min(max(y.rounded(.down), 0), d.h - 1))
+        let r = Self.picture()
+        let x = r.minX + p.x / max(view.bounds.width, 1) * r.width, y = r.minY + p.y / max(view.bounds.height, 1) * r.height
+        return Self.clamp(CGPoint(x: x.rounded(.down), y: y.rounded(.down)), to: Self.reach())
     }
 
     /// Put the program's cursor at a desktop position (and the drawn arrow, when shown).
     func moveCursor(to p: CGPoint, showArrow: Bool) {
-        let d = Self.desktop()
-        cursor = CGPoint(x: min(max(p.x, 0), d.w - 1), y: min(max(p.y, 0), d.h - 1))
+        cursor = Self.clamp(p, to: Self.reach())
         mid_post_pointer(Int32(cursor.x), Int32(cursor.y), Self.move | Self.absolute, 0)
-        GameHostView.shared.showCursor(showArrow ? CGPoint(x: cursor.x / d.w, y: cursor.y / d.h) : nil)
+        GameHostView.shared.showCursor(showArrow ? Self.viewUnit(cursor) : nil)
     }
 
     /// A click or key press: a 32-bit program's calls for the next 3 s go to the log
@@ -133,8 +163,8 @@ final class GameInput {
     /// desktop's centre, which the program is told too).
     func surfaceShown() {
         guard touchMode == .trackpad else { return }
-        let d = Self.desktop()
-        if !cursorPlaced { cursorPlaced = true; cursor = CGPoint(x: d.w / 2, y: d.h / 2) }
+        let r = Self.reach()
+        if !cursorPlaced { cursorPlaced = true; cursor = CGPoint(x: r.midX, y: r.midY) }
         moveCursor(to: cursor, showArrow: true)
     }
 
@@ -254,7 +284,7 @@ final class GameInput {
         let p = t.location(in: view)
         if hypot(p.x - tpStart.x, p.y - tpStart.y) > Self.slop { tpMoved = true }
         // About 1.3 desktop widths for a swipe across the view.
-        let d = Self.desktop(), gain = d.w / max(view.bounds.width, 1) * 1.3
+        let gain = Self.picture().width / max(view.bounds.width, 1) * 1.3
         let dx = (p.x - tpLast.x) * gain, dy = (p.y - tpLast.y) * gain
         tpLast = p
         if dx != 0 || dy != 0 { moveCursor(to: CGPoint(x: cursor.x + dx, y: cursor.y + dy), showArrow: true) }
@@ -500,7 +530,7 @@ final class GameInput {
         mid_post_pointer(ix, iy, Self.move, 0)
         let d = Self.desktop()
         cursor = CGPoint(x: min(max(cursor.x + CGFloat(ix), 0), d.w - 1), y: min(max(cursor.y + CGFloat(iy), 0), d.h - 1))
-        GameHostView.shared.showCursor(CGPoint(x: cursor.x / d.w, y: cursor.y / d.h))
+        GameHostView.shared.showCursor(Self.viewUnit(cursor))
     }
 
     private func mouseButton(_ down: UInt32, _ up: UInt32, _ data: Int32, _ pressed: Bool) {

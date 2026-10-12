@@ -17,6 +17,7 @@
 | [FEX-Emu](https://github.com/FEX-Emu/FEX) WOW64 module (`Source/Windows/WOW64/Module.cpp`, via Madeira's fork) | The BTCpu* contract, the BOP-page convention and the unwind-frame trampoline, ported to C in `engine/pedylib/emu/xtajit_wow.c` (the no-JIT WoW64 CPU module) | MIT (upstream); Madeira's guest-window changes GPL-3.0-or-later with the Madeira Converter Exception |
 | [Madeira](https://github.com/willfaust/Madeira) `tests/x86/hello-x86.c` | `hello-x86.exe`, the 32-bit (WoW64) smoke test, built in CI | GPL-3.0-or-later with the Madeira Converter Exception |
 | [Madeira](https://github.com/willfaust/Madeira) input (`app/Madeira/HardwareInput.swift`, `ContentView.swift`, `PadKeyboardMouse.swift` at 65e6fe8f) | Touch-as-mouse gestures, the HID usage to virtual-key table, text entry as key presses and the right-stick mouse, ported to `App/Sources/Engine/GameInput.swift` and `ControllerBridge.swift` | GPL-3.0-or-later with the Madeira Converter Exception |
+| [Madeira](https://github.com/willfaust/Madeira) app-side Wine sources (`app/Madeira`, at `engine/wine/PIN`) | The Wine bridge and iOS display driver compiled into the app, with small additions applied by `engine/wine/stage-app.sh`: the no-JIT CPU modules in `WineProcessBridge.m`; in `Winios/Winios.m`, the game-mode overlay above the game view and the presenting window's client rect | GPL-3.0-or-later with the Madeira Converter Exception |
 
 Steam is a trademark of Valve Corporation. iPhone, iOS and Metal are trademarks of Apple Inc.
 MYIOSDECK is not affiliated with Valve or Apple.

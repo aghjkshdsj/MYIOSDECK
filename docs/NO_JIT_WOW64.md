@@ -381,6 +381,12 @@ kernelbase, user32, DXMT d3d11/dxgi/winemetal and hello-x86.exe decode 100%.
   the device has no Rz, so DIJOYSTATE.lRz reads 0, a range end, where that layout keeps the
   right stick's vertical. `patches/dinput_ios_pad.py` (i386 dinput only) adds Rz as the right
   stick's vertical, centred at rest, and the triggers as buttons 11 and 12.
+- **Run 20 (build 149), the cursor:** taps and the drawn cursor missed what they pointed at in
+  games whose window has a frame. Steins;Gate's 1286x752 window holds a 1280x720 picture at 3,29
+  that the game view stretches to the 1560x720 desktop; Crab Game (64-bit, Unity windowed) is
+  1566x752 at 0,0. GameInput now maps through the presenting window's client rect
+  (`mid_game_picture_rect`, Winios via `stage-app.sh`); the 32-bit DXMT path marks no window as
+  presenting through Metal, so the window as large as the game view's drawable stands in.
 
 ### Stage 6: speed
 - FXR32 (guest registers pinned, as FXR), native fast paths for hot 32-bit system functions
