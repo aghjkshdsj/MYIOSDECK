@@ -36,7 +36,7 @@ struct SettingsView: View {
                     Text("Without JIT a game's audio engine decodes and mixes sound in the interpreter, and that can take a whole CPU core (Stick Fight's menu music did). Off: the game starts with no audio device. Applies to the next game you start without JIT.")
                         .font(.footnote).foregroundStyle(Deck.dim)
                     Toggle("Play another game without restarting (experimental)", isOn: $settings.sessionReuse).tint(Deck.accent)
-                    Text("When a game ends (its own Quit, or Quit game in the game menu, which asks it to close), Wine keeps running and the next game starts in it: no need to close and reopen MYIOSDECK. The next game must be the same kind (32-bit or 64-bit) and use the same controller mode if that is a HID gamepad; otherwise MYIOSDECK asks for a restart. A 64-bit game's memory is only given back when MYIOSDECK closes. Applies from the next game you start.")
+                    Text("When a game ends (its own Quit, or Quit game in the game menu, which asks it to close), Wine keeps running and the next game starts in it: no need to close and reopen MYIOSDECK. The next game must be the same kind (32-bit or 64-bit) and use the same controller mode if that is a HID gamepad, and 64-bit games need FXI (not FXR); otherwise MYIOSDECK asks for a restart. A 64-bit game's memory is only given back when MYIOSDECK closes. Applies from the next game you start.")
                         .font(.footnote).foregroundStyle(Deck.dim)
                 }
 

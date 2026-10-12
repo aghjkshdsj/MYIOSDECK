@@ -113,7 +113,7 @@ game must be of the session's kind; a game of the other kind needs a restart, as
 | `engine/fxi/fxi_win.c` | `fxi_win_invalidate_all()`: the app drops FXI's x64 blocks before a later game starts (an earlier game's freed code ranges may hold the new game's code). `fxi_invalidate` frees nothing, so a thread still inside a dropped block translates again. |
 | `engine/fxi32/fxi_wow.c`, `App/Sources/Native/fxi_wow_host.c` | `fx32_wow_process_start()` at `BTCpuProcessInit`: a window an exited process left gets a fresh FXI32 instance. The old one held that process's blocks and its BOP page address (the new process allocates its own), and its BOP exit blocks are never invalidated. Tested in `wow_test.c` (check 9). |
 | `App/Sources/Native/wine_host.c` | `mid_wine_boot` for a later program: no JIT slice, no server start, no log truncation; resets the exit status, flushes FXI, starts the program in the session. The log follower keeps reading while a session is kept. |
-| `App/Sources/Engine/WineController.swift` | `SessionKind` (no JIT, ARM64EC or aarch64, HID pad, FXR) recorded at the first program; `nextGameRefusal` says why a later game cannot join (setting off, session not kept, kind differs, 8 programs already, less than 1.5 GB free) or nil. The Dock/added-game flags are now per launch (they stayed set for the whole app run). |
+| `App/Sources/Engine/WineController.swift` | `SessionKind` (no JIT, ARM64EC or aarch64, HID pad, FXR) recorded at the first program; `nextGameRefusal` says why a later game cannot join (setting off, session not kept, kind differs, FXR on for a 64-bit game, 8 programs already, less than 1.5 GB free) or nil. The Dock/added-game flags are now per launch (they stayed set for the whole app run). |
 | `App/Sources/UI/LibraryView.swift`, `SettingsView.swift` | The setting; Play is enabled again after a game ends when another can join; the game menu gets **Quit game**, which asks the game to close with Alt+F4 through its normal input (as Madeira's own Quit game does, `Library.swift` `requestQuit`), keeps its view up with "Closing…" until it exits, and leaves MYIOSDECK open. **Quit game and close MYIOSDECK** stays for a game that does not close. |
 | `engine/wine/stage-app.sh` | Winios's per-window client rects are dropped at a new session's start, with its Metal windows. |
 
@@ -136,7 +136,8 @@ game must be of the session's kind; a game of the other kind needs a restart, as
   memory, and keep a 32-bit window from being reused (Wine then takes another window; the map
   holds at most 8).
 - **Same kind only**: no JIT, the same 32-bit/64-bit class, the same HID pad mode (DirectInput
-  and XInput are per process and can differ), the same FXR choice. At most 8 programs per app
+  and XInput are per process and can differ), and FXI rather than FXR for 64-bit games (FXR has
+  no way to drop code it translated). At most 8 programs per app
   run (the process tables hold that many games with their helpers).
 - **Idle server**: between games the wineserver thread wakes every millisecond, as it does
   during a game.

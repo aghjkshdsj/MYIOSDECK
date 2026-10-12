@@ -138,7 +138,7 @@ final class WineController: ObservableObject, @unchecked Sendable {
         var noJIT: Bool       // Wine's DLLs from the signed dylibs (WINE_IOS_NOJIT)
         var aarch64: Bool     // the aarch64 farm (32-bit games through WoW64), else ARM64EC (64-bit)
         var hidPad: String    // the HID gamepad the wineserver makes when it starts ("" for none)
-        var fxr: Bool         // FXR as the x64 CPU (Settings › Windows games: FXR)
+        var fxr: Bool         // FXR as the x64 CPU of a 64-bit game (Settings › Windows games: FXR)
     }
     /// The running session's kind (nil before the first program).
     private(set) var sessionKind: SessionKind?
@@ -183,9 +183,11 @@ final class WineController: ObservableObject, @unchecked Sendable {
             if kind.hidPad != session.hidPad {
                 return "This game's controller mode (\(kind.hidPad.isEmpty ? "not a HID gamepad" : "HID gamepad")) differs from the running Wine session's, which Wine sets up when it starts. Choose the same mode for it, or: \(restart)"
             }
-            if kind.fxr != session.fxr {
-                return "Settings › Windows games: FXR changed since this Wine session started. \(restart)"
-            }
+        }
+        // FXR keeps the x64 code it translated with no way to drop it, and a later game may get
+        // addresses an earlier one's code had: FXI's blocks are dropped before it starts.
+        if session.fxr || kind?.fxr == true {
+            return "Another 64-bit game can start in the running Wine session only with FXI (Settings › Without JIT › Windows games: FXR is on, or was when the session started). \(restart)"
         }
         let freeMB = os_proc_available_memory() >> 20
         if freeMB < Self.minFreeMB {
@@ -311,7 +313,7 @@ final class WineController: ObservableObject, @unchecked Sendable {
         let api = Self.controllerAPI(for: program.id)
         let noJITSession = program.noJIT && !mid_jit_pool_ready()
         let kind = SessionKind(noJIT: noJITSession, aarch64: program.aarch64, hidPad: Self.hidPad(api),
-                               fxr: noJITSession && UserDefaults.standard.bool(forKey: "winFXR"))
+                               fxr: noJITSession && !program.aarch64 && UserDefaults.standard.bool(forKey: "winFXR"))
         if programsThisRun > 0, let why = nextGameRefusal(kind) {
             dlog("[session-reuse] \(program.title) not started: \(why)")
             return refuse(why)
