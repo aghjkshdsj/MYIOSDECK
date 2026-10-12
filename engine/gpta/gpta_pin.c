@@ -20,6 +20,7 @@
 // recorded, and conditions are specialised on their condition code.
 
 #include "gpta_pin.h"
+#include "gpta_pin_shconst.h"
 
 static uint16_t k_cctab[16];   // cmov truth tables per condition code (pcond_tab)
 
@@ -301,6 +302,7 @@ static void rmap_init(void) {
     // gpta_pin_br.c, gpta_pin_step1.c, gpta_pin_step2.c: the branches that most often close a loop
     RMAP(t_fjc_rr); RMAP(t_fjc_ri); RMAP(t_fjt_ri); RMAP(t_fjt_rr); RMAP(t_fjt_rrx); RMAP(t_sic); RMAP(t_sicr);
     RMAP(t_sii_trace); RMAP(t_sri_trace);
+    RMAP(t_shconst);
 }
 // u: `copies` copies of M uops (a block: one copy). A handler at several places in a copy takes
 // the replica at every second place. When every handler of the copy has a replica, those at a
@@ -522,6 +524,7 @@ static void lower_one(Out *o, const Uop *u) {
         if (u->src == 0xffff) { put_uop(o, u, t_sh[fl][ps][si - 2][1][D]); return; }
         unsigned n = (unsigned)u->imm & (si == 3 ? 63u : 31u);
         if (!n) { put_uop(o, u, si == 2 ? t_mov_rr[0][D][D] : p_nop); return; }   // flags unchanged; a 32-bit register still zero-extends
+        if (!fl) { put_uop(o, u, t_shconst[ps][si - 2][n][D]); return; }
         put_uop(o, u, t_sh[fl][ps][si - 2][0][D])->imm = n;
         return;
     }
@@ -1263,6 +1266,7 @@ static void hidx_build(void) {
     hidx_tab(t_push, 16); hidx_tab(t_pop, 16); hidx_tab(t_call_R, 16); hidx_tab(t_jmp_R, 16); hidx_tab(t_jcc, 16);
     hidx_tab(&t_jresult[0][0], 24);
     hidx_tab(&t_jresult_trace[0][0][0], 48);
+    hidx_tab((const PFn *)t_shconst, sizeof t_shconst / sizeof(PFn));
     static const PFn one[] = { p_stop, p_nop, p_jmp, p_goto, p_call, p_ret, p_call_T, p_jmp_T, p_call_M, p_jmp_M, p_syscall,
                                p_nat_tlsget, p_nat_csenter, p_nat_csleave };
     hidx_tab(one, sizeof one / sizeof one[0]);

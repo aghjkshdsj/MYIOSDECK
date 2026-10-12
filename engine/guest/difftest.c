@@ -1008,6 +1008,37 @@ static void gpta_x3high(void) {
     out("gpta_x3high", h);
 }
 
+// Native x86 is the oracle for every immediate count and the masked boundaries.
+// TEST on each side prevents a preceding copy from hiding the single shift,
+// and makes its output flags dead without assuming anything about their values.
+#define SC_TEST(COUNT, OP, REG) do { \
+    u64 r = val(); \
+    __asm__ volatile("testq %[r], %[r]\n\t" OP " $" #COUNT ", " REG \
+        "\n\ttestq %[r], %[r]" : [r] "+r"(r) : : "cc"); \
+    h = mix(h, r); \
+} while (0)
+#define SC_TEST_COUNT(COUNT) \
+    SC_TEST(COUNT, "shll", "%k[r]"); SC_TEST(COUNT, "shlq", "%[r]"); \
+    SC_TEST(COUNT, "shrl", "%k[r]"); SC_TEST(COUNT, "shrq", "%[r]"); \
+    SC_TEST(COUNT, "sarl", "%k[r]"); SC_TEST(COUNT, "sarq", "%[r]"); \
+    SC_TEST(COUNT, "roll", "%k[r]"); SC_TEST(COUNT, "rolq", "%[r]"); \
+    SC_TEST(COUNT, "rorl", "%k[r]"); SC_TEST(COUNT, "rorq", "%[r]")
+static void gpta_shift_counts(void) {
+    u64 h = 14695981039346656037ull;
+    for (int i = 0; i < N; i++) {
+        SC_TEST_COUNT(0); SC_TEST_COUNT(1); SC_TEST_COUNT(2); SC_TEST_COUNT(3); SC_TEST_COUNT(4); SC_TEST_COUNT(5); SC_TEST_COUNT(6); SC_TEST_COUNT(7);
+        SC_TEST_COUNT(8); SC_TEST_COUNT(9); SC_TEST_COUNT(10); SC_TEST_COUNT(11); SC_TEST_COUNT(12); SC_TEST_COUNT(13); SC_TEST_COUNT(14); SC_TEST_COUNT(15);
+        SC_TEST_COUNT(16); SC_TEST_COUNT(17); SC_TEST_COUNT(18); SC_TEST_COUNT(19); SC_TEST_COUNT(20); SC_TEST_COUNT(21); SC_TEST_COUNT(22); SC_TEST_COUNT(23);
+        SC_TEST_COUNT(24); SC_TEST_COUNT(25); SC_TEST_COUNT(26); SC_TEST_COUNT(27); SC_TEST_COUNT(28); SC_TEST_COUNT(29); SC_TEST_COUNT(30); SC_TEST_COUNT(31);
+        SC_TEST_COUNT(32); SC_TEST_COUNT(33); SC_TEST_COUNT(34); SC_TEST_COUNT(35); SC_TEST_COUNT(36); SC_TEST_COUNT(37); SC_TEST_COUNT(38); SC_TEST_COUNT(39);
+        SC_TEST_COUNT(40); SC_TEST_COUNT(41); SC_TEST_COUNT(42); SC_TEST_COUNT(43); SC_TEST_COUNT(44); SC_TEST_COUNT(45); SC_TEST_COUNT(46); SC_TEST_COUNT(47);
+        SC_TEST_COUNT(48); SC_TEST_COUNT(49); SC_TEST_COUNT(50); SC_TEST_COUNT(51); SC_TEST_COUNT(52); SC_TEST_COUNT(53); SC_TEST_COUNT(54); SC_TEST_COUNT(55);
+        SC_TEST_COUNT(56); SC_TEST_COUNT(57); SC_TEST_COUNT(58); SC_TEST_COUNT(59); SC_TEST_COUNT(60); SC_TEST_COUNT(61); SC_TEST_COUNT(62); SC_TEST_COUNT(63);
+        SC_TEST_COUNT(64); SC_TEST_COUNT(127); SC_TEST_COUNT(255);
+    }
+    out("gpta_shift_counts", h);
+}
+
 typedef void (*test_fn)(void);
 #define ALU_LIST(OP) OP##_q, OP##_l, OP##_w, OP##_b, OP##_mr_q, OP##_rm_l, OP##_mr_b,
 static const test_fn kTests[] = {
@@ -1038,7 +1069,7 @@ static const test_fn kTests[] = {
     fz_o, fz_no, fz_b, fz_ae, fz_e, fz_ne, fz_be, fz_a, fz_s, fz_ns, fz_p, fz_np, fz_l, fz_ge, fz_le, fz_g,
     fc_o, fc_no, fc_b, fc_ae, fc_e, fc_ne, fc_be, fc_a, fc_s, fc_ns, fc_p, fc_np, fc_l, fc_ge, fc_le, fc_g,
     fz_call, fz_index, fz_xindex, fz_3op, fz_3gap, fz_x3, fz_hoist, gpta_xmem, gpta_result_flags, gpta_xhigh, gpta_cf_flow,
-    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow, gpta_fcj_trace, gpta_jresult_trace, gpta_immstores, gpta_x3high, gpta_step_trace,
+    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow, gpta_fcj_trace, gpta_jresult_trace, gpta_immstores, gpta_x3high, gpta_step_trace, gpta_shift_counts,
 };
 
 int guest_main(int argc, char **argv) {
