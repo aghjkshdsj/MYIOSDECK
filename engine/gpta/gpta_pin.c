@@ -21,6 +21,7 @@
 
 #include "gpta_pin.h"
 #include "gpta_pin_shconst.h"
+#include "gpta_pin_unary_stub.h"
 
 static uint16_t k_cctab[16];   // cmov truth tables per condition code (pcond_tab)
 
@@ -725,11 +726,13 @@ static int try_fuse(Out *o, const Uop *u, uint32_t left) {
             if (fd) edge_stubs(o, fd, fs);
             return 2;
         }
-        if (a->fam == FAM_UNARY && !a->b && a->c2 >= 2 && D >= 0 && (a->a == U_INC || a->a == U_DEC) && !fd) {
-            int ci = cc == 4 ? 0 : cc == 5 ? 1 : cc == 8 ? 2 : cc == 9 ? 3 : -1;   // inc/dec keep CF: no stub
+        if (a->fam == FAM_UNARY && !a->b && a->c2 >= 2 && D >= 0 && (a->a == U_INC || a->a == U_DEC) &&
+            (!fd || (!g_win && fd != 3))) {
+            int ci = cc == 4 ? 0 : cc == 5 ? 1 : cc == 8 ? 2 : cc == 9 ? 3 : -1;
             if (ci < 0) return 0;
             x = put_uop(o, v, t_fid[a->a == U_INC][a->c2 - 2][ci][D]);
             x->dst = u->dst;
+            if (fd) edge_stubs(o, fd, t_fs_unary[a->a == U_INC][a->c2 - 2][D]);
             return 2;
         }
         return 0;
@@ -1267,6 +1270,7 @@ static void hidx_build(void) {
     hidx_tab(&t_jresult[0][0], 24);
     hidx_tab(&t_jresult_trace[0][0][0], 48);
     hidx_tab((const PFn *)t_shconst, sizeof t_shconst / sizeof(PFn));
+    hidx_tab((const PFn *)t_fs_unary, sizeof t_fs_unary / sizeof(PFn));
     static const PFn one[] = { p_stop, p_nop, p_jmp, p_goto, p_call, p_ret, p_call_T, p_jmp_T, p_call_M, p_jmp_M, p_syscall,
                                p_nat_tlsget, p_nat_csenter, p_nat_csleave };
     hidx_tab(one, sizeof one / sizeof one[0]);

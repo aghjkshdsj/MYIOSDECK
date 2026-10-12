@@ -1039,6 +1039,49 @@ static void gpta_shift_counts(void) {
     out("gpta_shift_counts", h);
 }
 
+// Only one successor reads flags. INC/DEC must preserve the preceding CF even
+// when its other output flags are reconstructed after the conditional branch.
+#define UNARY_EDGE_CASE(SOURCE, UNARY, CC, EDGE) do { \
+    u64 a = val(), b = val(), r = unary_values[i % 10], fi = flags_in(), f; \
+    __asm__ volatile(PRE SOURCE "\n\t" UNARY "\n\tj" CC " 1f\n\t" EDGE \
+        : [a] "+&r"(a), [r] "+&r"(r), [f] "=&r"(f) \
+        : [b] "r"(b), [fi] "r"(fi) : "cc", "memory"); \
+    h = mix(mix(mix(h, a), r), f & ARITH); \
+} while (0)
+#define UNARY_EDGE_FORMS(SOURCE, UNARY, CC) \
+    UNARY_EDGE_CASE(SOURCE, UNARY, CC, "pushfq\n\tpopq %[f]\n\tjmp 2f\n\t1: xorq %[f], %[f]\n\t2:"); \
+    UNARY_EDGE_CASE(SOURCE, UNARY, CC, "xorq %[f], %[f]\n\tjmp 2f\n\t1: pushfq\n\tpopq %[f]\n\t2:")
+#define UNARY_EDGE_CCS(SOURCE, UNARY) \
+    UNARY_EDGE_FORMS(SOURCE, UNARY, "e"); UNARY_EDGE_FORMS(SOURCE, UNARY, "ne"); \
+    UNARY_EDGE_FORMS(SOURCE, UNARY, "s"); UNARY_EDGE_FORMS(SOURCE, UNARY, "ns")
+#define UNARY_EDGE_TARGETS(SOURCE) \
+    UNARY_EDGE_CCS(SOURCE, "incl %k[r]"); UNARY_EDGE_CCS(SOURCE, "decl %k[r]"); \
+    UNARY_EDGE_CCS(SOURCE, "incq %[r]"); UNARY_EDGE_CCS(SOURCE, "decq %[r]")
+#define UNARY_EDGE_WIDTHS(OP) \
+    UNARY_EDGE_TARGETS(OP "b %b[b], %b[a]"); UNARY_EDGE_TARGETS(OP "w %w[b], %w[a]"); \
+    UNARY_EDGE_TARGETS(OP "l %k[b], %k[a]"); UNARY_EDGE_TARGETS(OP "q %[b], %[a]")
+static void gpta_unary_edges(void) {
+    static const u64 unary_values[] = { 0, 1, ~0ull, 0x7fffffff, 0x80000000,
+        0xffffffff, 0x100000000, 0x7fffffffffffffffull, 0x8000000000000000ull, 0x6c10f87e23a1bd45ull };
+    u64 h = 14695981039346656037ull;
+    for (int i = 0; i < 40; i++) {
+        UNARY_EDGE_WIDTHS("add"); UNARY_EDGE_WIDTHS("adc");
+        UNARY_EDGE_WIDTHS("sub"); UNARY_EDGE_WIDTHS("sbb"); UNARY_EDGE_WIDTHS("xor");
+        UNARY_EDGE_TARGETS("");
+        UNARY_EDGE_TARGETS("negb %b[a]"); UNARY_EDGE_TARGETS("negw %w[a]");
+        UNARY_EDGE_TARGETS("negl %k[a]"); UNARY_EDGE_TARGETS("negq %[a]");
+        UNARY_EDGE_TARGETS("incq %[a]"); UNARY_EDGE_TARGETS("decl %k[a]");
+        UNARY_EDGE_TARGETS("imulq %[b], %[a]"); UNARY_EDGE_TARGETS("imull %k[b], %k[a]");
+        UNARY_EDGE_TARGETS("shlb $1, %b[a]"); UNARY_EDGE_TARGETS("shlw $8, %w[a]");
+        UNARY_EDGE_TARGETS("shll $31, %k[a]"); UNARY_EDGE_TARGETS("shlq $63, %[a]");
+        UNARY_EDGE_TARGETS("shrb $7, %b[a]"); UNARY_EDGE_TARGETS("shrw $1, %w[a]");
+        UNARY_EDGE_TARGETS("shrl $31, %k[a]"); UNARY_EDGE_TARGETS("shrq $63, %[a]");
+        UNARY_EDGE_TARGETS("sarb $7, %b[a]"); UNARY_EDGE_TARGETS("sarw $1, %w[a]");
+        UNARY_EDGE_TARGETS("sarl $31, %k[a]"); UNARY_EDGE_TARGETS("sarq $63, %[a]");
+    }
+    out("gpta_unary_edges", h);
+}
+
 typedef void (*test_fn)(void);
 #define ALU_LIST(OP) OP##_q, OP##_l, OP##_w, OP##_b, OP##_mr_q, OP##_rm_l, OP##_mr_b,
 static const test_fn kTests[] = {
@@ -1069,7 +1112,7 @@ static const test_fn kTests[] = {
     fz_o, fz_no, fz_b, fz_ae, fz_e, fz_ne, fz_be, fz_a, fz_s, fz_ns, fz_p, fz_np, fz_l, fz_ge, fz_le, fz_g,
     fc_o, fc_no, fc_b, fc_ae, fc_e, fc_ne, fc_be, fc_a, fc_s, fc_ns, fc_p, fc_np, fc_l, fc_ge, fc_le, fc_g,
     fz_call, fz_index, fz_xindex, fz_3op, fz_3gap, fz_x3, fz_hoist, gpta_xmem, gpta_result_flags, gpta_xhigh, gpta_cf_flow,
-    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow, gpta_fcj_trace, gpta_jresult_trace, gpta_immstores, gpta_x3high, gpta_step_trace, gpta_shift_counts,
+    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow, gpta_fcj_trace, gpta_jresult_trace, gpta_immstores, gpta_x3high, gpta_step_trace, gpta_shift_counts, gpta_unary_edges,
 };
 
 int guest_main(int argc, char **argv) {
