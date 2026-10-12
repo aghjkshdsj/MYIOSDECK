@@ -17,10 +17,13 @@ enum DeckTab: String, CaseIterable, Identifiable {
 
 struct RootView: View {
     @State private var tab: DeckTab = .home
+    @EnvironmentObject private var wine: WineController
+    @ObservedObject private var session = GameSession.shared
 
     var body: some View {
         VStack(spacing: 0) {
             topBar
+            if wine.isPlaying, !session.shown, !session.title.isEmpty { returnBar }
             Group {
                 switch tab {
                 case .home: HomeView(tab: $tab)
@@ -57,5 +60,30 @@ struct RootView: View {
             .padding(.horizontal, 16).padding(.vertical, 10)
         }
         .background(Deck.panel.opacity(0.6))
+    }
+
+    /// A game hidden with the game menu's Hide game is still running: this brings its view back
+    /// from any tab (the Library tab presents it, so it is selected first).
+    private var returnBar: some View {
+        Button {
+            dlog("[ui] return to \(session.title)")
+            if tab == .library {
+                session.shown = true
+            } else {
+                tab = .library
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 150_000_000)   // the Library tab is on screen first
+                    GameSession.shared.shown = true
+                }
+            }
+        } label: {
+            Label("Return to \(session.title)", systemImage: "play.fill")
+                .font(.subheadline.weight(.bold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                .background(Deck.accent.opacity(0.22))
+                .foregroundStyle(Deck.accent)
+        }
+        .buttonStyle(.plain)
     }
 }

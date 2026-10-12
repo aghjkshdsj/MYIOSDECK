@@ -9,8 +9,7 @@ struct LibraryView: View {
     @EnvironmentObject private var wine: WineController
     @EnvironmentObject private var jit: JITController
     @State private var noJITAction: (() -> Void)?
-    @State private var surfaceTitle = ""
-    @State private var showSurface = false
+    @ObservedObject private var session = GameSession.shared
     @State private var showSteamSignIn = false
     @ObservedObject private var steam = SteamSignInModel.shared
     @ObservedObject private var steamLibrary = SteamLibrary.shared
@@ -88,7 +87,7 @@ struct LibraryView: View {
         } message: {
             Text("This test program uses the JIT path (Wine code copied into JIT memory, x64 code through FEX). The entries marked \"no JIT\" and Steam games can run without JIT. Enable JIT and the program starts right after.")
         }
-        .fullScreenCover(isPresented: $showSurface) { gameSurface }
+        .fullScreenCover(isPresented: $session.shown) { gameSurface }
         .onChange(of: wine.state) { _, state in
             // The session ended (the game's own Quit, a crash, or a start that failed): close the
             // surface and its menus and go back to the library, where the status shows (and a
@@ -98,8 +97,8 @@ struct LibraryView: View {
             case .finished, .failed:
                 dlog("[ui] session ended: game view closed")
                 showGameMenu = false; showControllerMenu = false; showTouchMenu = false
-                showSurface = false
-                surfaceTitle = ""
+                session.shown = false
+                session.title = ""
             default: break
             }
         }
@@ -116,12 +115,12 @@ struct LibraryView: View {
             .persistentSystemOverlays(.hidden)
             .onAppear {
                 GameHostView.onMenu = {
-                    dlog("[ui] game menu opening (surface shown \(showSurface), menu already open \(showGameMenu))")
+                    dlog("[ui] game menu opening (surface shown \(session.shown), menu already open \(showGameMenu))")
                     GameHostView.shared.isHidden = true
                     showGameMenu = true
                 }
             }
-            .confirmationDialog(surfaceTitle, isPresented: $showGameMenu, titleVisibility: .visible) {
+            .confirmationDialog(session.title, isPresented: $showGameMenu, titleVisibility: .visible) {
                 Button("Resume") {}
                 Button("Controller: \(Self.controllerNames[WineController.controllerAPI(for: wine.sessionProgramID)] ?? "XInput")…") {
                     openingSubmenu = true
@@ -131,7 +130,7 @@ struct LibraryView: View {
                     openingSubmenu = true
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { showTouchMenu = true }
                 }
-                Button("Hide game (keeps running)") { showSurface = false }
+                Button("Hide game (keeps running)") { session.shown = false }
                 Button("Quit game and close MYIOSDECK", role: .destructive) { CrashReporter.shared.quitApp() }
             } message: {
                 Text("A Windows game can only be stopped by closing MYIOSDECK; unsaved progress is lost.")
@@ -158,15 +157,15 @@ struct LibraryView: View {
             }
             .onChange(of: showGameMenu) { _, open in
                 dlog("[ui] game menu \(open ? "shown" : "closed")")
-                if !open, showSurface, !openingSubmenu { GameHostView.shared.isHidden = false }
+                if !open, session.shown, !openingSubmenu { GameHostView.shared.isHidden = false }
             }
             .onChange(of: showControllerMenu) { _, open in
                 if open { openingSubmenu = false }
-                if !open, showSurface { GameHostView.shared.isHidden = false }
+                if !open, session.shown { GameHostView.shared.isHidden = false }
             }
             .onChange(of: showTouchMenu) { _, open in
                 if open { openingSubmenu = false }
-                if !open, showSurface { GameHostView.shared.isHidden = false }
+                if !open, session.shown { GameHostView.shared.isHidden = false }
             }
     }
 
@@ -259,7 +258,10 @@ struct LibraryView: View {
     private var steamPlayBlocker: String? {
         if !wine.linked { return "This build does not include Wine." }
         switch wine.state {
-        case .booting, .running, .finished: return "Wine already ran a program in this session. Restart MYIOSDECK to play."
+        case .booting, .running:
+            return "\(session.title.isEmpty ? "A game" : session.title) is still running: Return to it at the top of the screen."
+        case .finished:
+            return "MYIOSDECK runs one Windows game per launch. To play another, swipe MYIOSDECK away in the app switcher and open it again."
         default: return nil
         }
     }
@@ -289,8 +291,8 @@ struct LibraryView: View {
         guard case .booting = wine.state else { return }
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(600))   // let the alert finish closing
-            surfaceTitle = game.name
-            showSurface = true
+            session.title = game.name
+            session.shown = true
         }
     }
 
@@ -328,8 +330,8 @@ struct LibraryView: View {
                 guard case .booting = wine.state else { return }
                 // Let the game sheet finish closing before the surface is presented.
                 try? await Task.sleep(for: .milliseconds(600))
-                surfaceTitle = game.name
-                showSurface = true
+                session.title = game.name
+                session.shown = true
             } catch {
                 playError = error.localizedDescription
             }
@@ -385,8 +387,8 @@ struct LibraryView: View {
                             let launch = {
                                 wine.run(p)
                                 if p.graphics, case .booting = wine.state {
-                                    surfaceTitle = p.title
-                                    showSurface = true
+                                    session.title = p.title
+                                    session.shown = true
                                 }
                             }
                             if p.noJIT { launch() } else { withJIT(launch) }
@@ -395,8 +397,8 @@ struct LibraryView: View {
                             .frame(width: 90)
                     }
                 }
-                if !surfaceTitle.isEmpty, !showSurface {
-                    Button("Show \(surfaceTitle)") { showSurface = true }
+                if !session.title.isEmpty, !session.shown, wine.isPlaying {
+                    Button("Show \(session.title)") { session.shown = true }
                         .buttonStyle(DeckButtonStyle())
                 }
                 switch wine.state {

@@ -221,8 +221,15 @@ final class WineController: ObservableObject, @unchecked Sendable {
         }
         guard linked else { return refuse("This build does not include Wine yet.") }
         switch state {
-        case .booting, .running, .finished:
-            return refuse("Wine already ran a program in this session. Restart MYIOSDECK to run another.")
+        case .booting, .running:
+            // A game is still running, maybe with its view hidden: its state stays as it is (a
+            // .failed here closed its view and hid the Return bar). Play says why (LibraryView).
+            dlog("[wine] start of \(program.title) refused: a program is still running")
+            return
+        case .finished:
+            // Madeira's wineserver keeps the first session's permanent objects (a second start
+            // aborts in init_registry); Madeira asks for a restart too (LibraryModel.sessionsThisRun).
+            return refuse("MYIOSDECK runs one Windows game per launch. To play another, swipe MYIOSDECK away in the app switcher and open it again.")
         default: break
         }
         // No JIT: Wine maps its DLLs from the signed dylibs and loads the stub x64 emulator.
