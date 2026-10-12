@@ -90,8 +90,18 @@ struct LibraryView: View {
         }
         .fullScreenCover(isPresented: $showSurface) { gameSurface }
         .onChange(of: wine.state) { _, state in
-            // A crashed program: close the surface so the crash report can show.
-            if case .finished(_, let how) = state, how.contains("error") { showSurface = false }
+            // The session ended (the game's own Quit, a crash, or a start that failed): close the
+            // surface and its menus and go back to the library, where the status shows (and a
+            // crash report after it). Left up, it was a black screen until Hide game. A launcher
+            // that starts its game and exits is not an end: 32-bit sessions wait for the game.
+            switch state {
+            case .finished, .failed:
+                dlog("[ui] session ended: game view closed")
+                showGameMenu = false; showControllerMenu = false; showTouchMenu = false
+                showSurface = false
+                surfaceTitle = ""
+            default: break
+            }
         }
     }
 
