@@ -84,7 +84,7 @@ static void table_insert(struct Fxi *vm, Block *b) {   // under g_translate_lock
 struct Fxi *fxi_vm_new(void) {
     pthread_mutex_lock(&g_translate_lock);
     if (!fxi_stop) {
-        fxi_stop = calloc(1, sizeof(Block) + sizeof(Uop));
+        fxi_stop = calloc(1, sizeof(Block) + 2 * sizeof(Uop));   // GPTA: dispatch lookahead sentinel
         fxi_stop->n = 1;
         fxi_stop->u[0].fn = fxi_named("stop");
         gpta_init_stop(fxi_stop);

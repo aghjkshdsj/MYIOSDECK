@@ -39,7 +39,8 @@ typedef void (*OpFn)(FxiCpu *c, Uop *u);
 // none is in x8-x17, the registers the compiler takes first as scratch (a guest register about
 // to be overwritten would serve as scratch before a load that may fault, and its value at the
 // fault would be lost: gpta_win_host_state). The CPU pointer (never dead), T and the flag words
-// take x10-x14 and x9.
+// take x10-x14 and x9. GPTA's dispatch lookahead uses the next integer argument
+// register, x15; it carries no guest-visible state.
 #if defined(__aarch64__) && defined(__has_attribute) && __has_attribute(preserve_none)   // x86 hosts: too few argument registers
 #define GPTA_CC __attribute__((preserve_none))
 #else
@@ -49,10 +50,10 @@ typedef void (*OpFn)(FxiCpu *c, Uop *u);
 typedef uint64_t GptaV __attribute__((vector_size(16)));
 #define GPTA_PARAMS uint64_t g15, Uop *u, uint64_t g0, uint64_t g1, uint64_t g2, uint64_t g6, uint64_t g7, \
     uint64_t g4, uint64_t g3, uint64_t g5, uint64_t g8, uint64_t g9, uint64_t g10, uint64_t g11, uint64_t g12, \
-    uint64_t g13, uint64_t g14, FxiCpu *c, uint64_t T, uint64_t F0, uint64_t F1, uint64_t F2, uint64_t F3, \
+    uint64_t g13, uint64_t g14, FxiCpu *c, uint64_t T, uint64_t F0, uint64_t F1, uint64_t F2, uint64_t F3, uintptr_t next_p, \
     GptaV x0, GptaV x1, GptaV x2, GptaV x3, GptaV x4, GptaV x5, GptaV x6, GptaV x7
 // The arguments of a handler call for uop U (GPTA_PARAMS' order)
-#define GPTA_CALL(U) (g15, (U), g0, g1, g2, g6, g7, g4, g3, g5, g8, g9, g10, g11, g12, g13, g14, c, T, F0, F1, F2, F3, \
+#define GPTA_CALL(U) (g15, (U), g0, g1, g2, g6, g7, g4, g3, g5, g8, g9, g10, g11, g12, g13, g14, c, T, F0, F1, F2, F3, next_p, \
     x0, x1, x2, x3, x4, x5, x6, x7)
 typedef GPTA_CC void (*PFn)(GPTA_PARAMS);
 

@@ -4,7 +4,7 @@
 // FXI keeps the x86 register file in memory, so every instruction loads and stores it.
 // Here the 16 guest GPRs, an effective-address temporary T and the four lazy-flag words
 // are the arguments of every handler, and clang's preserve_none calling convention passes
-// all of them in host registers (ARM64: 23 argument registers). Each hot instruction form
+// all of them in host registers (ARM64: 23 state arguments plus dispatch lookahead). Each hot instruction form
 // has a handler specialised on its register operands, so `add rax, rbx` compiles to one
 // ARM64 add plus the dispatch. Everything else runs FXI's own handler through p_slow,
 // which spills the registers around the call: full coverage, FXI's exact semantics.
@@ -1134,9 +1134,11 @@ Block *gpta_lower(struct Fxi *vm, Block *b) {
     if (ns) { copies = g_trace_uops / M; if (copies > TRACE_COPIES) copies = TRACE_COPIES; if (copies < 1) copies = 1; }
     if (copies > 1 && (copies & 1)) copies--;   // even: the replicas alternate between copies (replicate)
     uint32_t n = (uint32_t)(copies * M + S);
-    Block *nb = malloc(sizeof(Block) + sizeof(Uop) * n);
+    Block *nb = malloc(sizeof(Block) + sizeof(Uop) * ((size_t)n + 1));
     nb->rip = b->rip;
     nb->n = n;
+    memset(&nb->u[n], 0, sizeof nb->u[n]);
+    nb->u[n].p = p_stop;   // allocated lookahead sentinel, never part of the guest block
     for (int c = 0; c < copies; c++)
         for (int i = 0; i < nseg; i++) memcpy(&nb->u[c * M + off[i]], o[i].out, sizeof(Uop) * (size_t)m[i]);
     for (int i = 0; i < nseg; i++) memcpy(&nb->u[copies * M + soff[i]], o[i].out + m[i], sizeof(Uop) * (size_t)o[i].np);
@@ -1178,10 +1180,10 @@ Block *gpta_lower(struct Fxi *vm, Block *b) {
     return nb;
 }
 
-void gpta_init_stop(Block *b) { b->u[0].p = p_stop; }
+void gpta_init_stop(Block *b) { b->u[0].p = p_stop; b->u[b->n].p = p_stop; }
 // Windows mode's exit blocks (a jump into native ARM64EC code, fxi_win.c) are built outside the
 // lowering: FXI's handler sets the stop and the target, with the state in the CPU structure.
-void gpta_init_slow(Block *b) { for (uint32_t i = 0; i < b->n; i++) b->u[i].p = p_slow; }
+void gpta_init_slow(Block *b) { for (uint32_t i = 0; i < b->n; i++) b->u[i].p = p_slow; b->u[b->n].p = p_stop; }
 
 #ifdef GPTA_PROFILE
 // Diagnostic build (-DGPTA_PROFILE): every dispatch counts its uop. At exit, the total and the
@@ -1230,6 +1232,7 @@ void gpta_enter(FxiCpu *c, Block *b) {
     GptaV x0, x1, x2, x3, x4, x5, x6, x7;
     RELOAD_F();
     RELOAD_X();
+    uintptr_t next_p = (uintptr_t)b->u[1].p;
     b->u[0].p GPTA_CALL(b->u);
 }
 

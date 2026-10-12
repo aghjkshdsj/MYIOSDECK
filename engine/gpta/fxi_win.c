@@ -48,7 +48,7 @@ static int (*g_native_kind)(uint64_t target);                                 //
 void fxi_win_set_native(int (*kind)(uint64_t target)) { g_native_kind = kind; }   // GPTA
 
 Block *fxi_win_exit_block(uint64_t rip) {
-    Block *b = calloc(1, sizeof(Block) + sizeof(Uop));
+    Block *b = calloc(1, sizeof(Block) + 2 * sizeof(Uop));   // GPTA: dispatch lookahead sentinel
     b->rip = rip;
     b->n = 1;
     b->u[0].fn = fxi_named("ec_exit");

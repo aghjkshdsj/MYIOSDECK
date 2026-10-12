@@ -42,14 +42,19 @@
 // Keep handler entries on a fixed fetch boundary. This is static code layout;
 // the normal correctness and performance harness validates the layout trial.
 #define PH static __attribute__((aligned(32))) GPTA_SECTION GPTA_CC void
-// Dispatch: the handler pointer is the uop's first field, so stepping to the next uop is one
-// load with writeback and an indirect branch.
+// Dispatch lookahead: next_p is (u+1)->p, carried in the final ARM64 integer
+// argument register (x15). Sequential dispatch consumes this already loaded
+// pointer while loading the following one. Every executable block has one
+// allocated sentinel uop, including the one-uop stop/native-exit blocks.
 #ifdef GPTA_PROFILE   // diagnostic build: count every dispatch (gpta_profile_dump)
-#define PGO(nu) do { Uop *n_ = (nu); n_->prof++; __attribute__((musttail)) return n_->p GPTA_CALL(n_); } while (0)
+#define GPTA_COUNT(U) ((U)->prof++)
 #else
-#define PGO(nu) do { Uop *n_ = (nu); __attribute__((musttail)) return n_->p GPTA_CALL(n_); } while (0)
+#define GPTA_COUNT(U) ((void)0)
 #endif
-#define PNEXT() PGO(u + 1)
+#define PGO(nu) do { Uop *n_ = (nu); PFn fn_ = n_->p; next_p = (uintptr_t)n_[1].p; \
+    GPTA_COUNT(n_); __attribute__((musttail)) return fn_ GPTA_CALL(n_); } while (0)
+#define PNEXT() do { Uop *n_ = u + 1; PFn fn_ = (PFn)next_p; next_p = (uintptr_t)n_[1].p; \
+    GPTA_COUNT(n_); __attribute__((musttail)) return fn_ GPTA_CALL(n_); } while (0)
 #define PTAIL(fn) do { __attribute__((musttail)) return fn GPTA_CALL(u); } while (0)
 #define gZ ((uint64_t)0)
 
@@ -248,7 +253,7 @@ FXI_INLINE int pcond_tab(uint64_t tab, uint64_t F0, uint64_t F1, uint64_t F2, ui
 // cycles, one from an add about 1.3; engine/gpta-probe/dispatch_probe.c.)
 #define PCHAIN_T(LINK, MISS) do {                                                          \
         Uop *lk_ = (LINK), *nx_ = u + 1;                                                   \
-        if (lk_ == nx_) { __asm__("" : "+r"(nx_)); PGO(nx_); }                             \
+          if (lk_ == nx_) PNEXT();                                                        \
         if (FXI_LIKELY(lk_ != 0)) PGO(lk_);                                                \
         PTAIL(MISS);                                                                       \
     } while (0)
