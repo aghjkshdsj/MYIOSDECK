@@ -981,11 +981,29 @@ static void gpta_jresult_trace(void) {
     for (int j = 0; j < 32; j++) h = mix(h, arr[j]); \
     h = mix(h, f & ARITH); \
 } while (0)
+#define IMMSTORE_ZERO_CASE(OP, ADDR, IX) do { \
+    u64 fi = flags_in(), f; \
+    __asm__ volatile(PRE OP " " ADDR POST \
+        : [f] "=&r"(f) : [p] "r"(arr + 8), [ix] "r"((u64)(IX)), [fi] "r"(fi) : "cc", "memory"); \
+    for (int j = 0; j < 32; j++) h = mix(h, arr[j]); \
+    h = mix(h, f & ARITH); \
+} while (0)
+#define IMMSTORE_ZERO_SCALE(SC, IX) \
+    IMMSTORE_ZERO_CASE("movb $0xa5,", "(%[p],%[ix]," #SC ")", IX); \
+    IMMSTORE_ZERO_CASE("movw $0x8153,", "(%[p],%[ix]," #SC ")", IX); \
+    IMMSTORE_ZERO_CASE("movl $0x89abcdef,", "(%[p],%[ix]," #SC ")", IX); \
+    IMMSTORE_ZERO_CASE("movq $-12345,", "(%[p],%[ix]," #SC ")", IX)
 static void gpta_immstores(void) {
     u64 h = 14695981039346656037ull, arr[32];
     for (int i = 0; i < N; i++) {
         for (int j = 0; j < 32; j++) arr[j] = val();
         IMMSTORE_SCALE(1); IMMSTORE_SCALE(2); IMMSTORE_SCALE(4); IMMSTORE_SCALE(8);
+        IMMSTORE_ZERO_SCALE(1, 7); IMMSTORE_ZERO_SCALE(2, -7);
+        IMMSTORE_ZERO_SCALE(4, 7); IMMSTORE_ZERO_SCALE(8, -7);
+        IMMSTORE_ZERO_CASE("movb $0,", "(%[p])", 0);
+        IMMSTORE_ZERO_CASE("movw $-1,", "(%[p])", 0);
+        IMMSTORE_ZERO_CASE("movl $0,", "(%[p])", 0);
+        IMMSTORE_ZERO_CASE("movq $-1,", "(%[p])", 0);
     }
     out("gpta_immstores", h);
 }

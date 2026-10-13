@@ -24,6 +24,7 @@
 #include "gpta_pin_unary_stub.h"
 #include "gpta_pin_xzero.h"
 #include "gpta_pin_alu_mem.h"
+#include "gpta_pin_stzero.h"
 
 static uint16_t k_cctab[16];   // cmov truth tables per condition code (pcond_tab)
 
@@ -287,7 +288,7 @@ static void rmap_init(void) {
     g_rmap = calloc(RMAP_SLOTS, sizeof *g_rmap);
     // gpta_pin_alu.c
     RMAP(t_alu_rr); RMAP(t_alu_ri); RMAP(t_alu_rt); RMAP(t_alu_tr); RMAP(t_alu_ti); RMAP(t_stti); RMAP(t_ld);
-    RMAP(t_st); RMAP(t_lea); RMAP(t_sti); RMAP(t_sti_bi); RMAP(t_ea); RMAP(t_eaz); RMAP(t_mov_rr); RMAP(t_mov_ri); RMAP(t_movt);
+    RMAP(t_st); RMAP(t_lea); RMAP(t_sti); RMAP(t_sti_bi); RMAP(t_stiz); RMAP(t_ea); RMAP(t_eaz); RMAP(t_mov_rr); RMAP(t_mov_ri); RMAP(t_movt);
     RMAP(t_ldt); RMAP(t_stt); RMAP(t_ext); RMAP(t_sh); RMAP(t_un); RMAP(t_uncf); RMAP(t_uknown); RMAP(t_imul2); RMAP(t_imul3); RMAP(t_imul2t);
     RMAP(t_imul3t); RMAP(t_cmov); RMAP(t_cmovt);
     // gpta_pin_sse.c
@@ -496,6 +497,7 @@ static void lower_one(Out *o, const Uop *u) {
             if (ea_ok(u)) { with_ea(o, u, t_stt[si][S]); return; }
         }
         if (fm == F_MI) {
+            if (!u->disp && ea_ok(u)) { put_uop(o, u, t_stiz[u->scale][si][u->base][u->index]); return; }
             if (simple_mem(u)) { put_uop(o, u, t_sti[si][u->base]); return; }
             if (ea_ok(u)) { put_uop(o, u, t_sti_bi[u->scale][si][u->base][u->index]); return; }
         }
@@ -1293,6 +1295,7 @@ static void hidx_build(void) {
     hidx_tab((const PFn *)t_fs_unary, sizeof t_fs_unary / sizeof(PFn));
     hidx_tab((const PFn *)t_xlz, sizeof t_xlz / sizeof(PFn));
     hidx_tab((const PFn *)t_xsz, sizeof t_xsz / sizeof(PFn));
+    hidx_tab((const PFn *)t_stiz, sizeof t_stiz / sizeof(PFn));
 #define AM_HIDX(N) hidx_tab((const PFn *)gpta_##N, sizeof gpta_##N / sizeof(PFn));
     GPTA_AM_TABLES(AM_HIDX)
 #undef AM_HIDX

@@ -111,17 +111,23 @@ FAULT(f_am_or, KEEP_OLD_FLAGS, "orl 16(%%rbx,%%rsi,8), %%ecx")    // 33
 FAULT(f_am_xor, KEEP_OLD_FLAGS, "xorq (%%rbx,%%rsi,4), %%rcx")    // 34
 FAULT(f_am_base, KEEP_OLD_FLAGS, "addq (%%rbx,%%rsi,2), %%rbx")   // 35
 FAULT(f_am_index, KEEP_OLD_FLAGS, "xorl (%%rbx,%%rsi,4), %%esi")  // 36
-FAULT(f_xhigh_load, "", "movdqu (%%rbx,%%rsi,4), %%xmm8")      // 37
-FAULT(f_xhigh_scalar, "", "movss (%%rbx), %%xmm15")            // 38
-FAULT(f_xhigh_arith, "", "addsd (%%rbx,%%rsi,2), %%xmm14")     // 39
-FAULT(f_xhigh_store, "", "movdqu %%xmm13, (%%rbx,%%rsi,8)")   // 40
+#define DUP_XMM(R) "punpcklqdq %%" R ", %%" R "\n\t"
+FAULT(f_xhigh_load, DUP_XMM("xmm8"), "movdqu (%%rbx,%%rsi,4), %%xmm8")      // 37
+FAULT(f_xhigh_scalar, DUP_XMM("xmm15"), "movss (%%rbx), %%xmm15")            // 38
+FAULT(f_xhigh_arith, DUP_XMM("xmm14"), "addsd (%%rbx,%%rsi,2), %%xmm14")     // 39
+FAULT(f_xhigh_store, DUP_XMM("xmm13"), "movdqu %%xmm13, (%%rbx,%%rsi,8)")   // 40
+FAULT(f_stiz8, "", "movb $0xa5, (%%rbx,%%rsi)")             // 41
+FAULT(f_stiz16, "", "movw $0x8153, (%%rbx,%%rsi,2)")        // 42
+FAULT(f_stiz32, "", "movl $0x89abcdef, (%%rbx,%%rsi,4)")     // 43
+FAULT(f_stiz64, "", "movq $-12345, (%%rbx,%%rsi,8)")        // 44
 static void (*const k_faults[])(void) = { f_load, f_store, f_xload, f_push, f_call, f_cmpj, f_ltj, f_pop, f_ret,
                                           f_rmw, f_callm, f_xstore, f_xarith_index, f_xarith_base,
                                           f_xload2, f_xload4, f_xload8, f_xstore2, f_xstore4, f_xstore8,
                                           f_immstore1, f_immstore2, f_immstore4, f_immstore8,
                                           f_xloadz2, f_xloadz4, f_xloadz8, f_xstorez2, f_xstorez4, f_xstorez8,
                                           f_am_add, f_am_sub, f_am_and, f_am_or, f_am_xor, f_am_base, f_am_index,
-                                          f_xhigh_load, f_xhigh_scalar, f_xhigh_arith, f_xhigh_store };
+                                          f_xhigh_load, f_xhigh_scalar, f_xhigh_arith, f_xhigh_store,
+                                          f_stiz8, f_stiz16, f_stiz32, f_stiz64 };
 
 int guest_main(int argc, char **argv) {
     if (argc >= 3 && g_streq(argv[1], "loop")) { loop(g_atou(argv[2])); g_puts("loop done\n"); return 0; }

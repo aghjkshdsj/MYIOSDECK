@@ -45,9 +45,9 @@ typedef void (*OpFn)(FxiCpu *c, Uop *u);
 #else
 #define GPTA_CC
 #endif
-// GPTA: an experimental uniform scalar lane layout. Each vector argument holds
-// the low halves of XMMn and XMM(n+8); all upper halves remain in c->xmm.
-#define GPTA_PACKED_XMM 1
+// GPTA: full XMM0-7 values use vector arguments; XMM8-15 stay in CPU state.
+// The uniform packed-low-lane experiment is retained disabled for reproducibility.
+#define GPTA_PACKED_XMM 0
 typedef uint64_t GptaV __attribute__((vector_size(16)));
 #define GPTA_PARAMS uint64_t g15, Uop *u, uint64_t g0, uint64_t g1, uint64_t g2, uint64_t g6, uint64_t g7, \
     uint64_t g4, uint64_t g3, uint64_t g5, uint64_t g8, uint64_t g9, uint64_t g10, uint64_t g11, uint64_t g12, \

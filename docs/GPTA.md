@@ -37,6 +37,8 @@ row below. Interrupted or defective trials are recorded separately.
 | 854f508 | [38323651889](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38323651889) | 26.29% | 30.07% | 8.32% | 14.00% |
 | 606c551 | [38336291017](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38336291017) | 24.78% | 29.05% | 8.41% | 14.03% |
 | 2efd5a0 | [38336924280](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38336924280) | 25.32% | 28.76% | 8.15% | 13.94% |
+| 845e2ab | [38409262613](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38409262613) | 23.88% | 28.18% | 8.49% | 13.96% |
+| 39daaf6 | [38409596148](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38409596148) | 23.76% | 29.39% | 8.34% | 14.03% |
 
 The third trial (result-width branches and simplified floating comparisons)
 regressed. Its ARM64, x86 and iOS gates passed. That trial is rolled back in
@@ -128,7 +130,9 @@ lookahead reduced both means relative to its predecessor. 2efd5a0 adds
 general single-handler memory-source ADD/SUB/AND/OR/XOR and passes all gates.
 Neither suite reaches 50%. The next experiments pack all sixteen low XMM
 lanes into eight vector arguments, then restore ordinary dispatch. These
-experiments are not measured until their own CI gates and timings complete.
+experiments passed all gates, but packed low XMM lanes strongly regressed
+standard SIMD. The next trial restores full-vector pinning and adds general
+zero-displacement immediate stores. No program-dependent layout is selected.
 
 Raw per-sample nanoseconds, checksums, commands and return codes are in each
 run's `gpta-evidence-ubuntu-24.04-arm` artifact (`gpta-results.json`). The first
