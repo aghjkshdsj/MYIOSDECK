@@ -265,7 +265,10 @@ int main(int argc, char **argv) {
         g_guest = pthread_self();
         pthread_t t;
         pthread_create(&t, NULL, stopper, NULL);
-        const char *gargv[] = { "winstate", "loop", "20000000" };
+        // More execution time for signal sampling as dispatch changes. Keep
+        // the exact-state coverage threshold below unchanged; never accept a
+        // short run just because no incorrect sampled state was observed.
+        const char *gargv[] = { "winstate", "loop", "100000000" };
         int ok = fxi_run_elf(elf, (size_t)len, 3, gargv, &r);
         g_done = 1;
         pthread_join(t, NULL);

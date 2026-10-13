@@ -10,7 +10,7 @@ executable code.
 Both suites remain below the 50% target. These are ARM64 Linux arithmetic means
 of exact native/engine median ratios; displayed values are truncated. All
 required Linux, Windows-state and iOS compile gates passed on every measured
-row below, including f7548e5. Interrupted or defective trials are recorded separately.
+row below. Interrupted or defective trials are recorded separately.
 
 | Commit | CI run | Standard GPTA | Held-out GPTA | Standard FXI | Held-out FXI |
 |---|---|---:|---:|---:|---:|
@@ -31,6 +31,10 @@ row below, including f7548e5. Interrupted or defective trials are recorded separ
 | c5e05cd | [38138855206](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38138855206) | 26.76% | 29.89% | 8.30% | 13.96% |
 | a8564c7 | [38139160111](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38139160111) | 26.25% | 30.52% | 8.20% | 13.98% |
 | f7548e5 | [38196176226](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38196176226) | 24.71% | 30.18% | 8.29% | 13.99% |
+| 2babf4d | [38322298784](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38322298784) | 27.36% | 30.25% | 8.30% | 13.99% |
+| 2e9d06d | [38322530884](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38322530884) | 27.16% | 30.44% | 8.21% | 13.94% |
+| 2633909 | [38323423231](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38323423231) | 26.88% | 30.29% | 8.33% | 14.01% |
+| 854f508 | [38323651889](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38323651889) | 26.29% | 30.07% | 8.32% | 14.00% |
 
 The third trial (result-width branches and simplified floating comparisons)
 regressed. Its ARM64, x86 and iOS gates passed. That trial is rolled back in
@@ -88,7 +92,8 @@ in those handlers; its speed effect remains unmeasured until CI completes.
 The combined f7548e5 trial adds static ARM64 scalar floating branches, adjacent
 arithmetic trace edges, and fixed XMM destination offsets. The first attempts
 at 8bd055a and 5c001ab lost their ARM runners during compilation (x86 and iOS
-passed); their ARM retries are pending. fb5901c introduced a replication bug:
+passed); their ARM retries also ended without timings. Their separate ARM speeds
+remain not measured. fb5901c introduced a replication bug:
 the last trace copy inherited an adjacent-only branch from the first copy,
 causing the standard memory workload to crash. Its run and the superseded
 470a08d/cc644e1 runs are invalid, not speed results. f7548e5 fixes per-copy
@@ -100,6 +105,21 @@ The corrected combined trial regresses the standard mean. Its standard branch
 profile retires fewer instructions but shows much higher front-end stalls.
 The next comparison disables arithmetic adjacent-edge handler selection while
 retaining the replication correctness fix. No held-out internals informed it.
+
+2babf4d disables those arithmetic trace handlers and adds iOS compiler caching.
+2e9d06d statically specializes every legal nonzero immediate shift/rotate count
+when flags are dead. 2633909 extends INC/DEC-and-branch pairs to a single
+flag-reading edge, reconstructing that edge's flags while retaining incoming
+carry. 854f508 extends zero-displacement SSE moves to every addressing scale.
+All passed the gates; neither later suite mean improves over 2babf4d.
+
+ee638cf carries sequential dispatch lookahead in the spare ARM64 integer
+argument register. Its [run](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38323912475)
+passed instruction correctness, fault sites, the assembly audit and iOS
+compilation, but sampled fewer stopped loop states than the unchanged minimum.
+ARM64 speed is not measured. The next trial extends only that diagnostic
+workload, retaining the exact-state acceptance threshold. Dispatch lookahead
+uses allocated sentinel uops, including one-uop stop and native exit blocks.
 
 Raw per-sample nanoseconds, checksums, commands and return codes are in each
 run's `gpta-evidence-ubuntu-24.04-arm` artifact (`gpta-results.json`). The first
