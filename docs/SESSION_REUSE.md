@@ -168,6 +168,18 @@ stack had changed under it (build 161 started the same game fine). Wine's iOS au
 (`audio_null_ios.c`) is one table for the session: an exited game's stream stays registered and
 mixed (16 slots), and every process attach re-initializes its lock; not yet changed.
 
+Build 163 (log 98, crash log 6): the reclaim works: the first Game.exe's window was torn down
+(166 views) and its memory came back (footprint 482 MB at the second start, against 900+ before),
+with the run-loop thread kept suspended (thread_terminate refused, error 53). The second
+Forager's report names the hang: its main thread waits in WaitForSingleObject for its audio
+thread, which waits for its first WASAPI buffer event, which the audio driver's timer gives only
+while the RemoteIO endpoint consumes. The endpoint is shared by the app and is stopped when the
+last client stops (the first game's exit) and started again for the next. Steins;Gate's second
+start ended the app with no log line while the second Game.exe brought its threads up, the moment
+its audio starts; Madeira's own notes record Apple's caulk trapping on RemoteIO churn. In a kept
+session the endpoint now stays running once started, and a started client whose endpoint is not
+running gets the 10 ms null-mode beat rather than no event at all.
+
 - **The first game is never reclaimed.** It is the session's initial process: no process socket
   entry, so none of the child exit clean-up. For a 32-bit first game its guest window also holds
   the PEB every later process is cloned from (`ios_initial_peb`), so it must stay mapped. A

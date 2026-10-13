@@ -86,7 +86,7 @@ step_ntdll() {
     # (engine/wine/patches/nojit_dylib.py). Start from the pristine file: the checkout is cached.
     git -C "$M" checkout -- build/ntdll-unix/virtual_ios.c build/ntdll-unix/loader_ios.c build/ntdll-unix/process_ios.c \
         build/ntdll-unix/env_ios.c build/ntdll-unix/signal_arm64_ios.c build/ntdll-unix/server_ios.c \
-        build/ntdll-unix/thread_ios.c
+        build/ntdll-unix/thread_ios.c build/ntdll-unix/audio_null_ios.c
     git -C "$W" checkout -- dlls/ntdll/unix/sync.c
     python3 "$HERE/patches/nojit_dylib.py" "$M"
     # Another game in the running session: process socket entries reused, a killed main thread ends its

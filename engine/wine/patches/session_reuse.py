@@ -463,6 +463,35 @@ static int ios_lookup_thread(thread_t mach_thread, uintptr_t *teb_out, void **tr
 '''),
 ]
 
+# Wine's iOS audio driver (build/ntdll-unix/audio_null_ios.c) has one RemoteIO endpoint for the app,
+# kept "for the process lifetime" because creating and releasing it churned Apple's caulk into a
+# trap; it is still stopped whenever no client plays and started again for the next one. With
+# session reuse that is every game: the last game's stream goes, the endpoint stops, the next game
+# starts it. Build 163: the second Forager's audio thread waited forever for its first buffer
+# event (the timer signals only as the device consumes), and the app died without a trace as the
+# second Game.exe brought its audio up. The endpoint now keeps running in a kept session once it
+# has run, and a started client whose endpoint is not running gets the null-mode 10 ms beat
+# instead of waiting for a consumer that never comes.
+AUDIO_FIXES = [
+    ("static void ios_dev_stop_if_idle(void)\n"
+     "{\n"
+     "    int i, any = 0;\n"
+     "\n"
+     "    pthread_mutex_lock(&g_dev_lock);\n",
+     "static void ios_dev_stop_if_idle(void)\n"
+     "{\n"
+     "    int i, any = 0;\n"
+     "\n"
+     "    {   " + MARK + "\n"
+     "        const char *reuse = getenv(\"MYIOSDECK_SESSION_REUSE\");\n"
+     "        if (reuse && reuse[0] == '1') return;   /* the next game plays through it as it is */\n"
+     "    }\n"
+     "    pthread_mutex_lock(&g_dev_lock);\n"),
+    ("    return s->mixable && g_dev.au != NULL;\n",
+     "    /* MYIOSDECK: a started client of an endpoint that is not running is driven by the wall clock */\n"
+     "    return s->mixable && g_dev.au != NULL && !(s->started && !g_dev.running);\n"),
+]
+
 # The reclaim (build/ntdll-unix/virtual_ios.c) asks the reaper before keeping a window for its
 # live threads.
 REAP_VIRTUAL_FIXES = [
@@ -652,6 +681,7 @@ def main():
         apply(root + "/wine/dlls/ntdll/unix/sync.c", REAP_SYNC_FIXES, what + " sync.c")
         apply(root + "/build/ntdll-unix/signal_arm64_ios.c", REAP_SIGNAL_FIXES, what + " signal_arm64_ios.c")
         apply(root + "/build/ntdll-unix/virtual_ios.c", REAP_VIRTUAL_FIXES, what + " virtual_ios.c")
+        apply(root + "/build/ntdll-unix/audio_null_ios.c", AUDIO_FIXES, what + " audio_null_ios.c")
     elif what == "server":
         apply(root + "/wine/server/process.c", FORCE_PROCESS_FIXES, what + " process.c")
         apply(root + "/build/wineserver/request_ios.c", FORCE_REQUEST_FIXES, what + " request_ios.c")
