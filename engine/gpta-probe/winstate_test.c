@@ -229,7 +229,8 @@ static void on_fault(int sig, siginfo_t *si, void *ctx) {
         }
         static const int xsrc[16] = { RAX, RCX, RDX, RSI, RDI, R8, R9, R10,
                                      R11, R12, R13, R14, RAX, RCX, RDX, RSI };
-        int dup_xmm = g_site == 37 ? 8 : g_site == 38 ? 15 : g_site == 39 ? 14 : g_site == 40 ? 13 : -1;
+        int dup_xmm = g_site == 37 ? 8 : g_site == 38 ? 15 : g_site == 39 ? 14 : g_site == 40 ? 13 :
+                      g_site == 45 ? 9 : g_site == 46 ? 12 : -1;
         for (int x = 0; x < 16; x++)
             if (c->xmm[x].q[0] != want[xsrc[x]] || c->xmm[x].q[1] != (x == dup_xmm ? want[xsrc[x]] : 0)) {
                 bad = 1; n += snprintf(out + n, sizeof out - (size_t)n, "xmm%d %#llx:%#llx; ", x, (unsigned long long)c->xmm[x].q[1], (unsigned long long)c->xmm[x].q[0]);

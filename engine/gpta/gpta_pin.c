@@ -25,6 +25,7 @@
 #include "gpta_pin_xzero.h"
 #include "gpta_pin_alu_mem.h"
 #include "gpta_pin_stzero.h"
+#include "gpta_pin_xscalar.h"
 
 static uint16_t k_cctab[16];   // cmov truth tables per condition code (pcond_tab)
 
@@ -295,6 +296,7 @@ static void rmap_init(void) {
     RMAP(t_xl_movx); RMAP(t_xs_movx); RMAP(t_xl_movxz); RMAP(t_xs_movxz); RMAP(t_xl_movss); RMAP(t_xl_movsd); RMAP(t_xs_movss); RMAP(t_xs_movsd);
     RMAP(t_xlt_movss); RMAP(t_xlt_movsd); RMAP(t_xlt_movlps); RMAP(t_xlt_movhps); RMAP(t_xst_movss); RMAP(t_xst_movsd);
     RMAP(t_xst_movhps); RMAP(t_xst_movx); RMAP(t_xg); RMAP(t_xgt); RMAP(t_gx);
+    RMAP(t_xscalar_load); RMAP(t_xscalar_store);
     RMAP(t_xmemi0); RMAP(t_xmemi1); RMAP(t_xmemi2); RMAP(t_xmemi3); RMAP(t_xmemb);
     for (size_t i = 0; i < gpta_n_xops; i++) {
         rmap_tab(&gpta_xops[i].rr[0][0], &gpta_xops_r1[i].rr[0][0], 256);
@@ -651,10 +653,10 @@ static void lower_one(Out *o, const Uop *u) {
                 u->scale ? t_xsz[u->scale - 1] : t_xs_movxz;
             put_uop(o, u, tab[sc][u->base][u->index]); return;
         }
-        case XS_MOVSS_RM: if (simple_mem(u)) put_uop(o, u, t_xl_movss[dc][u->base]); else with_ea(o, u, t_xlt_movss[dc]); return;
-        case XS_MOVSD_RM: if (simple_mem(u)) put_uop(o, u, t_xl_movsd[dc][u->base]); else with_ea(o, u, t_xlt_movsd[dc]); return;
-        case XS_MOVSS_MR: if (simple_mem(u)) put_uop(o, u, t_xs_movss[sc][u->base]); else with_ea(o, u, t_xst_movss[sc]); return;
-        case XS_MOVSD_MR: if (simple_mem(u)) put_uop(o, u, t_xs_movsd[sc][u->base]); else with_ea(o, u, t_xst_movsd[sc]); return;
+        case XS_MOVSS_RM: case XS_MOVSD_RM:
+            put_uop(o, u, t_xscalar_load[id == XS_MOVSD_RM][u->dst][u->base][u->index]); return;
+        case XS_MOVSS_MR: case XS_MOVSD_MR:
+            put_uop(o, u, t_xscalar_store[id == XS_MOVSD_MR][u->src][u->base][u->index]); return;
         case XS_MOVLPS_RM: with_ea(o, u, t_xlt_movlps[dc]); return;
         case XS_MOVHPS_RM: with_ea(o, u, t_xlt_movhps[dc]); return;
         case XS_MOVHPS_MR: with_ea(o, u, t_xst_movhps[sc]); return;
@@ -1296,6 +1298,8 @@ static void hidx_build(void) {
     hidx_tab((const PFn *)t_xlz, sizeof t_xlz / sizeof(PFn));
     hidx_tab((const PFn *)t_xsz, sizeof t_xsz / sizeof(PFn));
     hidx_tab((const PFn *)t_stiz, sizeof t_stiz / sizeof(PFn));
+    hidx_tab((const PFn *)t_xscalar_load, sizeof t_xscalar_load / sizeof(PFn));
+    hidx_tab((const PFn *)t_xscalar_store, sizeof t_xscalar_store / sizeof(PFn));
 #define AM_HIDX(N) hidx_tab((const PFn *)gpta_##N, sizeof gpta_##N / sizeof(PFn));
     GPTA_AM_TABLES(AM_HIDX)
 #undef AM_HIDX

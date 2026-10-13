@@ -1199,6 +1199,36 @@ static void gpta_xmm_lane_state(void) {
     out("gpta_xmm_lane_state", h);
 }
 
+#define SCALAR_MEM_CASE(X, OP, SCALE, DISP) do { \
+    v2 r; u64 f, fi = flags_in(); \
+    __asm__ volatile(PRE "movdqu %[seed], %%xmm" #X "\n\t" \
+        OP " " #DISP "(%[p],%[ix]," #SCALE "), %%xmm" #X "\n\t" \
+        "movdqu %%xmm" #X ", %[r]\n\t" \
+        OP " %%xmm" #X ", 96(%[p],%[ix]," #SCALE ")" POST \
+        : [r] "=m"(r), [f] "=&r"(f) \
+        : [seed] "m"(seed), [p] "r"(arr + 8), [ix] "r"((u64)-3), [fi] "r"(fi) \
+        : "xmm" #X, "cc", "memory"); \
+    h = mix(vmix(h, r), f & ARITH); \
+    for (int q = 0; q < 32; q++) h = mix(h, arr[q]); \
+} while (0)
+#define SCALAR_MEM_REG(X) \
+    SCALAR_MEM_CASE(X, "movss", 1, 0); SCALAR_MEM_CASE(X, "movsd", 1, 0); \
+    SCALAR_MEM_CASE(X, "movss", 2, 7); SCALAR_MEM_CASE(X, "movsd", 2, 7); \
+    SCALAR_MEM_CASE(X, "movss", 4, -9); SCALAR_MEM_CASE(X, "movsd", 4, -9); \
+    SCALAR_MEM_CASE(X, "movss", 8, 11); SCALAR_MEM_CASE(X, "movsd", 8, 11)
+static void gpta_scalar_mem(void) {
+    u64 h = 14695981039346656037ull, arr[32];
+    for (int i = 0; i < N; i++) {
+        for (int q = 0; q < 32; q++) arr[q] = val();
+        v2 seed = vdouble(1);
+        SCALAR_MEM_REG(0); SCALAR_MEM_REG(1); SCALAR_MEM_REG(2); SCALAR_MEM_REG(3);
+        SCALAR_MEM_REG(4); SCALAR_MEM_REG(5); SCALAR_MEM_REG(6); SCALAR_MEM_REG(7);
+        SCALAR_MEM_REG(8); SCALAR_MEM_REG(9); SCALAR_MEM_REG(10); SCALAR_MEM_REG(11);
+        SCALAR_MEM_REG(12); SCALAR_MEM_REG(13); SCALAR_MEM_REG(14); SCALAR_MEM_REG(15);
+    }
+    out("gpta_scalar_mem", h);
+}
+
 typedef void (*test_fn)(void);
 #define ALU_LIST(OP) OP##_q, OP##_l, OP##_w, OP##_b, OP##_mr_q, OP##_rm_l, OP##_mr_b,
 static const test_fn kTests[] = {
@@ -1229,7 +1259,7 @@ static const test_fn kTests[] = {
     fz_o, fz_no, fz_b, fz_ae, fz_e, fz_ne, fz_be, fz_a, fz_s, fz_ns, fz_p, fz_np, fz_l, fz_ge, fz_le, fz_g,
     fc_o, fc_no, fc_b, fc_ae, fc_e, fc_ne, fc_be, fc_a, fc_s, fc_ns, fc_p, fc_np, fc_l, fc_ge, fc_le, fc_g,
     fz_call, fz_index, fz_xindex, fz_3op, fz_3gap, fz_x3, fz_hoist, gpta_xmem, gpta_result_flags, gpta_xhigh, gpta_cf_flow,
-    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow, gpta_fcj_trace, gpta_jresult_trace, gpta_immstores, gpta_x3high, gpta_step_trace, gpta_shift_counts, gpta_unary_edges, gpta_alu_memory, gpta_xmm_lane_state,
+    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow, gpta_fcj_trace, gpta_jresult_trace, gpta_immstores, gpta_x3high, gpta_step_trace, gpta_shift_counts, gpta_unary_edges, gpta_alu_memory, gpta_xmm_lane_state, gpta_scalar_mem,
 };
 
 int guest_main(int argc, char **argv) {
