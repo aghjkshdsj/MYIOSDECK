@@ -234,6 +234,23 @@ static bool boot_next(const char *prefix, const char *exe, const char *args, cha
     return true;
 }
 
+/* Builds 163-164: the app ended while a second Steins;Gate started, with no crash report from
+ * iOS, as when something calls exit(). If anything does while Wine runs, the log says who. */
+#include <dlfcn.h>
+#include <execinfo.h>
+static void exit_report(void) {
+    void *frames[32];
+    int n = backtrace(frames, 32);
+    mid_log("[exit] the app is ending through exit() while Wine was started (%d frames):", n);
+    for (int i = 1; i < n; i++) {
+        Dl_info d;
+        if (dladdr(frames[i], &d) && d.dli_sname)
+            mid_log("[exit]   %s+%#lx", d.dli_sname, (unsigned long)((char *)frames[i] - (char *)d.dli_saddr));
+        else
+            mid_log("[exit]   %p", frames[i]);
+    }
+}
+
 bool mid_wine_boot(const char *prefix, const char *exe, const char *args, char *err, size_t errlen) {
     if (g_booted) return boot_next(prefix, exe, args, err, errlen);
     /* No-JIT (docs/NO_JIT_WINDOWS.md step B): the caller set WINE_IOS_NOJIT=1 and
@@ -305,6 +322,7 @@ bool mid_wine_boot(const char *prefix, const char *exe, const char *args, char *
     }
     g_booted = 1;
     g_programs = 1;
+    atexit(exit_report);
     mid_log("[wine] started %s%s", exe, g_reuse_armed ? " (session reuse: the session stays when it ends)" : "");
     return true;
 }

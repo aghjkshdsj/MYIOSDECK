@@ -936,6 +936,8 @@ void mid_wow_thread_report(const char *why) {
         stack_report(&t, mods, nm, 8);
     }
     mid_log("[quit-watch] %d thread(s) with an x86 CPU", shown);
+    extern void myiosdeck_audio_report(void);   // Wine's iOS audio driver (engine/wine/patches/session_reuse.py)
+    myiosdeck_audio_report();
     pthread_mutex_unlock(&g_note_lock);
 #else
     (void)why;

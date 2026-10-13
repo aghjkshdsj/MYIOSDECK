@@ -180,6 +180,13 @@ its audio starts; Madeira's own notes record Apple's caulk trapping on RemoteIO 
 session the endpoint now stays running once started, and a started client whose endpoint is not
 running gets the 10 ms null-mode beat rather than no event at all.
 
+Build 164 (log 99, crash log 7): neither changed. The second Forager hangs the same way (no
+driver line about its stream reached the log), and the app ended 0.4 s after the second Game.exe
+started, again with no crash report on the phone (none from that day in Analytics Data, which
+is what an exit() rather than a crash leaves). The game-menu report now includes the audio
+driver's state (endpoint, every registered and mixed stream with its positions and event), and
+an exit() while Wine runs logs its caller.
+
 - **The first game is never reclaimed.** It is the session's initial process: no process socket
   entry, so none of the child exit clean-up. For a 32-bit first game its guest window also holds
   the PEB every later process is cloned from (`ios_initial_peb`), so it must stay mapped. A

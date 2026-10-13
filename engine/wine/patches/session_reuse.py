@@ -490,6 +490,40 @@ AUDIO_FIXES = [
     ("    return s->mixable && g_dev.au != NULL;\n",
      "    /* MYIOSDECK: a started client of an endpoint that is not running is driven by the wall clock */\n"
      "    return s->mixable && g_dev.au != NULL && !(s->started && !g_dev.running);\n"),
+    # Diagnostics for the [quit-watch] report (App/Sources/Native/fxi_wow_host.c): the endpoint and
+    # every registered and mixed stream. Build 164: the second Forager's audio thread still waited
+    # for its first buffer event, and the driver logged nothing about that stream.
+    ("    ios_wow64_midi_notify_wait,        /* midi_notify_wait */\n"
+     "    ios_wow64_aux_message,             /* aux_message */\n"
+     "};\n",
+     "    ios_wow64_midi_notify_wait,        /* midi_notify_wait */\n"
+     "    ios_wow64_aux_message,             /* aux_message */\n"
+     "};\n" + r'''
+/* MYIOSDECK session-reuse (engine/wine/patches/session_reuse.py): the driver's state, for the
+ * app's [quit-watch] report. Read without the stream lock (a report, not a decision). */
+void myiosdeck_audio_report(void)
+{
+    extern void mid_log(const char *fmt, ...);
+    int i;
+
+    mid_log("[audio] endpoint au=%p running=%d failed=%d rate=%u ch=%u passes=%llu",
+            (void *)g_dev.au, g_dev.running, g_dev.failed, g_dev.rate, g_dev.channels,
+            (unsigned long long)atomic_load_explicit(&g_dev.cb_epoch, memory_order_relaxed));
+    for (i = 0; i < IOS_MAX_STREAMS; i++)
+    {
+        struct ios_stream *s = g_streams[i], *m = atomic_load_explicit(&g_mix[i], memory_order_relaxed);
+        if (s)
+            mid_log("[audio]   stream slot %d %p: valid=%d started=%d mixable=%d live=%d event=%p rate=%u ch=%u "
+                    "buffer=%u frames, written %llu, played %llu, cbs %u",
+                    i, (void *)s, s->valid, s->started, s->mixable, ios_stream_is_live(s), s->event,
+                    s->sample_rate, s->channels, s->buffer_frames,
+                    (unsigned long long)atomic_load_explicit(&s->write_pos, memory_order_relaxed),
+                    (unsigned long long)atomic_load_explicit(&s->play_pos, memory_order_relaxed),
+                    atomic_load_explicit(&s->st_cbs, memory_order_relaxed));
+        if (m) mid_log("[audio]   mixer slot %d: stream %p", i, (void *)m);
+    }
+}
+'''),
 ]
 
 # The reclaim (build/ntdll-unix/virtual_ios.c) asks the reaper before keeping a window for its
