@@ -1094,6 +1094,36 @@ static void gpta_unary_edges(void) {
     out("gpta_unary_edges", h);
 }
 
+#define AMEM_CASE(OP, SZ, REG, ADDR, TAIL, MASK, INIT) do { \
+    u64 r = (INIT), fi = flags_in(), f; \
+    __asm__ volatile(PRE OP SZ " " ADDR ", " REG "\n\t" TAIL POST \
+        : [r] "+&r"(r), [f] "=&r"(f) \
+        : [p] "r"((char *)data + 32), [k] "r"((u64)3), [fi] "r"(fi) : "cc", "memory"); \
+    h = mix(mix(h, r), f & (MASK)); \
+} while (0)
+#define AMEM_ADDR(OP, ADDR, MASK, INIT) \
+    AMEM_CASE(OP,"l","%k[r]",ADDR,"",MASK,INIT); \
+    AMEM_CASE(OP,"q","%[r]",ADDR,"",MASK,INIT); \
+    AMEM_CASE(OP,"l","%k[r]",ADDR,"xorl %k[f], %k[f]\n\t",LOGIC,INIT); \
+    AMEM_CASE(OP,"q","%[r]",ADDR,"xorl %k[f], %k[f]\n\t",LOGIC,INIT)
+#define AMEM_OP(OP,MASK) \
+    AMEM_ADDR(OP,"-7(%[p],%[k],1)",MASK,val()); \
+    AMEM_ADDR(OP,"9(%[p],%[k],2)",MASK,val()); \
+    AMEM_ADDR(OP,"(%[p],%[k],4)",MASK,val()); \
+    AMEM_ADDR(OP,"-7(%[p],%[k],8)",MASK,val()); \
+    AMEM_ADDR(OP,"3(%[p])",MASK,val()); \
+    AMEM_ADDR(OP,"9(%[p],%[r],2)",MASK,3); \
+    AMEM_ADDR(OP,"(%[p],%[r],8)",MASK,3)
+static void gpta_alu_memory(void) {
+    u64 data[32], h = 14695981039346656037ull;
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j < 32; j++) data[j] = val();
+        AMEM_OP("add",ARITH); AMEM_OP("sub",ARITH);
+        AMEM_OP("and",LOGIC); AMEM_OP("or",LOGIC); AMEM_OP("xor",LOGIC);
+    }
+    out("gpta_alu_memory", h);
+}
+
 typedef void (*test_fn)(void);
 #define ALU_LIST(OP) OP##_q, OP##_l, OP##_w, OP##_b, OP##_mr_q, OP##_rm_l, OP##_mr_b,
 static const test_fn kTests[] = {
@@ -1124,7 +1154,7 @@ static const test_fn kTests[] = {
     fz_o, fz_no, fz_b, fz_ae, fz_e, fz_ne, fz_be, fz_a, fz_s, fz_ns, fz_p, fz_np, fz_l, fz_ge, fz_le, fz_g,
     fc_o, fc_no, fc_b, fc_ae, fc_e, fc_ne, fc_be, fc_a, fc_s, fc_ns, fc_p, fc_np, fc_l, fc_ge, fc_le, fc_g,
     fz_call, fz_index, fz_xindex, fz_3op, fz_3gap, fz_x3, fz_hoist, gpta_xmem, gpta_result_flags, gpta_xhigh, gpta_cf_flow,
-    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow, gpta_fcj_trace, gpta_jresult_trace, gpta_immstores, gpta_x3high, gpta_step_trace, gpta_shift_counts, gpta_unary_edges,
+    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow, gpta_fcj_trace, gpta_jresult_trace, gpta_immstores, gpta_x3high, gpta_step_trace, gpta_shift_counts, gpta_unary_edges, gpta_alu_memory,
 };
 
 int guest_main(int argc, char **argv) {

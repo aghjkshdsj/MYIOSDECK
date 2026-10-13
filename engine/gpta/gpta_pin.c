@@ -23,6 +23,7 @@
 #include "gpta_pin_shconst.h"
 #include "gpta_pin_unary_stub.h"
 #include "gpta_pin_xzero.h"
+#include "gpta_pin_alu_mem.h"
 
 static uint16_t k_cctab[16];   // cmov truth tables per condition code (pcond_tab)
 
@@ -265,7 +266,7 @@ static int is_shuffle(const char *n) {
 // branch keeps one successor: Ertl and Gregg's replication of interpreter instructions. A handler
 // at one place per copy alternates between the copies of a trace, which also spaces out repeats of
 // the same branch (the probe: a branch taken again within a few dispatches costs more).
-#define RMAP_SLOTS (1u << 19)
+#define RMAP_SLOTS (1u << 20)
 typedef struct { PFn p, r; } RPair;
 static RPair *g_rmap;
 static uint64_t hpfn(PFn p) { return ((uint64_t)(uintptr_t)p * 0x9E3779B97F4A7C15ull) >> 40; }
@@ -306,6 +307,7 @@ static void rmap_init(void) {
     RMAP(t_sii_trace); RMAP(t_sri_trace);
     RMAP(t_shconst);
     RMAP(t_xlz); RMAP(t_xsz);
+    RMAP(t_am_add); RMAP(t_am_sub); RMAP(t_am_and); RMAP(t_am_or); RMAP(t_am_xor);
 }
 // u: `copies` copies of M uops (a block: one copy). A handler at several places in a copy takes
 // the replica at every second place. When every handler of the copy has a replica, those at a
@@ -464,7 +466,13 @@ static void lower_one(Out *o, const Uop *u) {
         if (!fl && (op == ALU_CMP || op == ALU_TEST) && (fm == F_RR || fm == F_RI)) return;
         if (fm == F_RR && si >= 2 && D >= 0 && S >= 0) { put_uop(o, u, t_alu_rr[fl][op][si - 2][D][S]); return; }
         if (fm == F_RI && si >= 2 && D >= 0) { put_uop(o, u, t_alu_ri[fl][op][si - 2][D]); return; }
-        if (fm == F_RM && si >= 2 && D >= 0 && ea_ok(u)) { with_ea(o, u, t_alu_rt[fl][op][si - 2][D]); return; }
+        if (fm == F_RM && si >= 2 && D >= 0 && ea_ok(u)) {
+            const PFn (*tab)[2][17][17][16] = op == ALU_ADD ? t_am_add : op == ALU_SUB ? t_am_sub :
+                op == ALU_AND ? t_am_and : op == ALU_OR ? t_am_or : op == ALU_XOR ? t_am_xor : 0;
+            if (tab) put_uop(o, u, tab[fl][si - 2][u->base][u->index][D]);
+            else with_ea(o, u, t_alu_rt[fl][op][si - 2][D]);
+            return;
+        }
         if (fm == F_MR && S >= 0 && ea_ok(u)) { with_ea(o, u, t_alu_tr[fl][op][si][S]); return; }
         if (fm == F_MI && ea_ok(u)) { with_ea(o, u, t_alu_ti[fl][op][si]); return; }
         break;
@@ -1286,6 +1294,9 @@ static void hidx_build(void) {
     hidx_tab((const PFn *)t_fs_unary, sizeof t_fs_unary / sizeof(PFn));
     hidx_tab((const PFn *)t_xlz, sizeof t_xlz / sizeof(PFn));
     hidx_tab((const PFn *)t_xsz, sizeof t_xsz / sizeof(PFn));
+#define AM_HIDX(N) hidx_tab((const PFn *)gpta_##N, sizeof gpta_##N / sizeof(PFn));
+    GPTA_AM_TABLES(AM_HIDX)
+#undef AM_HIDX
     static const PFn one[] = { p_stop, p_nop, p_jmp, p_goto, p_call, p_ret, p_call_T, p_jmp_T, p_call_M, p_jmp_M, p_syscall,
                                p_nat_tlsget, p_nat_csenter, p_nat_csleave };
     hidx_tab(one, sizeof one / sizeof one[0]);

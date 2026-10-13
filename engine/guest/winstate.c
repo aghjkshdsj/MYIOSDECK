@@ -100,11 +100,21 @@ FAULT(f_xloadz8, "", "movdqu (%%rbx,%%rsi,8), %%xmm3")    // 26
 FAULT(f_xstorez2, "", "movdqu %%xmm0, (%%rbx,%%rsi,2)")   // 27
 FAULT(f_xstorez4, "", "movdqu %%xmm7, (%%rbx,%%rsi,4)")   // 28
 FAULT(f_xstorez8, "", "movdqu %%xmm3, (%%rbx,%%rsi,8)")   // 29
+// Make the earlier compare live without changing the state expected at fault.
+#define KEEP_OLD_FLAGS "pushfq\n\tpop %%rax\n\tmov $0x1011, %%rax\n\t"
+FAULT(f_am_add, KEEP_OLD_FLAGS, "addq (%%rbx,%%rsi), %%rcx")       // 30
+FAULT(f_am_sub, KEEP_OLD_FLAGS, "subl 16(%%rbx,%%rsi,2), %%ecx")  // 31
+FAULT(f_am_and, KEEP_OLD_FLAGS, "andq -16(%%rbx,%%rsi,4), %%rcx") // 32
+FAULT(f_am_or, KEEP_OLD_FLAGS, "orl 16(%%rbx,%%rsi,8), %%ecx")    // 33
+FAULT(f_am_xor, KEEP_OLD_FLAGS, "xorq (%%rbx,%%rsi,4), %%rcx")    // 34
+FAULT(f_am_base, KEEP_OLD_FLAGS, "addq (%%rbx,%%rsi,2), %%rbx")   // 35
+FAULT(f_am_index, KEEP_OLD_FLAGS, "xorl (%%rbx,%%rsi,4), %%esi")  // 36
 static void (*const k_faults[])(void) = { f_load, f_store, f_xload, f_push, f_call, f_cmpj, f_ltj, f_pop, f_ret,
                                           f_rmw, f_callm, f_xstore, f_xarith_index, f_xarith_base,
                                           f_xload2, f_xload4, f_xload8, f_xstore2, f_xstore4, f_xstore8,
                                           f_immstore1, f_immstore2, f_immstore4, f_immstore8,
-                                          f_xloadz2, f_xloadz4, f_xloadz8, f_xstorez2, f_xstorez4, f_xstorez8 };
+                                          f_xloadz2, f_xloadz4, f_xloadz8, f_xstorez2, f_xstorez4, f_xstorez8,
+                                          f_am_add, f_am_sub, f_am_and, f_am_or, f_am_xor, f_am_base, f_am_index };
 
 int guest_main(int argc, char **argv) {
     if (argc >= 3 && g_streq(argv[1], "loop")) { loop(g_atou(argv[2])); g_puts("loop done\n"); return 0; }
