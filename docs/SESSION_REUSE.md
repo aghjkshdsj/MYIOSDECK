@@ -156,6 +156,18 @@ chosen twice, which restarted the 10 s watch): the report now comes 6 s after th
 at once when Quit is chosen again. The old game's frame behind the new launcher was the shared
 layer's last picture: the layer is cleared to black when a later game starts.
 
+Build 162 (logs 96, 97): the run-loop thread passed the check and was still left: iOS does not
+terminate a pthread from another thread. Such a thread now stays suspended for good (it sleeps
+inside a system call, holds nothing of this side, and never runs again) and is dropped from the
+thread registry, so the window can go. The second Forager has never got past its start (build
+159's log shows the same): about 6 s in, after the thread that ends with 503 system calls, every
+thread waits and nothing is drawn; the report did not run, since Quit game was not chosen. The
+report now also runs each time the game menu opens. The second Steins;Gate's Game.exe died 0.4 s
+in: its mmdevapi thread returned from Sleep (NtDelayExecution) to a heap address, as if its x86
+stack had changed under it (build 161 started the same game fine). Wine's iOS audio driver
+(`audio_null_ios.c`) is one table for the session: an exited game's stream stays registered and
+mixed (16 slots), and every process attach re-initializes its lock; not yet changed.
+
 - **The first game is never reclaimed.** It is the session's initial process: no process socket
   entry, so none of the child exit clean-up. For a 32-bit first game its guest window also holds
   the PEB every later process is cloned from (`ios_initial_peb`), so it must stay mapped. A

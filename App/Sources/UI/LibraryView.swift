@@ -120,6 +120,9 @@ struct LibraryView: View {
             .onAppear {
                 GameHostView.onMenu = {
                     dlog("[ui] game menu opening (surface shown \(session.shown), menu already open \(showGameMenu))")
+                    // The menu is opened when something is wrong (a game that hangs while starting
+                    // or quitting, build 162): where every thread of the 32-bit programs is, each time.
+                    if wine.sessionKept, case .running = wine.state { mid_wow_thread_report("game menu opened") }
                     GameHostView.shared.isHidden = true
                     showGameMenu = true
                 }

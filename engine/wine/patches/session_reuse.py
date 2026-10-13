@@ -374,7 +374,7 @@ int myiosdeck_reap_range( uintptr_t base, uintptr_t size )
     extern void myiosdeck_reap_alert( unsigned int tid );
     extern void ios_thread_died( unsigned tid );
     const char *reuse = getenv( "MYIOSDECK_SESSION_REUSE" );
-    int count = ios_thread_registry_count(), i, wait, woken = 0, stopped = 0, left = 0;
+    int count = ios_thread_registry_count(), i, wait, woken = 0, stopped = 0, parked = 0, left = 0;
     mach_port_t self;
 
     if (!reuse || reuse[0] != '1') return 0;
@@ -399,10 +399,11 @@ int myiosdeck_reap_range( uintptr_t base, uintptr_t size )
         mach_msg_type_number_t cnt = ARM_THREAD_STATE64_COUNT;
         struct thread_basic_info info;
         mach_msg_type_number_t length = THREAD_BASIC_INFO_COUNT;
-        uint64_t pc;
+        uint64_t pc = 0;
         uint32_t insn = 0;
         mach_vm_size_t got = 0;
         unsigned int tid;
+        kern_return_t kr;
 
         if (!port || port == self || !teb || teb < base || teb - base >= size) continue;
         if (!myiosdeck_thread_alive( port )) continue;
@@ -417,6 +418,9 @@ int myiosdeck_reap_range( uintptr_t base, uintptr_t size )
             got != 4 || insn != 0xd4001001 /* svc #0x80: inside a system call */)
         {
             thread_resume( port );
+            dprintf( 2, "[session-reuse] a thread of an exited process (TEB %p) is not inside a system call "
+                        "(pc %#llx, instruction before it %08x): left running\n", (void *)teb,
+                     (unsigned long long)pc, insn );
             left++;
             continue;
         }
@@ -428,17 +432,30 @@ int myiosdeck_reap_range( uintptr_t base, uintptr_t size )
         if (td->wait_fd[1] > 2) close( td->wait_fd[1] );
         if (td->alert_fd > 2) close( td->alert_fd );
         td->request_fd = td->reply_fd = td->wait_fd[0] = td->wait_fd[1] = td->alert_fd = -1;
-        if (thread_terminate( port ) != KERN_SUCCESS) { thread_resume( port ); left++; continue; }
+        if ((kr = thread_terminate( port )) != KERN_SUCCESS)
+        {
+            /* iOS does not terminate a pthread from another thread (build 162: the run-loop thread
+             * was refused). It stays suspended for good instead: asleep inside a system call it
+             * holds nothing of this side, and suspended it never runs again, so it no longer counts
+             * as the window's (ios_thread_registry_range_busy). */
+            ios_thread_registry[i].mach_thread = 0;
+            __sync_synchronize();
+            ios_thread_registry[i].teb = 0;
+            ios_thread_registry[i].trampoline = NULL;
+            dprintf( 2, "[session-reuse] thread %04x of an exited process: not terminated (%d), kept suspended\n",
+                     tid, (int)kr );
+            parked++;
+        }
+        else stopped++;
         ios_thread_died( tid );
-        stopped++;
     }
     /* a woken thread may still be on its way out (pthread_exit) */
     for (wait = 0; woken && wait < 30 && ios_thread_registry_range_busy( base, size ); wait++) usleep( 10000 );
     mach_port_deallocate( mach_task_self(), self );
     if (woken)
         dprintf( 2, "[session-reuse] window B=%p: %d thread(s) the exited process left were woken to end "
-                    "themselves, %d asleep for good were stopped, %d still run there\n",
-                 (void *)base, woken, stopped, left );
+                    "themselves, %d asleep for good were stopped, %d kept suspended, %d still run there\n",
+                 (void *)base, woken, stopped, parked, left );
     return woken;
 }
 
