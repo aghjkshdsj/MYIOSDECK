@@ -26,6 +26,7 @@
 #include "gpta_pin_alu_mem.h"
 #include "gpta_pin_stzero.h"
 #include "gpta_pin_xscalar.h"
+#include "gpta_pin_copyshift.h"
 
 static uint16_t k_cctab[16];   // cmov truth tables per condition code (pcond_tab)
 
@@ -309,6 +310,7 @@ static void rmap_init(void) {
     RMAP(t_fjc_rr); RMAP(t_fjc_ri); RMAP(t_fjt_ri); RMAP(t_fjt_rr); RMAP(t_fjt_rrx); RMAP(t_sic); RMAP(t_sicr);
     RMAP(t_sii_trace); RMAP(t_sri_trace);
     RMAP(t_shconst);
+    RMAP(t_csh_shl); RMAP(t_csh_shr); RMAP(t_csh_sar); RMAP(t_csh_rol); RMAP(t_csh_ror);
     RMAP(t_xlz); RMAP(t_xsz);
     RMAP(t_am_add); RMAP(t_am_sub); RMAP(t_am_and); RMAP(t_am_or); RMAP(t_am_xor);
 }
@@ -829,7 +831,11 @@ static int try_fuse(Out *o, const Uop *u, uint32_t left) {
             else if (op == SH_ROL && !v->cc) k = 8;
             else if (op == SH_ROR && !v->cc) k = 9;
             unsigned n = (unsigned)v->imm & (b->c2 == 3 ? 63u : 31u);
-            if (k >= 0 && n) { put_uop(o, v, t_3op[k][b->c2 - 2][D][S])->imm = n; return 2; }
+            if (k >= 0 && n) {
+                const PFn (*tab)[64][16][16] = k == 5 ? t_csh_shl : k == 6 ? t_csh_shr :
+                    k == 7 ? t_csh_sar : k == 8 ? t_csh_rol : t_csh_ror;
+                put_uop(o, v, tab[b->c2 - 2][n][D][S]); return 2;
+            }
         }
     }
     if (is_named(b, N_CALL)) {   // argument setup + direct call
@@ -1294,6 +1300,9 @@ static void hidx_build(void) {
     hidx_tab(&t_jresult[0][0], 24);
     hidx_tab(&t_jresult_trace[0][0][0], 48);
     hidx_tab((const PFn *)t_shconst, sizeof t_shconst / sizeof(PFn));
+#define CSH_HIDX(N) hidx_tab((const PFn *)N, sizeof N / sizeof(PFn));
+    CSH_HIDX(t_csh_shl) CSH_HIDX(t_csh_shr) CSH_HIDX(t_csh_sar) CSH_HIDX(t_csh_rol) CSH_HIDX(t_csh_ror)
+#undef CSH_HIDX
     hidx_tab((const PFn *)t_fs_unary, sizeof t_fs_unary / sizeof(PFn));
     hidx_tab((const PFn *)t_xlz, sizeof t_xlz / sizeof(PFn));
     hidx_tab((const PFn *)t_xsz, sizeof t_xsz / sizeof(PFn));

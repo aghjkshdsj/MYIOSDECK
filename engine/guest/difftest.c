@@ -1053,6 +1053,38 @@ static void gpta_x3high(void) {
     SC_TEST(COUNT, "sarl", "%k[r]"); SC_TEST(COUNT, "sarq", "%[r]"); \
     SC_TEST(COUNT, "roll", "%k[r]"); SC_TEST(COUNT, "rolq", "%[r]"); \
     SC_TEST(COUNT, "rorl", "%k[r]"); SC_TEST(COUNT, "rorq", "%[r]")
+// Copy plus immediate shift/rotate: every count, both result widths and
+// both legal copy widths. Native execution supplies the differential oracle.
+#define CSH_TEST(COUNT, OP, MOVE, SRC, DST, SHIFT_DST) do { \
+    u64 a = val(), r; \
+    __asm__ volatile("testq %[a], %[a]\n\t" MOVE " " SRC ", " DST \
+        "\n\t" OP " $" #COUNT ", " SHIFT_DST "\n\ttestq %[r], %[r]" \
+        : [r] "=&r"(r) : [a] "r"(a) : "cc"); \
+    h = mix(mix(h, a), r); \
+} while (0)
+#define CSH_TEST_OP(COUNT, OP) \
+    CSH_TEST(COUNT, OP "l", "movl", "%k[a]", "%k[r]", "%k[r]"); \
+    CSH_TEST(COUNT, OP "l", "movq", "%[a]", "%[r]", "%k[r]"); \
+    CSH_TEST(COUNT, OP "q", "movq", "%[a]", "%[r]", "%[r]")
+#define CSH_TEST_COUNT(COUNT) \
+    CSH_TEST_OP(COUNT, "shl"); CSH_TEST_OP(COUNT, "shr"); CSH_TEST_OP(COUNT, "sar"); \
+    CSH_TEST_OP(COUNT, "rol"); CSH_TEST_OP(COUNT, "ror")
+static void gpta_copy_shift_counts(void) {
+    u64 h = 14695981039346656037ull;
+    for (int i = 0; i < N; i++) {
+        CSH_TEST_COUNT(0); CSH_TEST_COUNT(1); CSH_TEST_COUNT(2); CSH_TEST_COUNT(3); CSH_TEST_COUNT(4); CSH_TEST_COUNT(5); CSH_TEST_COUNT(6); CSH_TEST_COUNT(7);
+        CSH_TEST_COUNT(8); CSH_TEST_COUNT(9); CSH_TEST_COUNT(10); CSH_TEST_COUNT(11); CSH_TEST_COUNT(12); CSH_TEST_COUNT(13); CSH_TEST_COUNT(14); CSH_TEST_COUNT(15);
+        CSH_TEST_COUNT(16); CSH_TEST_COUNT(17); CSH_TEST_COUNT(18); CSH_TEST_COUNT(19); CSH_TEST_COUNT(20); CSH_TEST_COUNT(21); CSH_TEST_COUNT(22); CSH_TEST_COUNT(23);
+        CSH_TEST_COUNT(24); CSH_TEST_COUNT(25); CSH_TEST_COUNT(26); CSH_TEST_COUNT(27); CSH_TEST_COUNT(28); CSH_TEST_COUNT(29); CSH_TEST_COUNT(30); CSH_TEST_COUNT(31);
+        CSH_TEST_COUNT(32); CSH_TEST_COUNT(33); CSH_TEST_COUNT(34); CSH_TEST_COUNT(35); CSH_TEST_COUNT(36); CSH_TEST_COUNT(37); CSH_TEST_COUNT(38); CSH_TEST_COUNT(39);
+        CSH_TEST_COUNT(40); CSH_TEST_COUNT(41); CSH_TEST_COUNT(42); CSH_TEST_COUNT(43); CSH_TEST_COUNT(44); CSH_TEST_COUNT(45); CSH_TEST_COUNT(46); CSH_TEST_COUNT(47);
+        CSH_TEST_COUNT(48); CSH_TEST_COUNT(49); CSH_TEST_COUNT(50); CSH_TEST_COUNT(51); CSH_TEST_COUNT(52); CSH_TEST_COUNT(53); CSH_TEST_COUNT(54); CSH_TEST_COUNT(55);
+        CSH_TEST_COUNT(56); CSH_TEST_COUNT(57); CSH_TEST_COUNT(58); CSH_TEST_COUNT(59); CSH_TEST_COUNT(60); CSH_TEST_COUNT(61); CSH_TEST_COUNT(62); CSH_TEST_COUNT(63);
+        CSH_TEST_COUNT(64); CSH_TEST_COUNT(127); CSH_TEST_COUNT(255);
+    }
+    out("gpta_copy_shift_counts", h);
+}
+
 static void gpta_shift_counts(void) {
     u64 h = 14695981039346656037ull;
     for (int i = 0; i < N; i++) {
@@ -1287,7 +1319,7 @@ static const test_fn kTests[] = {
     fz_o, fz_no, fz_b, fz_ae, fz_e, fz_ne, fz_be, fz_a, fz_s, fz_ns, fz_p, fz_np, fz_l, fz_ge, fz_le, fz_g,
     fc_o, fc_no, fc_b, fc_ae, fc_e, fc_ne, fc_be, fc_a, fc_s, fc_ns, fc_p, fc_np, fc_l, fc_ge, fc_le, fc_g,
     fz_call, fz_index, fz_xindex, fz_3op, fz_3gap, fz_x3, fz_hoist, gpta_xmem, gpta_result_flags, gpta_xhigh, gpta_cf_flow,
-    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow, gpta_fcj_trace, gpta_jresult_trace, gpta_immstores, gpta_x3high, gpta_step_trace, gpta_shift_counts, gpta_unary_edges, gpta_alu_memory, gpta_xmm_lane_state, gpta_scalar_mem, gpta_unary_flag_inputs,
+    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow, gpta_fcj_trace, gpta_jresult_trace, gpta_immstores, gpta_x3high, gpta_step_trace, gpta_shift_counts, gpta_copy_shift_counts, gpta_unary_edges, gpta_alu_memory, gpta_xmm_lane_state, gpta_scalar_mem, gpta_unary_flag_inputs,
 };
 
 int guest_main(int argc, char **argv) {
