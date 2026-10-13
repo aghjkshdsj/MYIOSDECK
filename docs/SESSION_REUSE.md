@@ -129,7 +129,7 @@ JIT path): the phone decides.
 | `engine/fxi32/fxi_wow.c`, `App/Sources/Native/fxi_wow_host.c` | `fx32_wow_process_start()` at `BTCpuProcessInit`: a window an exited process left gets a fresh FXI32 instance. The old one held that process's blocks and its BOP page address (the new process allocates its own), and its BOP exit blocks are never invalidated. Tested in `wow_test.c` (check 9). |
 | `App/Sources/Native/wine_host.c` | `mid_wine_boot` for a later program: no JIT slice, no server start, no log truncation; resets the exit status, flushes FXI, starts the program in the session. The log follower keeps reading while a session is kept. |
 | `App/Sources/Engine/WineController.swift` | `SessionKind` (no JIT, ARM64EC or aarch64, HID pad, FXR) recorded at the first program; `nextGameRefusal` says why a later game cannot join (setting off, session not kept, kind differs, FXR on for a 64-bit game, less than 1.5 GB free) or nil. There is no limit on the number of games. The Dock/added-game flags are now per launch (they stayed set for the whole app run). |
-| `App/Sources/UI/LibraryView.swift`, `SettingsView.swift` | The setting; Play is enabled again after a game ends when another can join; the game menu gets **Quit game**, which asks the game to close with Alt+F4 through its normal input (as Madeira's own Quit game does, `Library.swift` `requestQuit`), keeps its view up with "Closing…" until it exits, and leaves MYIOSDECK open. If the game still runs 10 s later the log gets a `[quit-watch]` report (`mid_wow_thread_report`, `fxi_wow_host.c`: each 32-bit thread's system call in progress or x86 code, its native function, the return addresses on its stack) and the menu offers **Force quit** (`WineController.forceQuit`, the server's Force quit above); the library then says the game "was force-quit". **Quit game and close MYIOSDECK** stays for a game even Force quit does not end. |
+| `App/Sources/UI/LibraryView.swift`, `SettingsView.swift` | The setting; Play is enabled again after a game ends when another can join; the game menu gets **Quit game**, which asks the game to close with Alt+F4 through its normal input (as Madeira's own Quit game does, `Library.swift` `requestQuit`), keeps its view up with "Closing…" until it exits, and leaves MYIOSDECK open. If the game still runs 6 s later, or Quit game is chosen again, the log gets a `[quit-watch]` report (`mid_wow_thread_report`, `fxi_wow_host.c`: each 32-bit thread's system call in progress or x86 code, its native function, the return addresses on its stack) and the menu offers **Force quit** (`WineController.forceQuit`, the server's Force quit above); the library then says the game "was force-quit". **Quit game and close MYIOSDECK** stays for a game even Force quit does not end. |
 | `engine/wine/stage-app.sh` | Winios's per-window client rects are dropped at a new session's start, with its Metal windows. |
 
 ## 4. Limits
@@ -146,6 +146,15 @@ DXMT encode thread had ended next. Forager showed no reaction at all. The first 
 threads were still asleep inside its window, which therefore kept its memory (the "much higher
 RAM"), and the frozen picture is the shared game layer's last frame while nothing presents. The
 `[quit-watch]` report names the wait the next time; Force quit ends such a game meanwhile.
+
+Build 161 (log 95, Steins;Gate twice): at the second start the reaper woke the first Game.exe's
+six threads and five ended themselves; the sixth, DXMT's event-listener run loop (mach_msg), was
+left because the check asked for its state after suspending it (a suspended thread reports
+STOPPED, not WAITING), so the window was again not reclaimed. Fixed: the state is read first. The
+second game hung on Quit exactly as in build 159, and the log ended before the report (Quit was
+chosen twice, which restarted the 10 s watch): the report now comes 6 s after the first Quit, or
+at once when Quit is chosen again. The old game's frame behind the new launcher was the shared
+layer's last picture: the layer is cleared to black when a later game starts.
 
 - **The first game is never reclaimed.** It is the session's initial process: no process socket
   entry, so none of the child exit clean-up. For a 32-bit first game its guest window also holds
@@ -191,7 +200,7 @@ RAM"), and the frozen picture is the shared game layer's last frame while nothin
 5. After a restart: Steins;Gate, Quit game, Steins;Gate again (a 32-bit session): look for
    `[wow-window] ... released` and, at the second start, `FXI32 instance ... dropped`.
 6. The game's own quit (from its menu) ends the session the same way.
-7. A game that does not close within 10 s of Quit game: the status says so, the log has
+7. A game that does not close within 6 s of Quit game (or Quit game chosen twice): the status says so, the log has
    `[quit-watch]` lines, and the game menu offers **Force quit**. After it: `[wineserver] force
    quit: N program process(es) terminated`, `[session-reuse] the main thread of process ... was
    killed`, and the library says the game "was force-quit".

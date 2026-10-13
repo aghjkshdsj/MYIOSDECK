@@ -406,10 +406,13 @@ int myiosdeck_reap_range( uintptr_t base, uintptr_t size )
 
         if (!port || port == self || !teb || teb < base || teb - base >= size) continue;
         if (!myiosdeck_thread_alive( port )) continue;
+        /* asleep before it is stopped: a suspended thread reports TH_STATE_STOPPED (build 161: the
+         * run-loop thread was left running for that reason) */
+        if (thread_info( port, THREAD_BASIC_INFO, (thread_info_t)&info, &length ) != KERN_SUCCESS ||
+            info.run_state != TH_STATE_WAITING) { left++; continue; }
         if (thread_suspend( port ) != KERN_SUCCESS) { left++; continue; }
         if (thread_get_state( port, ARM_THREAD_STATE64, (thread_state_t)&st, &cnt ) != KERN_SUCCESS ||
-            thread_info( port, THREAD_BASIC_INFO, (thread_info_t)&info, &length ) != KERN_SUCCESS ||
-            info.run_state != TH_STATE_WAITING || !(pc = arm_thread_state64_get_pc( st )) ||
+            !(pc = arm_thread_state64_get_pc( st )) ||
             mach_vm_read_overwrite( mach_task_self(), pc - 4, 4, (mach_vm_address_t)&insn, &got ) != KERN_SUCCESS ||
             got != 4 || insn != 0xd4001001 /* svc #0x80: inside a system call */)
         {
@@ -429,7 +432,8 @@ int myiosdeck_reap_range( uintptr_t base, uintptr_t size )
         ios_thread_died( tid );
         stopped++;
     }
-    for (wait = 0; stopped && wait < 20 && ios_thread_registry_range_busy( base, size ); wait++) usleep( 10000 );
+    /* a woken thread may still be on its way out (pthread_exit) */
+    for (wait = 0; woken && wait < 30 && ios_thread_registry_range_busy( base, size ); wait++) usleep( 10000 );
     mach_port_deallocate( mach_task_self(), self );
     if (woken)
         dprintf( 2, "[session-reuse] window B=%p: %d thread(s) the exited process left were woken to end "

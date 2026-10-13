@@ -409,6 +409,7 @@ final class WineController: ObservableObject, @unchecked Sendable {
         // DXMT takes the layer when the program creates its swapchain.
         if program.graphics {
             GameHostView.register()
+            if programsThisRun > 0 { GameHostView.shared.clearPicture() }   // not the last game's frame
             // The virtual monitor takes the phone's landscape shape, so a game that
             // runs at the desktop resolution fills the screen (win32u reads these
             // once per session; the default 1024x768 is letterboxed).

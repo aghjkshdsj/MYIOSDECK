@@ -101,6 +101,7 @@ struct LibraryView: View {
                 session.title = ""
                 GameHostView.shared.setStatus(nil)   // Quit game's "Closing…"
                 quitStuck = false
+                quitPending = false
                 quitAttempt += 1
             default: break
             }
@@ -190,6 +191,7 @@ struct LibraryView: View {
     @State private var openingSubmenu = false   // the game menu closes before a submenu opens
     @State private var quitStuck = false        // Quit game did not end the game: Force quit is offered
     @State private var quitAttempt = 0          // the latest Quit game / Force quit (its watchdog's)
+    @State private var quitPending = false      // Quit game was asked and the game still runs
 
     /// Quit game with session reuse: asks the game to close with Alt+F4 through its normal input,
     /// as Madeira's Quit game does (Library.swift requestQuit), so it can save and run its own exit
@@ -199,14 +201,28 @@ struct LibraryView: View {
         mid_post_key(0x12, 1); mid_post_key(0x73, 1)   // VK_MENU, VK_F4
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { mid_post_key(0x73, 0); mid_post_key(0x12, 0) }
         GameHostView.shared.setStatus("Closing \(session.title)… confirm in the game if it asks")
-        // Still running 10 s later (a game can hang on its way out, or wait in a dialog): say where
+        let title = session.title
+        // Quit game again while the first is pending: the game is not closing. Say where its
+        // threads are now, and offer Force quit (build 161: the second press came before the
+        // first one's report, and the log was taken before either).
+        if quitPending {
+            if !quitStuck {
+                dlog("[ui] Quit game again: \(title) is still running")
+                mid_wow_thread_report("Quit game again: \(title) still runs")
+                quitStuck = true
+                GameHostView.shared.setStatus("\(title) has not closed. Open the menu to force quit it.")
+            }
+            return
+        }
+        // Still running 6 s later (a game can hang on its way out, or wait in a dialog): say where
         // its threads are in the log, and offer Force quit in the game menu.
+        quitPending = true
         quitAttempt += 1
-        let attempt = quitAttempt, title = session.title
-        DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
-            guard attempt == quitAttempt, session.title == title, case .running = wine.state else { return }
-            dlog("[ui] \(title) is still running 10 s after Quit game")
-            mid_wow_thread_report("\(title) still runs 10 s after Quit game")
+        let attempt = quitAttempt
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
+            guard attempt == quitAttempt, session.title == title, case .running = wine.state, !quitStuck else { return }
+            dlog("[ui] \(title) is still running 6 s after Quit game")
+            mid_wow_thread_report("\(title) still runs 6 s after Quit game")
             quitStuck = true
             GameHostView.shared.setStatus("\(title) has not closed. Open the menu to force quit it.")
         }

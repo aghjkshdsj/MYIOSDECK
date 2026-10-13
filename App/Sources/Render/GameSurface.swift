@@ -79,6 +79,28 @@ final class GameHostView: UIView, UIKeyInput {
     }
     required init?(coder: NSCoder) { fatalError() }
 
+    /// Black on the layer: the next game in a kept session (docs/SESSION_REUSE.md) shares it, and
+    /// until that game presents, the layer kept showing the last game's final frame, behind the new
+    /// launcher's window (build 161). One cleared drawable, on a background queue: nextDrawable can
+    /// wait up to a second while an ended game's swapchain still holds drawables.
+    func clearPicture() {
+        let layer = metalLayer
+        if Self.clearQueue == nil { Self.clearQueue = layer.device?.makeCommandQueue() }
+        guard let queue = Self.clearQueue else { return }
+        DispatchQueue.global(qos: .userInitiated).async {
+            guard let drawable = layer.nextDrawable(), let commands = queue.makeCommandBuffer() else { return }
+            let pass = MTLRenderPassDescriptor()
+            pass.colorAttachments[0].texture = drawable.texture
+            pass.colorAttachments[0].loadAction = .clear
+            pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+            pass.colorAttachments[0].storeAction = .store
+            commands.makeRenderCommandEncoder(descriptor: pass)?.endEncoding()
+            commands.present(drawable)
+            commands.commit()
+        }
+    }
+    private static var clearQueue: MTLCommandQueue?
+
     /// A line of progress over the game (Madeira Dock while Valve's client signs in and starts
     /// the game, which takes minutes without JIT and shows no window); nil hides it.
     private let statusLabel = UILabel()
