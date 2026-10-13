@@ -187,6 +187,14 @@ is what an exit() rather than a crash leaves). The game-menu report now includes
 driver's state (endpoint, every registered and mixed stream with its positions and event), and
 an exit() while Wine runs logs its caller.
 
+Build 165 (log 100, crash log 8): the second Forager's audio is not the hang: its stream plays
+(written 708086, played 703286 frames, the endpoint running), so the thread waiting at
+Forager.exe+0x14d609f waits for something else; the report now prints a waiting call's first
+arguments (the handles). The app's end at the second Game.exe's start called no exit(). Wine's
+messages reach the app's log through a follower of Documents/madeira-log.txt whose last lines die
+with the app; the crash log now appends that file's tail (it is only cleared by the next Wine
+start). Madeira's one silent end is a fault redelivered 2000 times (task_terminate, no report).
+
 - **The first game is never reclaimed.** It is the session's initial process: no process socket
   entry, so none of the child exit clean-up. For a 32-bit first game its guest window also holds
   the PEB every later process is cloned from (`ios_initial_peb`), so it must stay mapped. A

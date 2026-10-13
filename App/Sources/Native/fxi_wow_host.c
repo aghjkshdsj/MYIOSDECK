@@ -917,14 +917,19 @@ void mid_wow_thread_report(const char *why) {
         }
         static wow_module mods[160];
         int nm = wow_modules(proc.base, t.teb32, mods, 160);
-        char where[128], state[200];
+        char where[128], state[360];
         const uint32_t k = (t.ring_n - 1) & 31;
         if (t.in_x86) {
             uint32_t eip = fx32_wow_eip(t.cpu);
             snprintf(state, sizeof state, "runs x86 code at %08x %s", eip, describe(proc.base, mods, nm, eip, where, sizeof where));
         } else if (t.ring_n && t.ring[k].status == ~0u) {
             const char *name = sysname(&t, t.ring[k].num);
-            snprintf(state, sizeof state, "in system call %s (%#x) from %s", name ? name : "?", t.ring[k].num,
+            // the call's first arguments ([esp] return into the stub, [esp+4] its caller, then the
+            // arguments): the handle a wait is for
+            uint32_t esp = fx32_wow_reg(t.cpu, FX32_ESP);
+            snprintf(state, sizeof state, "in system call %s (%#x, args %08x %08x %08x %08x) from %s", name ? name : "?",
+                     t.ring[k].num, rd_guest32(proc.base, esp + 8), rd_guest32(proc.base, esp + 12),
+                     rd_guest32(proc.base, esp + 16), rd_guest32(proc.base, esp + 20),
                      describe(proc.base, mods, nm, t.ring[k].caller, where, sizeof where));
         } else {
             snprintf(state, sizeof state, "outside x86 code, not in a system call (a unix call?)");
