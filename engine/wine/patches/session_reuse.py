@@ -269,6 +269,25 @@ KILLED_FIXES = [
      "        extern void myiosdeck_main_thread_killed( int status );\n"
      "        myiosdeck_main_thread_killed( status );   /* a pseudo-process's main thread: its process ends */\n"
      "    }\n"),
+    # exit_thread() joins and frees the TEB of the thread that exited before it, kept in one static
+    # for every pseudo-process. The second Game.exe's first exiting thread got the first Game.exe's
+    # last TEB: build 162 freed it into the new process's TEB block, so a later thread of the new
+    # game got a TEB in the old window (its x86 stack then went wrong, log 96); with the old window
+    # torn down (builds 163-166) the read faulted until Madeira ended the app (crash log 9,
+    # exit_thread+0x88 reading 0x72002f03a0). The TEB is a global the window teardown can clear,
+    # and only a TEB of the same process is joined and freed.
+    ("static DECLSPEC_NORETURN void exit_thread( int status )\n"
+     "{\n"
+     "    static void *prev_teb;\n"
+     "    TEB *teb;\n",
+     "void *ios_exit_prev_teb;   /* MYIOSDECK session-reuse: exit_thread's, cleared by a window teardown */\n"
+     "\n"
+     "static DECLSPEC_NORETURN void exit_thread( int status )\n"
+     "{\n"
+     "    TEB *teb;\n"),
+    ("    if ((teb = InterlockedExchangePointer( &prev_teb, NtCurrentTeb() )))\n",
+     "    if ((teb = InterlockedExchangePointer( &ios_exit_prev_teb, NtCurrentTeb() )) &&\n"
+     "        teb->Peb == NtCurrentTeb()->Peb)   /* another process's TEB is that process's */\n"),
 ]
 
 
@@ -536,6 +555,15 @@ REAP_VIRTUAL_FIXES = [
      "                ios_thread_registry_range_busy( base, IOS_WOW_WINDOW_SIZE ) &&\n"
      "                (!myiosdeck_reap_range( base, IOS_WOW_WINDOW_SIZE ) ||\n"
      "                 ios_thread_registry_range_busy( base, IOS_WOW_WINDOW_SIZE )))\n"),
+    # exit_thread()'s last exited TEB must not point into the window about to go (thread_ios.c).
+    ("        d3d9_native_window_teardown( (unsigned long)base );\n",
+     "        {   /* MYIOSDECK session-reuse */\n"
+     "            extern void *ios_exit_prev_teb;\n"
+     "            void *last = ios_exit_prev_teb;\n"
+     "            if (last && (ULONG_PTR)last - base < IOS_WOW_WINDOW_SIZE)\n"
+     "                __sync_bool_compare_and_swap( &ios_exit_prev_teb, last, NULL );\n"
+     "        }\n"
+     "        d3d9_native_window_teardown( (unsigned long)base );\n"),
 ]
 
 

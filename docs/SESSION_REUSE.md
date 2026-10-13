@@ -195,6 +195,16 @@ messages reach the app's log through a follower of Documents/madeira-log.txt who
 with the app; the crash log now appends that file's tail (it is only cleared by the next Wine
 start). Madeira's one silent end is a fault redelivered 2000 times (task_terminate, no report).
 
+Build 166 (crash log 9 with Wine's log tail): the cause of the second Steins;Gate's end. Wine's
+exit_thread() joins and frees the TEB of the thread that exited before it, kept in one static for
+the whole session; the second Game.exe's first exiting thread got the first Game.exe's last TEB,
+inside the window just torn down, and faulted reading it (exit_thread+0x88, address
+0x72002f03a0) until Madeira's redelivery guard ended the app (task_terminate, no report). In
+build 162, before the window was torn down, the same TEB was freed into the new process: the
+corrupted x86 stack of log 96. The last TEB is now a global that a window teardown clears, and
+exit_thread joins and frees only a TEB of its own process. The second Forager waits on handle
+0xc4 in its main thread; its audio thread waits normally on its stream event 0xac.
+
 - **The first game is never reclaimed.** It is the session's initial process: no process socket
   entry, so none of the child exit clean-up. For a 32-bit first game its guest window also holds
   the PEB every later process is cloned from (`ios_initial_peb`), so it must stay mapped. A
