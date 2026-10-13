@@ -42,19 +42,16 @@
 // Keep handler entries on a fixed fetch boundary. This is static code layout;
 // the normal correctness and performance harness validates the layout trial.
 #define PH static __attribute__((aligned(32))) GPTA_SECTION GPTA_CC void
-// Dispatch lookahead: next_p is (u+1)->p, carried in the final ARM64 integer
-// argument register (x15). Sequential dispatch consumes this already loaded
-// pointer while loading the following one. Every executable block has one
-// allocated sentinel uop, including the one-uop stop/native-exit blocks.
+// Ordinary threaded dispatch: load the target from the destination uop.
+// Keeping x15 available avoids lookahead preservation moves in each handler.
 #ifdef GPTA_PROFILE   // diagnostic build: count every dispatch (gpta_profile_dump)
 #define GPTA_COUNT(U) ((U)->prof++)
 #else
 #define GPTA_COUNT(U) ((void)0)
 #endif
-#define PGO(nu) do { Uop *n_ = (nu); PFn fn_ = n_->p; next_p = (uintptr_t)n_[1].p; \
+#define PGO(nu) do { Uop *n_ = (nu); PFn fn_ = n_->p; \
     GPTA_COUNT(n_); __attribute__((musttail)) return fn_ GPTA_CALL(n_); } while (0)
-#define PNEXT() do { Uop *n_ = u + 1; PFn fn_ = (PFn)next_p; next_p = (uintptr_t)n_[1].p; \
-    GPTA_COUNT(n_); __attribute__((musttail)) return fn_ GPTA_CALL(n_); } while (0)
+#define PNEXT() PGO(u + 1)
 #define PTAIL(fn) do { __attribute__((musttail)) return fn GPTA_CALL(u); } while (0)
 #define gZ ((uint64_t)0)
 

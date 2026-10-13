@@ -4,7 +4,7 @@
 // FXI keeps the x86 register file in memory, so every instruction loads and stores it.
 // Here the 16 guest GPRs, an effective-address temporary T and the four lazy-flag words
 // are the arguments of every handler, and clang's preserve_none calling convention passes
-// all of them in host registers (ARM64: 23 state arguments plus dispatch lookahead). Each hot instruction form
+// all of them in host registers (ARM64: 23 integer state arguments). Each hot instruction form
 // has a handler specialised on its register operands, so `add rax, rbx` compiles to one
 // ARM64 add plus the dispatch. Everything else runs FXI's own handler through p_slow,
 // which spills the registers around the call: full coverage, FXI's exact semantics.
@@ -1240,14 +1240,13 @@ void gpta_enter(FxiCpu *c, Block *b) {
     GptaV x0, x1, x2, x3, x4, x5, x6, x7;
     RELOAD_F();
     RELOAD_X();
-    uintptr_t next_p = (uintptr_t)b->u[1].p;
     b->u[0].p GPTA_CALL(b->u);
 }
 
 // ---- Windows mode: the x64 state at a host fault or at a stop of the thread ----
 // GPTA keeps the guest registers in host registers (GPTA_PARAMS, preserve_none on ARM64): RAX x22,
 // RCX x23, RDX x24, RBX x28, RSP x27, RBP x0, RSI x25, RDI x26, R8-R14 x1-x7, R15 x20, CPU x10, T x11,
-// flags x12, x13, x14, x9 (clang gives x9 last: frame lowering's scratch), XMM0-7 v0-v7; x21 is
+// flags x12, x13, x14, x9 (clang gives x9 last: frame lowering's scratch), vector arguments v0-v7; x21 is
 // the uop. At a fault inside a pinned handler (section
 // gpta_h) those hold the x64 state as before the instruction: no handler writes guest-visible
 // state before its last guest memory access (engine/gpta-probe/precise.py checks it in CI, and
