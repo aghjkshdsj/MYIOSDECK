@@ -30,12 +30,12 @@
         XW_##X(((GptaV){ v, 0 })); PNEXT(); } \
     PH xsc_store##SZ##_##X##_##B##_##I(GPTA_PARAMS) { \
         st##SZ(XSC_EA(B,I), (XS_##X)[0]); PNEXT(); }
-#define DEF_XSC_B(B,X,SZ) R17B(DEF_XSC,B,X,SZ)
-#define DEF_XSC_X(X,SZ) R17(DEF_XSC_B,X,SZ)
+#define DEF_XSC_B(B,X,SZ) R17C(DEF_XSC,B,X,SZ)
+#define DEF_XSC_X(X,SZ) R17B(DEF_XSC_B,X,SZ)
 R16(DEF_XSC_X,32) R16(DEF_XSC_X,64)
 #define E_XSC(I,B,X,N) N##_##X##_##B##_##I,
-#define ROW_XSC(B,X,N) { R17B(E_XSC,B,X,N) },
-#define TABLE_XSC(X,N) { R17(ROW_XSC,X,N) },
+#define ROW_XSC(B,X,N) { R17C(E_XSC,B,X,N) },
+#define TABLE_XSC(X,N) { R17B(ROW_XSC,X,N) },
 const PFn t_xscalar_load[2][16][17][17] = {
     { R16(TABLE_XSC,xsc_load32) }, { R16(TABLE_XSC,xsc_load64) }
 };
