@@ -52,7 +52,7 @@ static void loop(unsigned long long n) {
         : "rax", "rbx", "rcx", "rdx", "rsi", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15", "xmm1", "memory", "cc");
 }
 
-// Every register a known value (RAX..R15 except RSP/RBX/R15: 0x1000 * (n + 1) + 0x11; XMM0-7:
+// Every register a known value (RAX..R15 except RSP/RBX/R15: 0x1000 * (n + 1) + 0x11; XMM0-15:
 // their GPR's), flags from cmp $3, rdx (ZF set), rbx = 0x10 (unmapped), r15 = the faulting
 // instruction, then the fault. For the stack sites rsp = 0x1008 (unmapped) instead.
 #define SET_ALL                                                                            \
@@ -62,13 +62,15 @@ static void loop(unsigned long long n) {
     "mov $0xf011, %%r14\n\t" "mov $0x6011, %%rbp\n\t"                                        \
     "movq %%rax, %%xmm0\n\t" "movq %%rcx, %%xmm1\n\t" "movq %%rdx, %%xmm2\n\t" "movq %%rsi, %%xmm3\n\t" \
     "movq %%rdi, %%xmm4\n\t" "movq %%r8, %%xmm5\n\t" "movq %%r9, %%xmm6\n\t" "movq %%r10, %%xmm7\n\t" \
+    "movq %%r11, %%xmm8\n\t" "movq %%r12, %%xmm9\n\t" "movq %%r13, %%xmm10\n\t" "movq %%r14, %%xmm11\n\t" \
+    "movq %%rax, %%xmm12\n\t" "movq %%rcx, %%xmm13\n\t" "movq %%rdx, %%xmm14\n\t" "movq %%rsi, %%xmm15\n\t" \
     "cmp $3, %%rdx\n\t"
 #define FAULT(NAME, PRE, INSN)                                                             \
     static void NAME(void) {                                                               \
         __asm__ volatile(SET_ALL PRE "lea 1f(%%rip), %%r15\n\t" "1: " INSN "\n\t"                \
                          : : : "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11", "r12", \
                            "r13", "r14", "r15", "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", \
-                           "xmm7", "memory", "cc");                                        \
+                           "xmm7", "xmm8", "xmm9", "xmm10", "xmm11", "xmm12", "xmm13", "xmm14", "xmm15", "memory", "cc"); \
     }
 FAULT(f_load, "", "mov (%%rbx), %%rcx")                       // 0: a load
 FAULT(f_store, "", "mov %%rcx, (%%rbx)")                      // 1: a store
@@ -109,12 +111,17 @@ FAULT(f_am_or, KEEP_OLD_FLAGS, "orl 16(%%rbx,%%rsi,8), %%ecx")    // 33
 FAULT(f_am_xor, KEEP_OLD_FLAGS, "xorq (%%rbx,%%rsi,4), %%rcx")    // 34
 FAULT(f_am_base, KEEP_OLD_FLAGS, "addq (%%rbx,%%rsi,2), %%rbx")   // 35
 FAULT(f_am_index, KEEP_OLD_FLAGS, "xorl (%%rbx,%%rsi,4), %%esi")  // 36
+FAULT(f_xhigh_load, "", "movdqu (%%rbx,%%rsi,4), %%xmm8")      // 37
+FAULT(f_xhigh_scalar, "", "movss (%%rbx), %%xmm15")            // 38
+FAULT(f_xhigh_arith, "", "addsd (%%rbx,%%rsi,2), %%xmm14")     // 39
+FAULT(f_xhigh_store, "", "movdqu %%xmm13, (%%rbx,%%rsi,8)")   // 40
 static void (*const k_faults[])(void) = { f_load, f_store, f_xload, f_push, f_call, f_cmpj, f_ltj, f_pop, f_ret,
                                           f_rmw, f_callm, f_xstore, f_xarith_index, f_xarith_base,
                                           f_xload2, f_xload4, f_xload8, f_xstore2, f_xstore4, f_xstore8,
                                           f_immstore1, f_immstore2, f_immstore4, f_immstore8,
                                           f_xloadz2, f_xloadz4, f_xloadz8, f_xstorez2, f_xstorez4, f_xstorez8,
-                                          f_am_add, f_am_sub, f_am_and, f_am_or, f_am_xor, f_am_base, f_am_index };
+                                          f_am_add, f_am_sub, f_am_and, f_am_or, f_am_xor, f_am_base, f_am_index,
+                                          f_xhigh_load, f_xhigh_scalar, f_xhigh_arith, f_xhigh_store };
 
 int guest_main(int argc, char **argv) {
     if (argc >= 3 && g_streq(argv[1], "loop")) { loop(g_atou(argv[2])); g_puts("loop done\n"); return 0; }

@@ -100,7 +100,7 @@
 #define SPILL_F() do { c->lf_op = (uint32_t)F0; c->lf_cin = (uint32_t)(F0 >> 32); c->lf_a = F1; c->lf_b = F2; c->lf_res = F3; } while (0)
 #define RELOAD_F() do { F0 = (uint64_t)c->lf_op | (uint64_t)c->lf_cin << 32; F1 = c->lf_a; F2 = c->lf_b; F3 = c->lf_res; } while (0)
 #define SETF(kind, si, a, b, r, cin) do { F0 = (uint64_t)LF(kind, si) | (uint64_t)(uint32_t)(cin) << 32; F1 = (a); F2 = (b); F3 = (r); } while (0)
-// XMM0-7 (x0..x7) to and from c->xmm
+// Unpacked XMM0-7 spill/reload. gpta_pin_xpack.h overrides these for packed lanes.
 FXI_INLINE GptaV xld(const void *p) { GptaV v; memcpy(&v, p, 16); return v; }
 FXI_INLINE void xst(void *p, GptaV v) { memcpy(p, &v, 16); }
 #define SPILL_X() do { xst(&c->xmm[0], x0); xst(&c->xmm[1], x1); xst(&c->xmm[2], x2); xst(&c->xmm[3], x3); \
@@ -270,10 +270,10 @@ FXI_INLINE int pcond_tab(uint64_t tab, uint64_t F0, uint64_t F1, uint64_t F2, ui
     } while (0)
 
 // ===========================================================================
-// SSE. XMM0-7 are pinned in host vector registers (x0..x7, passed along like the GPRs); XMM8-15
-// stay in c->xmm. Handlers are specialised on the class of each XMM operand: 0-7, or M (in
-// memory, its index from the uop). The bodies are vector expressions with FXI's results (x86's);
-// ops without a pinned form run FXI's handler through p_slow, which spills x0..x7 too.
+// SSE. Operand macros hide the vector argument layout. Packed mode carries all
+// sixteen low lanes in x0..x7 and keeps upper lanes in CPU state. M denotes a
+// runtime-selected XMM8-15 operand; fixed classes avoid that selection. Operations
+// without a pinned form run FXI's handler through p_slow, spilling vector state.
 // ===========================================================================
 typedef float VF __attribute__((vector_size(16)));
 typedef double VD __attribute__((vector_size(16)));
@@ -285,12 +285,15 @@ typedef int16_t VS8 __attribute__((vector_size(16)));
 typedef uint8_t VU16 __attribute__((vector_size(16)));
 typedef int8_t VS16 __attribute__((vector_size(16)));
 
-// The 9 XMM operand classes (0-7 pinned, M in memory); F is the macro applied to each.
+// The 9 XMM operand classes (0-7 fixed, M runtime-selected); F is applied to each.
 #define X9(F, ...) F(0, __VA_ARGS__) F(1, __VA_ARGS__) F(2, __VA_ARGS__) F(3, __VA_ARGS__) F(4, __VA_ARGS__) \
     F(5, __VA_ARGS__) F(6, __VA_ARGS__) F(7, __VA_ARGS__) F(M, __VA_ARGS__)
 #define X9B(F, ...) F(0, __VA_ARGS__) F(1, __VA_ARGS__) F(2, __VA_ARGS__) F(3, __VA_ARGS__) F(4, __VA_ARGS__) \
     F(5, __VA_ARGS__) F(6, __VA_ARGS__) F(7, __VA_ARGS__) F(M, __VA_ARGS__)
 // Operand access by class: XD_ the destination's value, XS_ the source's, XW_ writes the destination.
+#if GPTA_PACKED_XMM
+#include "gpta_pin_xpack.h"
+#else
 #define XD_0 x0
 #define XD_1 x1
 #define XD_2 x2
@@ -342,6 +345,7 @@ typedef int8_t VS16 __attribute__((vector_size(16)));
 #define XW_14(v) xst(&c->xmm[14], (v))
 #define XW_15(v) xst(&c->xmm[15], (v))
 #define XW_M(v) xst(&c->xmm[u->dst], (v))
+#endif
 // Exact faults (gpta_win_host_state): after a guest memory access, these keep a pinned value the
 // handler is about to overwrite (the flag words, an XMM destination) in its register until there,
 // so the compiler does not use that register as scratch before the access. They emit nothing.
@@ -386,7 +390,11 @@ typedef int8_t VS16 __attribute__((vector_size(16)));
 #define XKEEP_5 KEEP_X(x5, "v5")
 #define XKEEP_6 KEEP_X(x6, "v6")
 #define XKEEP_7 KEEP_X(x7, "v7")
+#if GPTA_PACKED_XMM
+#define XKEEP_M do { XKEEP_0; XKEEP_1; XKEEP_2; XKEEP_3; XKEEP_4; XKEEP_5; XKEEP_6; XKEEP_7; } while (0)
+#else
 #define XKEEP_M ((void)0)   // XMM8-15 are in the CPU structure
+#endif
 
 #define LF0(v) (((VF)(v))[0])
 #define LD0(v) (((VD)(v))[0])
@@ -494,8 +502,8 @@ enum { GX_TSS32, GX_SS32, GX_TSD32, GX_SD32, GX_TSS64, GX_SS64, GX_TSD64, GX_SD6
        GX_PMOVMSKB, GX_MOVMSKPS, GX_MOVMSKPD, GX_COUNT };
 enum { FL_LD32, FL_LD64, FL_LDZ8 };   // t_ldi kinds; t_stx: 8, 32, 64-bit stores
 enum { CFK_ADD, CFK_ADC, CFK_SUB, CFK_SBB, CFK_LOGIC, CFK_CIN, CFK_NEG, CFK_COUNT };
-// Register-register operations also specialize memory-backed XMM8-15: their
-// offsets are constants, so no runtime operand-index loads are needed.
+// Register-register operations also specialize XMM8-15, avoiding runtime
+// operand-index loads in either vector layout.
 typedef struct { const char *name; PFn rr[16][16]; PFn rt[9]; } XOp;
 typedef struct { const char *name; PFn h[9]; } XShift;
 #define GPTA_TABLES(X) \
@@ -653,15 +661,19 @@ static inline int cc8(unsigned cc) {
 // A third XMM operand's class macros (index in u->base), for 3-operand SSE pairs
 #define X9C(F, ...) F(0, __VA_ARGS__) F(1, __VA_ARGS__) F(2, __VA_ARGS__) F(3, __VA_ARGS__) F(4, __VA_ARGS__) \
     F(5, __VA_ARGS__) F(6, __VA_ARGS__) F(7, __VA_ARGS__) F(M, __VA_ARGS__)
-#define XX_0 x0
-#define XX_1 x1
-#define XX_2 x2
-#define XX_3 x3
-#define XX_4 x4
-#define XX_5 x5
-#define XX_6 x6
-#define XX_7 x7
+#define XX_0 XD_0
+#define XX_1 XD_1
+#define XX_2 XD_2
+#define XX_3 XD_3
+#define XX_4 XD_4
+#define XX_5 XD_5
+#define XX_6 XD_6
+#define XX_7 XD_7
+#if GPTA_PACKED_XMM
+#define XX_M XP_READ_M(u->base)
+#else
 #define XX_M xld(&c->xmm[u->base])
+#endif
 // The 10 conditions counted loops exit on (b ae e ne be a l ge le g), for the loop-step fusions
 #define C10(M, ...) M(2, __VA_ARGS__) M(3, __VA_ARGS__) M(4, __VA_ARGS__) M(5, __VA_ARGS__) M(6, __VA_ARGS__) \
     M(7, __VA_ARGS__) M(12, __VA_ARGS__) M(13, __VA_ARGS__) M(14, __VA_ARGS__) M(15, __VA_ARGS__)
@@ -681,6 +693,6 @@ extern const XShift gpta_xshift_r1[];
 #define E1(R, NAME) p_##NAME##_##R,
 #define E_RR(S, D, NAME) p_##NAME##_##D##_##S,
 #define ROW_RR(D, NAME) { R16B(E_RR, D, NAME) },
-static inline int xcls(unsigned r) { return r < 8 ? (int)r : 8; }   // XMM operand class: 0-7 pinned, 8 = M
+static inline int xcls(unsigned r) { return r < 8 ? (int)r : 8; }   // XMM operand class: 0-7 fixed, 8 = M
 
 #endif

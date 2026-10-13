@@ -1124,6 +1124,63 @@ static void gpta_alu_memory(void) {
     out("gpta_alu_memory", h);
 }
 
+// Preserve every XMM lane across mixed scalar/vector operations and an x87
+// fallback. All architectural registers remain live together across the test.
+static void gpta_xmm_lane_state(void) {
+    v2 regs[16];
+    u64 h = 14695981039346656037ull;
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j < 16; j++) regs[j] = vdouble(1);
+        __asm__ volatile(
+            "movdqu 0(%[p]), %%xmm0\n\t"
+            "movdqu 16(%[p]), %%xmm1\n\t"
+            "movdqu 32(%[p]), %%xmm2\n\t"
+            "movdqu 48(%[p]), %%xmm3\n\t"
+            "movdqu 64(%[p]), %%xmm4\n\t"
+            "movdqu 80(%[p]), %%xmm5\n\t"
+            "movdqu 96(%[p]), %%xmm6\n\t"
+            "movdqu 112(%[p]), %%xmm7\n\t"
+            "movdqu 128(%[p]), %%xmm8\n\t"
+            "movdqu 144(%[p]), %%xmm9\n\t"
+            "movdqu 160(%[p]), %%xmm10\n\t"
+            "movdqu 176(%[p]), %%xmm11\n\t"
+            "movdqu 192(%[p]), %%xmm12\n\t"
+            "movdqu 208(%[p]), %%xmm13\n\t"
+            "movdqu 224(%[p]), %%xmm14\n\t"
+            "movdqu 240(%[p]), %%xmm15\n\t"
+            "addsd %%xmm8, %%xmm0\n\taddsd %%xmm0, %%xmm8\n\t"
+            "subsd %%xmm9, %%xmm1\n\tmulsd %%xmm10, %%xmm2\n\t"
+            "movsd %%xmm11, %%xmm3\n\tmovss %%xmm12, %%xmm4\n\t"
+            "movq %%xmm13, %%xmm5\n\tunpcklpd %%xmm14, %%xmm6\n\t"
+            "shufpd $1, %%xmm15, %%xmm7\n\tfnop\n\t"
+            "paddq %%xmm0, %%xmm8\n\tpxor %%xmm1, %%xmm9\n\t"
+            "pand %%xmm2, %%xmm10\n\tpor %%xmm3, %%xmm11\n\t"
+            "movdqu %%xmm4, %%xmm12\n\tpsllq $5, %%xmm13\n\t"
+            "pshufd $0x4e, %%xmm14, %%xmm14\n\tpunpckldq %%xmm6, %%xmm15\n\tfnop\n\t"
+            "movdqu %%xmm0, 0(%[p])\n\t"
+            "movdqu %%xmm1, 16(%[p])\n\t"
+            "movdqu %%xmm2, 32(%[p])\n\t"
+            "movdqu %%xmm3, 48(%[p])\n\t"
+            "movdqu %%xmm4, 64(%[p])\n\t"
+            "movdqu %%xmm5, 80(%[p])\n\t"
+            "movdqu %%xmm6, 96(%[p])\n\t"
+            "movdqu %%xmm7, 112(%[p])\n\t"
+            "movdqu %%xmm8, 128(%[p])\n\t"
+            "movdqu %%xmm9, 144(%[p])\n\t"
+            "movdqu %%xmm10, 160(%[p])\n\t"
+            "movdqu %%xmm11, 176(%[p])\n\t"
+            "movdqu %%xmm12, 192(%[p])\n\t"
+            "movdqu %%xmm13, 208(%[p])\n\t"
+            "movdqu %%xmm14, 224(%[p])\n\t"
+            "movdqu %%xmm15, 240(%[p])\n\t"
+            : : [p] "r"(regs)
+            : "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7",
+              "xmm8", "xmm9", "xmm10", "xmm11", "xmm12", "xmm13", "xmm14", "xmm15", "memory", "cc");
+        for (int j = 0; j < 16; j++) h = mix(mix(h, (u64)regs[j][0]), (u64)regs[j][1]);
+    }
+    out("gpta_xmm_lane_state", h);
+}
+
 typedef void (*test_fn)(void);
 #define ALU_LIST(OP) OP##_q, OP##_l, OP##_w, OP##_b, OP##_mr_q, OP##_rm_l, OP##_mr_b,
 static const test_fn kTests[] = {
@@ -1154,7 +1211,7 @@ static const test_fn kTests[] = {
     fz_o, fz_no, fz_b, fz_ae, fz_e, fz_ne, fz_be, fz_a, fz_s, fz_ns, fz_p, fz_np, fz_l, fz_ge, fz_le, fz_g,
     fc_o, fc_no, fc_b, fc_ae, fc_e, fc_ne, fc_be, fc_a, fc_s, fc_ns, fc_p, fc_np, fc_l, fc_ge, fc_le, fc_g,
     fz_call, fz_index, fz_xindex, fz_3op, fz_3gap, fz_x3, fz_hoist, gpta_xmem, gpta_result_flags, gpta_xhigh, gpta_cf_flow,
-    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow, gpta_fcj_trace, gpta_jresult_trace, gpta_immstores, gpta_x3high, gpta_step_trace, gpta_shift_counts, gpta_unary_edges, gpta_alu_memory,
+    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow, gpta_fcj_trace, gpta_jresult_trace, gpta_immstores, gpta_x3high, gpta_step_trace, gpta_shift_counts, gpta_unary_edges, gpta_alu_memory, gpta_xmm_lane_state,
 };
 
 int guest_main(int argc, char **argv) {

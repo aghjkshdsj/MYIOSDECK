@@ -227,8 +227,9 @@ static void on_fault(int sig, siginfo_t *si, void *ctx) {
             uint64_t w = r == RSP ? 0x1008 : want[r];
             if (c->r[r] != w) { bad = 1; n += snprintf(out + n, sizeof out - (size_t)n, "r%d %#llx want %#llx; ", r, (unsigned long long)c->r[r], (unsigned long long)w); }
         }
-        static const int xsrc[8] = { RAX, RCX, RDX, RSI, RDI, R8, R9, R10 };
-        for (int x = 0; x < 8; x++)
+        static const int xsrc[16] = { RAX, RCX, RDX, RSI, RDI, R8, R9, R10,
+                                     R11, R12, R13, R14, RAX, RCX, RDX, RSI };
+        for (int x = 0; x < 16; x++)
             if (c->xmm[x].q[0] != want[xsrc[x]] || c->xmm[x].q[1]) {
                 bad = 1; n += snprintf(out + n, sizeof out - (size_t)n, "xmm%d %#llx:%#llx; ", x, (unsigned long long)c->xmm[x].q[1], (unsigned long long)c->xmm[x].q[0]);
             }
@@ -238,7 +239,7 @@ static void on_fault(int sig, siginfo_t *si, void *ctx) {
         uint64_t fl = fxi_rflags(c) & 0x8d5;
         int flags_dead = g_site == 5 || g_site == 6 || g_site == 9;
         if (fl != 0x44 && !flags_dead) { bad = 1; n += snprintf(out + n, sizeof out - (size_t)n, "flags %#llx want 0x44; ", (unsigned long long)fl); }
-        if (!bad) n += snprintf(out + n, sizeof out - (size_t)n, "exact (rip, GPRs, flags, XMM0-7)");
+        if (!bad) n += snprintf(out + n, sizeof out - (size_t)n, "exact (rip, GPRs, flags, XMM0-15)");
     }
     if (bad) {   // the host registers, to see where the guest state really is
         n += snprintf(out + n, sizeof out - (size_t)n, "\n  host:");

@@ -1336,7 +1336,11 @@ static void load_host(FxiCpu *c, const gpta_host_state *h) {
     for (int i = 0; i < 16; i++) c->r[i] = h->x[k_host_gpr[i]];
     uint64_t F0 = h->x[12], F1 = h->x[13], F2 = h->x[14], F3 = h->x[9];
     SPILL_F();
+#if GPTA_PACKED_XMM
+    for (int i = 0; i < 16; i++) memcpy(&c->xmm[i].q[0], &h->q[i & 7][8 * (i >> 3)], 8);
+#else
     for (int i = 0; i < 8; i++) memcpy(&c->xmm[i], h->q[i], 16);
+#endif
 }
 #endif
 
