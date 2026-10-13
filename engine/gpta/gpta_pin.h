@@ -97,13 +97,26 @@
 #define SPILL_F() do { c->lf_op = (uint32_t)F0; c->lf_cin = (uint32_t)(F0 >> 32); c->lf_a = F1; c->lf_b = F2; c->lf_res = F3; } while (0)
 #define RELOAD_F() do { F0 = (uint64_t)c->lf_op | (uint64_t)c->lf_cin << 32; F1 = c->lf_a; F2 = c->lf_b; F3 = c->lf_res; } while (0)
 #define SETF(kind, si, a, b, r, cin) do { F0 = (uint64_t)LF(kind, si) | (uint64_t)(uint32_t)(cin) << 32; F1 = (a); F2 = (b); F3 = (r); } while (0)
-// Unpacked XMM0-7 spill/reload. gpta_pin_xpack.h overrides these for packed lanes.
+// Architectural XMM state at interpreter boundaries. Hot handlers use physical
+// slots; fallback/native calls and host contexts use the architectural array.
 FXI_INLINE GptaV xld(const void *p) { GptaV v; memcpy(&v, p, 16); return v; }
 FXI_INLINE void xst(void *p, GptaV v) { memcpy(p, &v, 16); }
-#define SPILL_X() do { xst(&c->xmm[0], x0); xst(&c->xmm[1], x1); xst(&c->xmm[2], x2); xst(&c->xmm[3], x3); \
-    xst(&c->xmm[4], x4); xst(&c->xmm[5], x5); xst(&c->xmm[6], x6); xst(&c->xmm[7], x7); } while (0)
-#define RELOAD_X() do { x0 = xld(&c->xmm[0]); x1 = xld(&c->xmm[1]); x2 = xld(&c->xmm[2]); x3 = xld(&c->xmm[3]); \
-    x4 = xld(&c->xmm[4]); x5 = xld(&c->xmm[5]); x6 = xld(&c->xmm[6]); x7 = xld(&c->xmm[7]); } while (0)
+#define GPTA_XIDENTITY UINT64_C(0xfedcba9876543210)
+#define XARCH(KEY,SLOT) ((unsigned)(((KEY) >> (4 * (SLOT))) & 15))
+#define SPILL_X() do { uint64_t xm_ = c->gpta_xmap; \
+    xst(&c->xmm[XARCH(xm_,0)], x0); xst(&c->xmm[XARCH(xm_,1)], x1); \
+    xst(&c->xmm[XARCH(xm_,2)], x2); xst(&c->xmm[XARCH(xm_,3)], x3); \
+    xst(&c->xmm[XARCH(xm_,4)], x4); xst(&c->xmm[XARCH(xm_,5)], x5); \
+    xst(&c->xmm[XARCH(xm_,6)], x6); xst(&c->xmm[XARCH(xm_,7)], x7); \
+    for (unsigned xi_ = 8; xi_ < 16; xi_++) c->xmm[XARCH(xm_,xi_)] = c->gpta_xhi[xi_-8]; \
+} while (0)
+#define RELOAD_X() do { uint64_t xm_ = c->gpta_xmap; \
+    x0 = xld(&c->xmm[XARCH(xm_,0)]); x1 = xld(&c->xmm[XARCH(xm_,1)]); \
+    x2 = xld(&c->xmm[XARCH(xm_,2)]); x3 = xld(&c->xmm[XARCH(xm_,3)]); \
+    x4 = xld(&c->xmm[XARCH(xm_,4)]); x5 = xld(&c->xmm[XARCH(xm_,5)]); \
+    x6 = xld(&c->xmm[XARCH(xm_,6)]); x7 = xld(&c->xmm[XARCH(xm_,7)]); \
+    for (unsigned xi_ = 8; xi_ < 16; xi_++) c->gpta_xhi[xi_-8] = c->xmm[XARCH(xm_,xi_)]; \
+} while (0)
 
 // Out-of-line handlers every file tail-calls (defined in gpta_pin.c)
 #define PX GPTA_CC void
@@ -299,15 +312,15 @@ typedef int8_t VS16 __attribute__((vector_size(16)));
 #define XD_5 x5
 #define XD_6 x6
 #define XD_7 x7
-#define XD_8 xld(&c->xmm[8])
-#define XD_9 xld(&c->xmm[9])
-#define XD_10 xld(&c->xmm[10])
-#define XD_11 xld(&c->xmm[11])
-#define XD_12 xld(&c->xmm[12])
-#define XD_13 xld(&c->xmm[13])
-#define XD_14 xld(&c->xmm[14])
-#define XD_15 xld(&c->xmm[15])
-#define XD_M xld(&c->xmm[u->dst])
+#define XD_8 xld(&c->gpta_xhi[0])
+#define XD_9 xld(&c->gpta_xhi[1])
+#define XD_10 xld(&c->gpta_xhi[2])
+#define XD_11 xld(&c->gpta_xhi[3])
+#define XD_12 xld(&c->gpta_xhi[4])
+#define XD_13 xld(&c->gpta_xhi[5])
+#define XD_14 xld(&c->gpta_xhi[6])
+#define XD_15 xld(&c->gpta_xhi[7])
+#define XD_M xld(&c->gpta_xhi[u->dst-8])
 #define XS_0 x0
 #define XS_1 x1
 #define XS_2 x2
@@ -324,7 +337,7 @@ typedef int8_t VS16 __attribute__((vector_size(16)));
 #define XS_13 XD_13
 #define XS_14 XD_14
 #define XS_15 XD_15
-#define XS_M xld(&c->xmm[u->src])
+#define XS_M xld(&c->gpta_xhi[u->src-8])
 #define XW_0(v) (x0 = (v))
 #define XW_1(v) (x1 = (v))
 #define XW_2(v) (x2 = (v))
@@ -333,15 +346,15 @@ typedef int8_t VS16 __attribute__((vector_size(16)));
 #define XW_5(v) (x5 = (v))
 #define XW_6(v) (x6 = (v))
 #define XW_7(v) (x7 = (v))
-#define XW_8(v) xst(&c->xmm[8], (v))
-#define XW_9(v) xst(&c->xmm[9], (v))
-#define XW_10(v) xst(&c->xmm[10], (v))
-#define XW_11(v) xst(&c->xmm[11], (v))
-#define XW_12(v) xst(&c->xmm[12], (v))
-#define XW_13(v) xst(&c->xmm[13], (v))
-#define XW_14(v) xst(&c->xmm[14], (v))
-#define XW_15(v) xst(&c->xmm[15], (v))
-#define XW_M(v) xst(&c->xmm[u->dst], (v))
+#define XW_8(v) xst(&c->gpta_xhi[0], (v))
+#define XW_9(v) xst(&c->gpta_xhi[1], (v))
+#define XW_10(v) xst(&c->gpta_xhi[2], (v))
+#define XW_11(v) xst(&c->gpta_xhi[3], (v))
+#define XW_12(v) xst(&c->gpta_xhi[4], (v))
+#define XW_13(v) xst(&c->gpta_xhi[5], (v))
+#define XW_14(v) xst(&c->gpta_xhi[6], (v))
+#define XW_15(v) xst(&c->gpta_xhi[7], (v))
+#define XW_M(v) xst(&c->gpta_xhi[u->dst-8], (v))
 #endif
 // Exact faults (gpta_win_host_state): after a guest memory access, these keep a pinned value the
 // handler is about to overwrite (the flag words, an XMM destination) in its register until there,
@@ -669,7 +682,7 @@ static inline int cc8(unsigned cc) {
 #if GPTA_PACKED_XMM
 #define XX_M XP_READ_M(u->base)
 #else
-#define XX_M xld(&c->xmm[u->base])
+#define XX_M xld(&c->gpta_xhi[u->base-8])
 #endif
 // The 10 conditions counted loops exit on (b ae e ne be a l ge le g), for the loop-step fusions
 #define C10(M, ...) M(2, __VA_ARGS__) M(3, __VA_ARGS__) M(4, __VA_ARGS__) M(5, __VA_ARGS__) M(6, __VA_ARGS__) \

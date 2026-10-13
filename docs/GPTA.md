@@ -140,6 +140,23 @@ run is an inherited FXR baseline, not a new speed improvement. The second adds
 single-dispatch SSE memory arithmetic and direct result-only flag checks.
 GPTA iPhone performance is **not measured**.
 
+The trace-local XMM allocation trial is **not measured**. It selects eight
+full vectors by uniform counts of explicit operands, breaking ties by guest
+register number. Each selected set has a stable permutation; constants,
+symbols, addresses and checksums never participate. External block entries
+adapt the vector map, while internal trace edges keep it. Unpinned physical
+slots use a separate CPU bank, and FXI fallbacks receive architectural XMM
+state and original operand indices. The hot uop stride stays unchanged.
+
+Windows mode defaults to the identity permutation. CI additionally enables
+the allocation trial with `GPTA_XMAP_WINDOWS=1` and repeats the same native
+exit, native API, fault-site and thread-stop checks. Host-state recovery
+translates both pinned vectors and the unpinned bank into architectural XMM
+slots. Map transitions execute outside the recoverable handler section;
+suspend recovery must retry there. The new differential test keeps all
+sixteen registers live across different hot sets, explicit-operand fallback
+and FXSAVE/FXRSTOR. Full Wine suspend integration still follows the speed goal.
+
 The held-out suite stays frozen at commit
 `57ce94e8ff5c7d39fbf22b73997a60317c31437e`, blob
 `1728cd7f759f26c9d063baaf72ea91501982fb12`. It is evaluation-only. Do not edit

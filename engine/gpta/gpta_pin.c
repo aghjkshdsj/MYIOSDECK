@@ -28,6 +28,8 @@
 #include "gpta_pin_xscalar.h"
 #include "gpta_pin_copyshift.h"
 
+static Uop *architectural_uop(FxiCpu *c, Uop *u, Uop *original);
+
 static uint16_t k_cctab[16];   // cmov truth tables per condition code (pcond_tab)
 
 // Windows mode: the state goes to the CPU structure first, so a fault while translating the
@@ -68,6 +70,16 @@ PH p_jmp_T(GPTA_PARAMS) { PIND(ld64(T)); }
 // fxi_ea is a call: these two run outside the pinned section, with the whole state in the CPU
 // structure and c->cur set first, so a fault in them is exact (gpta_win_host_state).
 #define PO static GPTA_CC void
+// Map changes are cold transitions, outside the recoverable handler section.
+// Internal trace edges bypass this adapter because their map is unchanged.
+PO p_xentry(GPTA_PARAMS) {
+    if (c->gpta_xmap != u->imm) {
+        SPILL_X();
+        c->gpta_xmap = u->imm;
+        RELOAD_X();
+    }
+    PNEXT();
+}
 #define CPU_STATE() do { SPILL_R(); SPILL_F(); SPILL_X(); c->cur = u; } while (0)
 PO p_call_M(GPTA_PARAMS) { CPU_STATE(); uint64_t t = ld64(fxi_ea(c, u)); st64(g4 - 8, u->aux); g4 -= 8; PIND(t); }
 PO p_jmp_M(GPTA_PARAMS) { CPU_STATE(); PIND(ld64(fxi_ea(c, u))); }
@@ -101,7 +113,9 @@ PX p_slow(GPTA_PARAMS) {
     c->cur = u;
     c->gpta_phase = GPTA_PH_SLOW;
     c->n_slow++;
-    u->fn(c, u);
+    Uop original;
+    u->fn(c, architectural_uop(c, u, &original));
+    c->cur = u;
     if (FXI_UNLIKELY(c->stop)) return;
     RELOAD_R(); RELOAD_F(); RELOAD_X();
     PNEXT();
@@ -256,6 +270,62 @@ static const Desc *find(OpFn f) {
     while (g_desc[h].key) { if (g_desc[h].key == f) return &g_desc[h]; h = (h + 1) & (DESC_SLOTS - 1); }
     return 0;
 }
+// Which explicit fields are vector operands? Everything unknown remains in
+// architectural form and runs through FXI. Integer byte offsets are untouched.
+static unsigned vector_fields(const Desc *d) {
+    if (!d) return 0;
+    if (d->fam == FAM_X) return d->b ? 1 : 3;
+    if (d->fam == FAM_XI) return 1;
+    if (d->fam != FAM_XS) return 0;
+    if (d->a >= XS_GX) return 2;
+    if (d->a >= XS_XG) return 1;
+    switch (d->a) {
+    case XS_MOVX_MR: case XS_MOVSS_MR: case XS_MOVSD_MR: case XS_MOVHPS_MR: return 2;
+    default: return 1;
+    }
+}
+static Uop *architectural_uop(FxiCpu *c, Uop *u, Uop *original) {
+    if (c->gpta_xmap == GPTA_XIDENTITY) return u;
+    unsigned f = vector_fields(find(u->fn));
+    if (!f) return u;
+    *original = *u;
+    if ((f & 1) && u->dst < 16) original->dst = (uint16_t)XARCH(c->gpta_xmap, u->dst);
+    if ((f & 2) && u->src < 16) original->src = (uint16_t)XARCH(c->gpta_xmap, u->src);
+    return original;
+}
+// Uniform static operand counts select a set, independent of guest constants,
+// addresses or identity. Sorting each selected set by register number gives
+// equal sets an equal map across separately decoded traces.
+static uint64_t vector_map(Block **seg, int nseg) {
+    unsigned uses[16] = { 0 }, selected = 0;
+    for (int i = 0; i < nseg; i++) for (uint32_t j = 0; j < seg[i]->n; j++) {
+        const Uop *u = &seg[i]->u[j];
+        unsigned f = vector_fields(find(u->fn));
+        if ((f & 1) && u->dst < 16) uses[u->dst]++;
+        if ((f & 2) && u->src < 16) uses[u->src]++;
+    }
+    for (unsigned k = 0; k < 8; k++) {
+        unsigned best = 16;
+        for (unsigned r = 0; r < 16; r++) if (!(selected & (1u << r)) &&
+            (best == 16 || uses[r] > uses[best])) best = r;
+        selected |= 1u << best;
+    }
+    uint64_t key = 0;
+    unsigned slot = 0;
+    for (unsigned bank = 0; bank < 2; bank++) for (unsigned r = 0; r < 16; r++)
+        if (!!(selected & (1u << r)) == !bank) key |= (uint64_t)r << (4 * slot++);
+    return key;
+}
+static void map_vectors(Block *b, uint64_t key) {
+    uint8_t physical[16];
+    for (unsigned s = 0; s < 16; s++) physical[XARCH(key,s)] = (uint8_t)s;
+    for (uint32_t i = 0; i < b->n; i++) {
+        Uop *u = &b->u[i];
+        unsigned f = vector_fields(find(u->fn));
+        if ((f & 1) && u->dst < 16) u->dst = physical[u->dst];
+        if ((f & 2) && u->src < 16) u->src = physical[u->src];
+    }
+}
 static int is_shuffle(const char *n) {
     return !strcmp(n, "pshufd") || !strcmp(n, "pshuflw") || !strcmp(n, "pshufhw") || !strcmp(n, "shufps") ||
            !strcmp(n, "shufpd") || !strcmp(n, "psrldq") || !strcmp(n, "pslldq");
@@ -342,11 +412,12 @@ static void replicate(Uop *u, int M, int copies) {
 
 // Diagnostic knobs, for A/B runs in CI (the defaults are what ships): GPTA_TRACES=0 no loop traces,
 // GPTA_TRACE_UOPS=n the uop budget for a trace's copies, GPTA_REPLICAS=0 no handler replicas.
-static int g_traces = 1, g_trace_uops = 48, g_replicas = 1, g_win_force;
+static int g_traces = 1, g_trace_uops = 48, g_replicas = 1, g_win_force, g_xmap_windows;
 static int g_win;   // lowering for Windows mode (gpta_lower sets it; lowering is serialised)
 // GPTA_WINLOWER=1: lower as for Windows mode (the exact-state test, engine/gpta-probe/winstate_test.c)
 static void knobs(void) {
     const char *e;
+    if ((e = getenv("GPTA_XMAP_WINDOWS"))) g_xmap_windows = atoi(e);
     if ((e = getenv("GPTA_TRACES"))) g_traces = atoi(e);
     if ((e = getenv("GPTA_TRACE_UOPS"))) g_trace_uops = atoi(e);
     if ((e = getenv("GPTA_REPLICAS"))) g_replicas = atoi(e);
@@ -1129,6 +1200,8 @@ Block *gpta_lower(struct Fxi *vm, Block *b) {
     Block *seg[TRACE_SEGS];
     int edge[TRACE_SEGS], ns = g_traces ? find_trace(vm, b, seg, edge) : 0, nseg = ns ? ns : 1;
     if (!ns) seg[0] = b;
+    uint64_t xmap = g_win && !g_xmap_windows ? GPTA_XIDENTITY : vector_map(seg, nseg);
+    for (int i = 0; i < nseg; i++) map_vectors(seg[i], xmap);
     Out o[TRACE_SEGS];
     int m[TRACE_SEGS], off[TRACE_SEGS], soff[TRACE_SEGS], M = 0, S = 0;
     for (int i = 0; i < nseg; i++) {
@@ -1151,27 +1224,32 @@ Block *gpta_lower(struct Fxi *vm, Block *b) {
     int copies = 1;
     if (ns) { copies = g_trace_uops / M; if (copies > TRACE_COPIES) copies = TRACE_COPIES; if (copies < 1) copies = 1; }
     if (copies > 1 && (copies & 1)) copies--;   // even: the replicas alternate between copies (replicate)
-    uint32_t n = (uint32_t)(copies * M + S);
+    uint32_t n = (uint32_t)(1 + copies * M + S);
     Block *nb = malloc(sizeof(Block) + sizeof(Uop) * ((size_t)n + 1));
     nb->rip = b->rip;
     nb->n = n;
+    memset(&nb->u[0], 0, sizeof nb->u[0]);
+    nb->u[0].p = p_xentry;
+    nb->u[0].imm = xmap;
+    nb->u[0].rip = b->rip;
+    nb->u[0].fdir = GPTA_NOBOUND;
     memset(&nb->u[n], 0, sizeof nb->u[n]);
     nb->u[n].p = p_stop;   // allocated lookahead sentinel, never part of the guest block
     for (int c = 0; c < copies; c++)
-        for (int i = 0; i < nseg; i++) memcpy(&nb->u[c * M + off[i]], o[i].out, sizeof(Uop) * (size_t)m[i]);
-    for (int i = 0; i < nseg; i++) memcpy(&nb->u[copies * M + soff[i]], o[i].out + m[i], sizeof(Uop) * (size_t)o[i].np);
+        for (int i = 0; i < nseg; i++) memcpy(&nb->u[1 + c * M + off[i]], o[i].out, sizeof(Uop) * (size_t)m[i]);
+    for (int i = 0; i < nseg; i++) memcpy(&nb->u[1 + copies * M + soff[i]], o[i].out + m[i], sizeof(Uop) * (size_t)o[i].np);
 #ifdef GPTA_PROFILE
     for (uint32_t k = 0; k < n; k++) nb->u[k].prof = 0;
 #endif
     for (int c = 0; c < copies; c++)
         for (int i = 0; i < nseg; i++) {
-            int base = c * M + off[i];
+            int base = 1 + c * M + off[i];
             for (int k = 0; k < o[i].np; k++) {   // point the branch's edges at their flag stubs
-                Uop *br = &nb->u[base + o[i].patch[k].at], *st = &nb->u[copies * M + soff[i] + (o[i].patch[k].stub - m[i])];
+                Uop *br = &nb->u[base + o[i].patch[k].at], *st = &nb->u[1 + copies * M + soff[i] + (o[i].patch[k].stub - m[i])];
                 if (o[i].patch[k].edge) br->ulink2 = st; else br->ulink = st;
             }
             if (ns) {   // the trace edge: the next block, or back to the start (the next copy's)
-                Uop *t = &nb->u[base + m[i] - 1], *to = i + 1 < nseg ? t + 1 : &nb->u[c + 1 < copies ? (c + 1) * M : 0];
+                Uop *t = &nb->u[base + m[i] - 1], *to = i + 1 < nseg ? t + 1 : &nb->u[1 + (c + 1 < copies ? (c + 1) * M : 0)];
                 if (edge[i]) t->ulink2 = to; else t->ulink = to;
                 // No link lookup is needed for a statically adjacent trace edge.
                 // Match the original handler so unrelated uop fields cannot opt in.
@@ -1193,7 +1271,7 @@ Block *gpta_lower(struct Fxi *vm, Block *b) {
                 }
             }
         }
-    if (g_replicas) replicate(nb->u, M, copies);
+    if (g_replicas) replicate(nb->u + 1, M, copies);
     for (int i = 0; i < nseg; i++) { free(o[i].out); free(seg[i]); }
     return nb;
 }
@@ -1240,6 +1318,7 @@ void gpta_profile_dump(struct Fxi *vm) {
 #endif
 
 void gpta_enter(FxiCpu *c, Block *b) {
+    if (!c->gpta_xmap) c->gpta_xmap = GPTA_XIDENTITY;
     if (!c->gpta_ready) {
         for (unsigned i = 0; i <= IBTC_MASK; i++) { c->gpta_ibtc[i].rip = ~0ull; c->gpta_ibtc[i].u = 0; }
         c->gpta_ready = 1;
@@ -1354,7 +1433,8 @@ static void load_host(FxiCpu *c, const gpta_host_state *h) {
 #if GPTA_PACKED_XMM
     for (int i = 0; i < 16; i++) memcpy(&c->xmm[i].q[0], &h->q[i & 7][8 * (i >> 3)], 8);
 #else
-    for (int i = 0; i < 8; i++) memcpy(&c->xmm[i], h->q[i], 16);
+    for (unsigned i = 0; i < 8; i++) memcpy(&c->xmm[XARCH(c->gpta_xmap,i)], h->q[i], 16);
+    for (unsigned i = 8; i < 16; i++) c->xmm[XARCH(c->gpta_xmap,i)] = c->gpta_xhi[i-8];
 #endif
 }
 #endif

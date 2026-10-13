@@ -1289,6 +1289,90 @@ static void gpta_unary_flag_inputs(void) {
     out("gpta_unary_flag_inputs", h);
 }
 
+// All sixteen vectors survive hot-set changes, explicit-operand fallback,
+// implicit FXSAVE/FXRSTOR, and scalar operations that preserve upper lanes.
+static void gpta_xmap_transitions(void) {
+    v2 regs[16];
+    unsigned char saved[512] __attribute__((aligned(16)));
+    u64 h = 14695981039346656037ull;
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j < 16; j++) regs[j] = vrand();
+        u64 a = val();
+        __asm__ volatile(
+            "movdqu 0(%[p]), %%xmm0\n\t"
+            "movdqu 16(%[p]), %%xmm1\n\t"
+            "movdqu 32(%[p]), %%xmm2\n\t"
+            "movdqu 48(%[p]), %%xmm3\n\t"
+            "movdqu 64(%[p]), %%xmm4\n\t"
+            "movdqu 80(%[p]), %%xmm5\n\t"
+            "movdqu 96(%[p]), %%xmm6\n\t"
+            "movdqu 112(%[p]), %%xmm7\n\t"
+            "movdqu 128(%[p]), %%xmm8\n\t"
+            "movdqu 144(%[p]), %%xmm9\n\t"
+            "movdqu 160(%[p]), %%xmm10\n\t"
+            "movdqu 176(%[p]), %%xmm11\n\t"
+            "movdqu 192(%[p]), %%xmm12\n\t"
+            "movdqu 208(%[p]), %%xmm13\n\t"
+            "movdqu 224(%[p]), %%xmm14\n\t"
+            "movdqu 240(%[p]), %%xmm15\n\t"
+            "movl $7, %%ecx\n\t1:\n\t"
+            "paddq %%xmm9, %%xmm8\n\tpxor %%xmm10, %%xmm11\n\t"
+            "psubq %%xmm12, %%xmm13\n\tpor %%xmm14, %%xmm15\n\t"
+            "decl %%ecx\n\tjne 1b\n\t"
+            "pinsrq $1, %[a], %%xmm13\n\tfnop\n\t"
+            "movl $11, %%ecx\n\t2:\n\t"
+            "paddq %%xmm1, %%xmm0\n\tpxor %%xmm2, %%xmm3\n\t"
+            "psubq %%xmm4, %%xmm5\n\tpor %%xmm6, %%xmm7\n\t"
+            "decl %%ecx\n\tjne 2b\n\t"
+            "fxsave64 %[saved]\n\t"
+            "pxor %%xmm0, %%xmm0\n\t"
+            "pxor %%xmm1, %%xmm1\n\t"
+            "pxor %%xmm2, %%xmm2\n\t"
+            "pxor %%xmm3, %%xmm3\n\t"
+            "pxor %%xmm4, %%xmm4\n\t"
+            "pxor %%xmm5, %%xmm5\n\t"
+            "pxor %%xmm6, %%xmm6\n\t"
+            "pxor %%xmm7, %%xmm7\n\t"
+            "pxor %%xmm8, %%xmm8\n\t"
+            "pxor %%xmm9, %%xmm9\n\t"
+            "pxor %%xmm10, %%xmm10\n\t"
+            "pxor %%xmm11, %%xmm11\n\t"
+            "pxor %%xmm12, %%xmm12\n\t"
+            "pxor %%xmm13, %%xmm13\n\t"
+            "pxor %%xmm14, %%xmm14\n\t"
+            "pxor %%xmm15, %%xmm15\n\t"
+            "fxrstor64 %[saved]\n\t"
+            "movl $13, %%ecx\n\t3:\n\t"
+            "paddq %%xmm15, %%xmm1\n\tpxor %%xmm13, %%xmm3\n\t"
+            "psubq %%xmm11, %%xmm5\n\tpor %%xmm9, %%xmm7\n\t"
+            "movss %%xmm3, %%xmm13\n\tmovsd %%xmm5, %%xmm15\n\t"
+            "decl %%ecx\n\tjne 3b\n\t"
+            "movdqu %%xmm0, 0(%[p])\n\t"
+            "movdqu %%xmm1, 16(%[p])\n\t"
+            "movdqu %%xmm2, 32(%[p])\n\t"
+            "movdqu %%xmm3, 48(%[p])\n\t"
+            "movdqu %%xmm4, 64(%[p])\n\t"
+            "movdqu %%xmm5, 80(%[p])\n\t"
+            "movdqu %%xmm6, 96(%[p])\n\t"
+            "movdqu %%xmm7, 112(%[p])\n\t"
+            "movdqu %%xmm8, 128(%[p])\n\t"
+            "movdqu %%xmm9, 144(%[p])\n\t"
+            "movdqu %%xmm10, 160(%[p])\n\t"
+            "movdqu %%xmm11, 176(%[p])\n\t"
+            "movdqu %%xmm12, 192(%[p])\n\t"
+            "movdqu %%xmm13, 208(%[p])\n\t"
+            "movdqu %%xmm14, 224(%[p])\n\t"
+            "movdqu %%xmm15, 240(%[p])\n\t"
+            : [saved] "=m"(saved)
+            : [p] "r"(regs), [a] "r"(a)
+            : "rcx", "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7",
+              "xmm8", "xmm9", "xmm10", "xmm11", "xmm12", "xmm13", "xmm14", "xmm15",
+              "memory", "cc");
+        for (int j = 0; j < 16; j++) h = vmix(h, regs[j]);
+    }
+    out("gpta_xmap_transitions", h);
+}
+
 typedef void (*test_fn)(void);
 #define ALU_LIST(OP) OP##_q, OP##_l, OP##_w, OP##_b, OP##_mr_q, OP##_rm_l, OP##_mr_b,
 static const test_fn kTests[] = {
@@ -1319,7 +1403,7 @@ static const test_fn kTests[] = {
     fz_o, fz_no, fz_b, fz_ae, fz_e, fz_ne, fz_be, fz_a, fz_s, fz_ns, fz_p, fz_np, fz_l, fz_ge, fz_le, fz_g,
     fc_o, fc_no, fc_b, fc_ae, fc_e, fc_ne, fc_be, fc_a, fc_s, fc_ns, fc_p, fc_np, fc_l, fc_ge, fc_le, fc_g,
     fz_call, fz_index, fz_xindex, fz_3op, fz_3gap, fz_x3, fz_hoist, gpta_xmem, gpta_result_flags, gpta_xhigh, gpta_cf_flow,
-    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow, gpta_fcj_trace, gpta_jresult_trace, gpta_immstores, gpta_x3high, gpta_step_trace, gpta_shift_counts, gpta_copy_shift_counts, gpta_unary_edges, gpta_alu_memory, gpta_xmm_lane_state, gpta_scalar_mem, gpta_unary_flag_inputs,
+    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow, gpta_fcj_trace, gpta_jresult_trace, gpta_immstores, gpta_x3high, gpta_step_trace, gpta_shift_counts, gpta_copy_shift_counts, gpta_unary_edges, gpta_alu_memory, gpta_xmm_lane_state, gpta_scalar_mem, gpta_unary_flag_inputs, gpta_xmap_transitions,
 };
 
 int guest_main(int argc, char **argv) {

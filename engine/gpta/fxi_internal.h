@@ -45,7 +45,8 @@ typedef void (*OpFn)(FxiCpu *c, Uop *u);
 #else
 #define GPTA_CC
 #endif
-// GPTA: full XMM0-7 values use vector arguments; XMM8-15 stay in CPU state.
+// GPTA: eight full vectors use argument registers. Each trace assigns guest
+// XMM registers to those slots; the remaining slots use a separate CPU bank.
 // The uniform packed-low-lane experiment is retained disabled for reproducibility.
 #define GPTA_PACKED_XMM 0
 typedef uint64_t GptaV __attribute__((vector_size(16)));
@@ -76,6 +77,8 @@ struct FxiCpu {
     uint64_t r[R_COUNT];     // 0x00: GPRs, zero slot, FS/GS base; 8-bit regs are byte offsets into this
     uint64_t rip;            // 0x98: only exact at block boundaries and on errors
     _Alignas(16) X128 xmm[16];   // 0xa0
+    _Alignas(16) X128 gpta_xhi[8];   // physical vector slots 8-15
+    uint64_t gpta_xmap;             // physical -> architectural, sixteen nibbles
     // Lazy flags: the last flag-writing operation's inputs and result.
     uint64_t lf_res, lf_a, lf_b;
     uint32_t lf_op;          // LF(kind, size index)
