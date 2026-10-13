@@ -1229,6 +1229,34 @@ static void gpta_scalar_mem(void) {
     out("gpta_scalar_mem", h);
 }
 
+#define UNARY_FLOW_CASE(OP, CARRY) do { \
+    u64 a = val(), b = val(), d = val(), result; unsigned char flags[5]; \
+    __asm__ volatile("movq %[a], %%rax\n\taddq %[b], %%rax\n\t" \
+        "movq %[d], %%rcx\n\t" OP "\n\t" \
+        "seto %[of]\n\tsetz %[zf]\n\tsets %[sf]\n\tsetp %[pf]\n\t" \
+        CARRY "\n\ttestq %%rax, %%rax\n\tmovq %%rcx, %[r]" \
+        : [of] "=m"(flags[0]), [zf] "=m"(flags[1]), [sf] "=m"(flags[2]), \
+          [pf] "=m"(flags[3]), [cf] "=m"(flags[4]), [r] "=m"(result) \
+        : [a] "r"(a), [b] "r"(b), [d] "r"(d) : "rax", "rcx", "cc", "memory"); \
+    h = mix(h, result); for (int q = 0; q < 5; q++) h = mix(h, flags[q]); \
+} while (0)
+#define UNARY_FLOW_FORMS(OP) \
+    UNARY_FLOW_CASE(OP, "movb $0, %[cf]"); \
+    UNARY_FLOW_CASE(OP, "setc %[cf]")
+static void gpta_unary_flag_inputs(void) {
+    u64 h = 14695981039346656037ull;
+    for (int i = 0; i < N; i++) {
+        UNARY_FLOW_FORMS("incb %%cl"); UNARY_FLOW_FORMS("incw %%cx");
+        UNARY_FLOW_FORMS("incl %%ecx"); UNARY_FLOW_FORMS("incq %%rcx");
+        UNARY_FLOW_FORMS("decb %%cl"); UNARY_FLOW_FORMS("decw %%cx");
+        UNARY_FLOW_FORMS("decl %%ecx"); UNARY_FLOW_FORMS("decq %%rcx");
+        UNARY_FLOW_FORMS("negb %%cl"); UNARY_FLOW_FORMS("negw %%cx");
+        UNARY_FLOW_FORMS("negl %%ecx"); UNARY_FLOW_FORMS("negq %%rcx");
+        UNARY_FLOW_FORMS("incq %%rcx\n\tdecq %%rcx");
+    }
+    out("gpta_unary_flag_inputs", h);
+}
+
 typedef void (*test_fn)(void);
 #define ALU_LIST(OP) OP##_q, OP##_l, OP##_w, OP##_b, OP##_mr_q, OP##_rm_l, OP##_mr_b,
 static const test_fn kTests[] = {
@@ -1259,7 +1287,7 @@ static const test_fn kTests[] = {
     fz_o, fz_no, fz_b, fz_ae, fz_e, fz_ne, fz_be, fz_a, fz_s, fz_ns, fz_p, fz_np, fz_l, fz_ge, fz_le, fz_g,
     fc_o, fc_no, fc_b, fc_ae, fc_e, fc_ne, fc_be, fc_a, fc_s, fc_ns, fc_p, fc_np, fc_l, fc_ge, fc_le, fc_g,
     fz_call, fz_index, fz_xindex, fz_3op, fz_3gap, fz_x3, fz_hoist, gpta_xmem, gpta_result_flags, gpta_xhigh, gpta_cf_flow,
-    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow, gpta_fcj_trace, gpta_jresult_trace, gpta_immstores, gpta_x3high, gpta_step_trace, gpta_shift_counts, gpta_unary_edges, gpta_alu_memory, gpta_xmm_lane_state, gpta_scalar_mem,
+    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow, gpta_fcj_trace, gpta_jresult_trace, gpta_immstores, gpta_x3high, gpta_step_trace, gpta_shift_counts, gpta_unary_edges, gpta_alu_memory, gpta_xmm_lane_state, gpta_scalar_mem, gpta_unary_flag_inputs,
 };
 
 int guest_main(int argc, char **argv) {

@@ -17,7 +17,7 @@ typedef struct {
     OpFn alt;                  // no-flags variant, if any
     uint8_t kill;              // writes every arithmetic flag
     uint8_t reads;             // reads flags (or needs the old CF)
-    uint8_t cc_live;           // set u->cc = flags-live-after (rotates, inc/dec/neg)
+    uint8_t cc_live;           // GPTA: 1 partial flags, 2 INC/DEC, 3 NEG; set u->cc = flags-live-after
     uint8_t cf_ignore;         // GPTA: this condition reads flags, but not carry
 } Meta;
 
@@ -54,8 +54,17 @@ static Meta *meta(Dec *d) { return &d->m[d->n - 1]; }
 
 // GPTA: only below/above conditions read CF. Other readers remain conservative.
 static int condition_ignores_cf(unsigned cc) { return cc != 2 && cc != 3 && cc != 6 && cc != 7; }
-static int cf_before(const Meta *m, int live) {
+static int cf_before(const Meta *m, int live, int unary_flags) {
+    if (unary_flags && m->cc_live == 3) return 0;  // NEG replaces carry, never reads it
     return (m->reads && !m->cf_ignore) || (live && !m->kill);
+}
+// GPTA: INC/DEC read only preserved carry; NEG reads no incoming flags.
+// Keep the inherited conservative analysis for Windows state-recovery mode.
+static int flags_before(const Meta *m, int live, int cflive, int unary_flags) {
+    if (unary_flags && m->cc_live == 2) return cflive;
+    if (unary_flags && m->cc_live == 3) return 0;
+    int reads = m->cc_live ? live : m->reads;
+    return reads || (live && !m->kill);
 }
 
 static OpFn named(const char *name) {
@@ -620,7 +629,7 @@ static int decode_one_inner(Dec *d) {
             if (d->lock && d->is_mem) { emit_lock_unary(d, op == 2 ? U_NOT : U_NEG, sz); return 0; }
             Uop *u = emit(d, fxi_unary_tab[op == 2 ? U_NOT : U_NEG][d->is_mem][si_of(sz)]);
             u->dst = gpr(d, d->rm, sz); if (d->is_mem) set_mem(d, u);
-            if (op == 3) meta(d)->cc_live = 1;
+            if (op == 3) meta(d)->cc_live = 3;   // GPTA: NEG generates flags without reading old flags
             return 0;
         }
         Uop *u = emit(d, fxi_muldiv_tab[op - 4][d->is_mem][si_of(sz)]);
@@ -637,7 +646,7 @@ static int decode_one_inner(Dec *d) {
             if (d->lock && d->is_mem) { emit_lock_unary(d, op == 0 ? U_INC : U_DEC, sz); return 0; }
             Uop *u = emit(d, fxi_unary_tab[op == 0 ? U_INC : U_DEC][d->is_mem][si_of(sz)]);
             u->dst = gpr(d, d->rm, sz); if (d->is_mem) set_mem(d, u);
-            meta(d)->cc_live = 1;
+            meta(d)->cc_live = 2;   // GPTA: INC/DEC retain only incoming CF
             return 0;
         }
         if (b == 0xff && (op == 2 || op == 4)) {
@@ -928,7 +937,7 @@ int fxi_probe(const uint8_t *p, uint64_t rip, char *why, size_t why_len) {
 // GPTA: are the arithmetic flags live where control enters rip? Decodes the block there (no
 // further lookahead). Returns bit 0: any flags live, bit 1: CF live; both when unsure.
 // ELF mode only: in a Windows process the target may be native code or unmapped.
-static int gpta_live_in(struct Fxi *vm, uint64_t rip) {
+static int gpta_live_in(struct Fxi *vm, uint64_t rip, int unary_flags) {
     if (vm->windows || rip < (uint64_t)(uintptr_t)vm->image ||
         rip >= (uint64_t)(uintptr_t)vm->image + vm->image_size) return 3;
     Dec *d = malloc(sizeof *d);
@@ -946,15 +955,15 @@ static int gpta_live_in(struct Fxi *vm, uint64_t rip) {
     for (int i = d->n - 1; i >= 0; i--) {
         Meta *m = &d->m[i];
         if (d->u[i].fn == ud) free((char *)(uintptr_t)d->u[i].imm);
-        cflive = cf_before(m, cflive);   // GPTA
-        if (m->cc_live) m->reads = (uint8_t)live;
-        live = m->reads || (live && !m->kill);
+        cflive = cf_before(m, cflive, unary_flags);   // GPTA
+        live = flags_before(m, live, cflive, unary_flags);
     }
     free(d);
     return live | (cflive << 1);   // GPTA
 }
 
 Block *gpta_decode(struct Fxi *vm, uint64_t rip) {   // GPTA: fxi_translate without the lowering
+    int unary_flags = !vm->windows && !getenv("GPTA_WINLOWER");
     Dec *d = malloc(sizeof *d);
     d->p = (const uint8_t *)(uintptr_t)rip;
     d->n = 0;
@@ -971,7 +980,7 @@ Block *gpta_decode(struct Fxi *vm, uint64_t rip) {   // GPTA: fxi_translate with
     // reads them before writing them (FXI assumes they are live there).
     int live = d->nxt == 0, cflive = live, ldir = 0;   // GPTA
     for (int k = 0; k < d->nxt; k++) {   // GPTA
-        int in = gpta_live_in(vm, d->xt[k]);
+        int in = gpta_live_in(vm, d->xt[k], unary_flags);
         if (in & 1) { live = 1; ldir |= 1 << k; }
         if (in & 2) cflive = 1;
     }
@@ -980,10 +989,10 @@ Block *gpta_decode(struct Fxi *vm, uint64_t rip) {   // GPTA: fxi_translate with
         Meta *m = &d->m[i];
         d->u[i].flive = (uint8_t)live;   // GPTA: flags live after this uop
         d->u[i].cfdead = (uint8_t)!cflive;   // GPTA
-        cflive = cf_before(m, cflive);      // GPTA: before cc_live rewrites reads
-        if (m->cc_live) { d->u[i].cc = (uint8_t)live; m->reads = (uint8_t)live; }
+        cflive = cf_before(m, cflive, unary_flags);   // GPTA
+        if (m->cc_live) d->u[i].cc = (uint8_t)live;
         if (m->kill && !live && m->alt) d->u[i].fn = m->alt;
-        live = m->reads || (live && !m->kill);
+        live = flags_before(m, live, cflive, unary_flags);
     }
 
     Block *b = malloc(sizeof(Block) + (size_t)d->n * sizeof(Uop));
