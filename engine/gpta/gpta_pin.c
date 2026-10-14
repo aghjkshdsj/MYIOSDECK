@@ -1208,6 +1208,29 @@ static PFn step_trace_handler(const Uop *u, unsigned edge) {
     return u->p;
 }
 
+// Keep vector allocation stable across separately translated blocks inside an
+// existing loop region. The first vector block chooses its map from ordinary
+// operand counts; later blocks inherit that immutable allocation. Region
+// metadata lives in the entry adapter, so it shares the block cache's lifetime
+// and cannot survive destruction of an interpreter instance. Translation is
+// serialized by the core. Windows does not speculatively scan guest code.
+static uint64_t region_vector_map(struct Fxi *vm, uint64_t rip,
+                                  uint64_t *start, uint64_t *end) {
+    uint64_t key = 0, span = UINT64_MAX;
+    if (!vm || g_win) return 0;
+    BlockTable *t = __atomic_load_n(&vm->table, __ATOMIC_ACQUIRE);
+    for (uint64_t i = 0; i <= t->mask; i++) {
+        const Block *b = __atomic_load_n(&t->slot[i], __ATOMIC_ACQUIRE);
+        if (!b || !b->n || b->u[0].p != p_xentry) continue;
+        const Uop *u = &b->u[0];
+        uint64_t lo = (uint64_t)u->disp, hi = u->aux;
+        if (lo <= rip && rip < hi && hi - lo < span) {
+            key = u->imm; *start = lo; *end = hi; span = hi - lo;
+        }
+    }
+    return key;
+}
+
 Block *gpta_lower(struct Fxi *vm, Block *b) {
     pthread_once(&g_once, init_desc);
     g_win = (vm && vm->windows) || g_win_force;
@@ -1215,6 +1238,12 @@ Block *gpta_lower(struct Fxi *vm, Block *b) {
     int edge[TRACE_SEGS], ns = g_traces ? find_trace(vm, b, seg, edge) : 0, nseg = ns ? ns : 1;
     if (!ns) seg[0] = b;
     uint64_t xmap = vector_map(seg, nseg);
+    uint64_t xstart = b->rip, xend = 0;
+    if (xmap && !g_win) {
+        uint64_t inherited = region_vector_map(vm, b->rip, &xstart, &xend);
+        if (inherited) xmap = inherited;
+        else xend = loop_end(vm, b->rip);
+    }
     if (xmap && g_win && !g_xmap_windows) xmap = GPTA_XIDENTITY;
     if (xmap) for (int i = 0; i < nseg; i++) map_vectors(seg[i], xmap);
     unsigned prefix = xmap != 0;
@@ -1249,6 +1278,8 @@ Block *gpta_lower(struct Fxi *vm, Block *b) {
         memset(&nb->u[0], 0, sizeof nb->u[0]);
         nb->u[0].p = p_xentry;
         nb->u[0].imm = xmap;
+        nb->u[0].disp = (int64_t)xstart;
+        nb->u[0].aux = xend;
         nb->u[0].rip = b->rip;
         nb->u[0].fdir = GPTA_NOBOUND;
     }

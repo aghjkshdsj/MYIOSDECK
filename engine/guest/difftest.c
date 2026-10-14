@@ -1349,6 +1349,14 @@ static void gpta_xmap_transitions(void) {
             "psubq %%xmm11, %%xmm5\n\tpor %%xmm9, %%xmm7\n\t"
             "movss %%xmm3, %%xmm13\n\tmovsd %%xmm5, %%xmm15\n\t"
             "decl %%ecx\n\tjne 3b\n\t"
+            // Different vector subsets on alternating paths, plus an inner
+            // loop, exercise region allocation without discarding any state.
+            "movl $9, %%ecx\n\t4:\n\t"
+            "paddq %%xmm15, %%xmm8\n\ttestl $1, %%ecx\n\tjz 5f\n\t"
+            "pxor %%xmm1, %%xmm2\n\tpaddq %%xmm3, %%xmm4\n\tjmp 6f\n\t"
+            "5: pxor %%xmm9, %%xmm10\n\tpsubq %%xmm11, %%xmm12\n\t"
+            "6: movl $3, %%edx\n\t7: paddq %%xmm5, %%xmm14\n\t"
+            "decl %%edx\n\tjne 7b\n\tdecl %%ecx\n\tjne 4b\n\t"
             // The same map-free direct jump is reached under different maps.
             "jmp 10f\n\t8: jmp 9f\n\t9: pxor %%xmm0, %%xmm15\n\tret\n\t10:\n\t"
             "movdqu %%xmm0, 0(%[p])\n\t"
@@ -1369,7 +1377,7 @@ static void gpta_xmap_transitions(void) {
             "movdqu %%xmm15, 240(%[p])\n\t"
             : [saved] "=m"(saved)
             : [p] "r"(regs), [a] "r"(a)
-            : "rcx", "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7",
+            : "rcx", "rdx", "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7",
               "xmm8", "xmm9", "xmm10", "xmm11", "xmm12", "xmm13", "xmm14", "xmm15",
               "memory", "cc");
         for (int j = 0; j < 16; j++) h = vmix(h, regs[j]);

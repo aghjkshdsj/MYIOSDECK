@@ -44,6 +44,7 @@ row below. Interrupted or defective trials are recorded separately.
 | d13fd8f | [38455809669](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38455809669) | 26.50% | 31.39% | 8.17% | 14.00% |
 | 8285258 | [38456267739](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38456267739) | 27.69% | 31.78% | 8.20% | 13.96% |
 | 11de320 | [38458064927](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38458064927) | 26.28% | 26.94% | 8.40% | 13.98% |
+| 9a102a0 | [38488394754](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38488394754) | 27.01% | 31.16% | 8.27% | 13.96% |
 
 The third trial (result-width branches and simplified floating comparisons)
 regressed. Its ARM64, x86 and iOS gates passed. That trial is rolled back in
@@ -155,7 +156,8 @@ adapt the vector map, while internal trace edges keep it. Unpinned physical
 slots use a separate CPU bank, and FXI fallbacks receive architectural XMM
 state and original operand indices. The hot uop stride stays unchanged.
 
-The next adapter trial is **not measured**. Traces with no explicit vector
+The adapter trial passed every gate; both means remain below 50%.
+Traces with no explicit vector
 operands retain the caller's map. Direct links can skip an equal-map adapter
 only when their source establishes an immutable map; map-free sources retain
 the target adapter because different callers can supply different maps.
@@ -171,6 +173,15 @@ readers, including SYSCALL's R11 flag snapshot, remain conservative. Windows
 and GPTA_WINLOWER retain full flag bookkeeping. Differential cases cover both
 widths, register aliases, immediate forms, narrow unary consumers and direct
 block boundaries.
+
+The loop-region allocation trial is **not measured**. Newly decoded vector
+blocks inside a cached ELF loop region inherit its immutable map instead of
+choosing a different map for each block. The entry adapter stores the region
+boundaries in otherwise unused metadata, with the same lifetime as its block.
+The first map still comes from uniform explicit-operand counts. Every guest
+instruction and branch remains interpreted. Windows retains the preceding
+allocation policy. Differential coverage alternates vector subsets across
+conditional paths and an inner loop while keeping all sixteen vectors live.
 
 Windows mode defaults to the identity permutation. CI additionally enables
 the allocation trial with `GPTA_XMAP_WINDOWS=1` and repeats the same native
