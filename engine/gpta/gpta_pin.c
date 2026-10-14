@@ -33,6 +33,7 @@
 #include "gpta_pin_step_noadj.h"
 #include "gpta_pin_eareuse.h"
 #include "gpta_pin_movtest.h"
+#include "gpta_pin_afcj.h"
 
 static Uop *architectural_uop(FxiCpu *c, Uop *u, Uop *original);
 static GPTA_CC void p_xentry(GPTA_PARAMS);
@@ -457,6 +458,9 @@ static void rmap_init(void) {
     RMAP(t_sii_noadj); RMAP(t_sri_noadj);
     RMAP(t_rf); RMAP(t_rs); RMAP(t_xs);
     RMAP(t_mtj);
+#define AF_RMAP(N) RMAP(N);
+    GPTA_AFCJ_TABLES(AF_RMAP)
+#undef AF_RMAP
     RMAP(t_xf0); RMAP(t_xf1); RMAP(t_xf2); RMAP(t_xf3);
     RMAP(t_xload_ps); RMAP(t_xload_pd); RMAP(t_xload_ss); RMAP(t_xload_sd);
     RMAP(t_csh_shl); RMAP(t_csh_shr); RMAP(t_csh_sar); RMAP(t_csh_rol); RMAP(t_csh_ror);
@@ -1211,9 +1215,37 @@ static int lower_ea_pair(Out *o, const Uop *a, const Uop *b) {
     return 1;
 }
 
+static int lower_arith_fcj(Out *o, const Uop *u) {
+    const Desc *a = find(u[0].fn), *b = find(u[1].fn), *j = find(u[2].fn);
+    if (!a || !b || !is_named(j,N_JCC) || a->fam != FAM_X || a->b || b->fam != FAM_X || b->b || !b->d ||
+        u[0].dst >= 16 || u[0].src >= 16 || u[1].src >= 16 || u[1].dst != u[0].dst) return 0;
+    static const char *const names[] = { "addss","subss","mulss","divss","addsd","subsd","mulsd","divsd" };
+    static const PFn (*const tables[8])[9][9][9] = { t_af_addss,t_af_subss,t_af_mulss,t_af_divss,
+        t_af_addsd,t_af_subsd,t_af_mulsd,t_af_divsd };
+    int op = -1;
+    for (int k = 0; k < 8; k++) if (!strcmp(gpta_xops[a->a].name,names[k])) op = k;
+    int dbl = !strcmp(gpta_xops[b->a].name,"comisd");
+    if (op < 0 || dbl != (op >= 4)) return 0;
+    Uop *x = put_uop(o,&u[2],tables[op][u[2].cc & 15][xcls(u[0].dst)][xcls(u[0].src)][xcls(u[1].src)]);
+    x->dst = u[0].dst; x->src = u[0].src; x->base = (uint8_t)u[1].src;
+    unsigned fd = u[2].fdir & 3;
+    if (fd) {
+        int np = o->np;
+        edge_stubs(o,fd,t_fs_comis[dbl][xcls(u[1].dst)][xcls(u[1].src)]);
+        for (int k = np; k < o->np; k++) {
+            Uop *stub = &o->out[o->patch[k].stub];
+            stub->dst = u[1].dst; stub->src = u[1].src;
+        }
+    }
+    return 1;
+}
+
 static void lower_block(Out *o, const Block *b) {
     for (uint32_t i = 0; i < b->n; i++) {
         int start = o->n, np = o->np;
+        if (i + 2 < b->n && lower_arith_fcj(o,&b->u[i])) {
+            bound(o,start,np,b->u[i].rip,0); i += 2; continue;
+        }
         // EA reuse selection regressed both means in iteration 44. Keep its
         // indexed handlers and stronger fault cases, but use ordinary loads.
         if (i + 2 < b->n && can_hoist(&b->u[i], &b->u[i + 1], &b->u[i + 2])) {
@@ -1581,6 +1613,7 @@ static void hidx_build(void) {
 #define ER_HIDX(N) hidx_tab((const PFn *)N, sizeof N / sizeof(PFn));
     ER_HIDX(t_rf) ER_HIDX(t_rs) ER_HIDX(t_xs)
     ER_HIDX(t_mtj)
+    GPTA_AFCJ_TABLES(ER_HIDX)
     GPTA_EAREUSE_XTABLES(ER_HIDX)
 #undef ER_HIDX
 #define XL_HIDX(N) hidx_tab((const PFn *)N, sizeof N / sizeof(PFn));

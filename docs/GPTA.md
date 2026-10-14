@@ -53,6 +53,9 @@ row below. Interrupted or defective trials are recorded separately.
 | 8930ebc | [38491164550](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38491164550) | 24.71% | 30.47% | 8.16% | 13.99% |
 | 2e34eab | [38491558263](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38491558263) | 28.16% | 30.58% | 8.31% | 13.98% |
 | 439ac59 | [38492014687](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38492014687) | 27.29% | 30.15% | 8.27% | 13.94% |
+| e723470 | [38492613538](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38492613538) | 28.29% | 31.11% | 8.20% | 14.00% |
+| 2120516 | [38492982469](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38492982469) | 27.49% | 31.40% | 8.12% | 13.98% |
+| b782565 | [38493209646](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38493209646) | 27.53% | 30.87% | 8.30% | 13.98% |
 
 The third trial (result-width branches and simplified floating comparisons)
 regressed. Its ARM64, x86 and iOS gates passed. That trial is rolled back in
@@ -241,7 +244,8 @@ Windows allocation and all recovery gates retain their preceding behavior.
 The effective-address reuse trial passed every gate, including faults after
 a completed first load, but regressed both means. Its selection is rolled
 back next while retaining all stronger correctness cases and indexed
-handlers; the rollback is **not measured**. Consecutive GPR/vector
+handlers. That rollback passed every gate, but did not recover the standard
+memory timing in its run. Both suite means remain below 50%. Consecutive GPR/vector
 loads with the same base/index/scale compute that address once in T. Each load
 still has its own dispatch, original RIP and instruction boundary; canonical
 address metadata remains intact. A first GPR destination that changes the
@@ -255,7 +259,8 @@ update, including the second instruction's exact RIP, with both Windows
 allocation modes. Handler replicas and the unchanged recovery audit include
 every new handler.
 
-The vector memory-cost allocation trial is **not measured**. Instead of
+The vector memory-cost allocation trial passed every gate; both suite means
+remain below 50%. Instead of
 counting each operand mention once, allocation counts uniform high-bank
 reads and writes from instruction semantics: arithmetic/partial destinations
 need both, full overwrites need only a write, and aliased reads count once.
@@ -267,7 +272,8 @@ breaking, region policy and all architectural recovery paths are unchanged.
 The complete existing XMM differential and allocation-enabled Windows gates
 validate the newly chosen permutations.
 
-The register-copy/test/branch pair trial is **not measured**. The independent
+The register-copy/test/branch pair trial passed every gate; both suite means
+remain below 50%. The independent
 corpus records this adjacent family. A register copy followed by the existing
 fused TEST of its destination and JCC now uses one handler, covering both
 copy and test widths, all conditions and source/destination aliases. Chaining
@@ -275,6 +281,20 @@ retains the preceding behavior; live flag exits use existing TEST stubs.
 Differential cases compare the copied value, direction and defined flags
 across all width combinations, conditions and self copies. Static handler
 replicas and host-state indexing cover every form. No guest loop is replaced.
+
+The scalar arithmetic/comparison group trial is **not measured**. Its family
+was selected from the independent system/library/Madeira corpus in run
+[38493680532](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38493680532),
+which records arithmetic followed by COMIS/UCOMIS comparing the result and a
+branch. Register ADD/SUB/MUL/DIV for either scalar precision plus comparison
+of the result as the first operand and JCC now share a handler. No guest loop
+is replaced. Every condition, low/high operand class and alias is supported;
+scalar upper lanes survive, and live flag exits retain existing comparison
+stubs. The static FCMP condition selector is shared unchanged with the
+preceding floating trace handlers. Differential cases check finite arithmetic
+results, unordered comparisons, all conditions, upper lanes, aliases and
+live exit flags. The preceding floating trace case exercises final backedges.
+All replicas are indexed for host recovery and the unchanged precision audit.
 
 Windows mode defaults to the identity permutation. CI additionally enables
 the allocation trial with `GPTA_XMAP_WINDOWS=1` and repeats the same native

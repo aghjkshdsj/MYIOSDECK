@@ -1445,6 +1445,58 @@ static void gpta_unary_trace(void) {
     out("gpta_unary_trace",h);
 }
 typedef void (*test_fn)(void);
+#define AF_CASE(OP,CMP,D,S,C,CC) do { \
+    v2 r; u64 score, f; \
+    __asm__ volatile("movdqu %[a], %%xmm" #D "\n\t" \
+        "movdqu %[b], %%xmm" #S "\n\tmovdqu %[c], %%xmm" #C "\n\t" \
+        OP " %%xmm" #S ", %%xmm" #D "\n\t" \
+        CMP " %%xmm" #C ", %%xmm" #D "\n\tj" CC " 1f\n\t" \
+        "movq $3, %[score]\n\tjmp 2f\n\t1: movq $5, %[score]\n\t2:\n\t" \
+        "pushfq\n\tpopq %[f]\n\tmovdqu %%xmm" #D ", %[r]\n\ttestq %[f], %[f]" \
+        : [r] "=m"(r), [score] "=m"(score), [f] "=&r"(f) \
+        : [a] "m"(a), [b] "m"(b), [c] "m"(c) \
+        : "xmm" #D, "xmm" #S, "xmm" #C, "cc", "memory"); \
+    h = mix(mix(vmix(h,r),score),f & ARITH); \
+} while (0)
+#define AF_REGS(OP,CMP,CC) \
+    AF_CASE(OP,CMP,0,1,2,CC); AF_CASE(OP,CMP,7,14,13,CC); \
+    AF_CASE(OP,CMP,12,13,14,CC)
+#define AF_CCS(OP,CMP) \
+    AF_REGS(OP,CMP,"o"); AF_REGS(OP,CMP,"no"); AF_REGS(OP,CMP,"b"); AF_REGS(OP,CMP,"ae"); \
+    AF_REGS(OP,CMP,"e"); AF_REGS(OP,CMP,"ne"); AF_REGS(OP,CMP,"be"); AF_REGS(OP,CMP,"a"); \
+    AF_REGS(OP,CMP,"s"); AF_REGS(OP,CMP,"ns"); AF_REGS(OP,CMP,"p"); AF_REGS(OP,CMP,"np"); \
+    AF_REGS(OP,CMP,"l"); AF_REGS(OP,CMP,"ge"); AF_REGS(OP,CMP,"le"); AF_REGS(OP,CMP,"g")
+#define AF_ALIAS_CASE(OP,CMP,D,S,C) do { \
+    v2 r; u64 score, f; \
+    __asm__ volatile("movdqu %[a], %%xmm" #D "\n\t" \
+        "movdqu %[b], %%xmm" #S "\n\t" \
+        OP " %%xmm" #S ", %%xmm" #D "\n\t" \
+        CMP " %%xmm" #C ", %%xmm" #D "\n\tjbe 1f\n\t" \
+        "movq $3, %[score]\n\tjmp 2f\n\t1: movq $5, %[score]\n\t2:\n\t" \
+        "pushfq\n\tpopq %[f]\n\tmovdqu %%xmm" #D ", %[r]\n\ttestq %[f], %[f]" \
+        : [r] "=m"(r), [score] "=m"(score), [f] "=&r"(f) \
+        : [a] "m"(a), [b] "m"(b) : "xmm" #D, "xmm" #S, "xmm" #C, "cc", "memory"); \
+    h = mix(mix(vmix(h,r),score),f & ARITH); \
+} while (0)
+#define AF_OP(OP,CMP) \
+    AF_CCS(OP,CMP); AF_ALIAS_CASE(OP,CMP,8,8,8); \
+    AF_ALIAS_CASE(OP,CMP,13,14,13); AF_ALIAS_CASE(OP,CMP,7,14,14)
+static void gpta_arith_float_branch(void) {
+    u64 h = 14695981039346656037ull;
+    for (int i = 0; i < N; i++) {
+        v2 a = vfloat(1), b = vfloat(1);
+        union { float f[4]; v2 v; } cf; cf.v = vrand(); cf.f[0] = (float)dval(i);
+        v2 c = cf.v;
+        AF_OP("addss","ucomiss"); AF_OP("subss","ucomiss");
+        AF_OP("mulss","ucomiss"); AF_OP("divss","ucomiss");
+        a = vdouble(1); b = vdouble(1);
+        union { double d[2]; v2 v; } cd; cd.v = vrand(); cd.d[0] = dval(i);
+        c = cd.v;
+        AF_OP("addsd","ucomisd"); AF_OP("subsd","ucomisd");
+        AF_OP("mulsd","ucomisd"); AF_OP("divsd","ucomisd");
+    }
+    out("gpta_arith_float_branch",h);
+}
 #define MT_CASE(MSZ,MSRC,MDST,TSZ,TDST,CC,SETUP) do { \
     u64 a = val(), seed = val(), r, score, fi = flags_in(), f; \
     __asm__ volatile(PRE "movq %[a], %%rcx\n\tmovq %[seed], %%rax\n\t" SETUP \
@@ -1590,7 +1642,7 @@ static const test_fn kTests[] = {
     fz_o, fz_no, fz_b, fz_ae, fz_e, fz_ne, fz_be, fz_a, fz_s, fz_ns, fz_p, fz_np, fz_l, fz_ge, fz_le, fz_g,
     fc_o, fc_no, fc_b, fc_ae, fc_e, fc_ne, fc_be, fc_a, fc_s, fc_ns, fc_p, fc_np, fc_l, fc_ge, fc_le, fc_g,
     fz_call, fz_index, fz_xindex, fz_3op, fz_3gap, fz_x3, fz_hoist, gpta_xmem, gpta_result_flags, gpta_xhigh, gpta_cf_flow,
-    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow, gpta_fcj_trace, gpta_jresult_trace, gpta_immstores, gpta_x3high, gpta_step_trace, gpta_shift_counts, gpta_copy_shift_counts, gpta_unary_edges, gpta_alu_memory, gpta_xmm_lane_state, gpta_scalar_mem, gpta_unary_flag_inputs, gpta_xmap_transitions, gpta_cf_only, gpta_unary_trace, gpta_xload_pairs, gpta_ea_pairs, gpta_mov_test_branch,
+    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow, gpta_fcj_trace, gpta_jresult_trace, gpta_immstores, gpta_x3high, gpta_step_trace, gpta_shift_counts, gpta_copy_shift_counts, gpta_unary_edges, gpta_alu_memory, gpta_xmm_lane_state, gpta_scalar_mem, gpta_unary_flag_inputs, gpta_xmap_transitions, gpta_cf_only, gpta_unary_trace, gpta_xload_pairs, gpta_ea_pairs, gpta_mov_test_branch, gpta_arith_float_branch,
 };
 
 int guest_main(int argc, char **argv) {
