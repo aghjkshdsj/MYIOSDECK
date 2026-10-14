@@ -115,3 +115,25 @@ here. GameNative's open app code does nothing special for Valve's network: on An
 runs under a JIT (Box64/FEX), where its TLS completes in time. Its other mode, Valve's GUI client
 with a token written into `config.vdf` (`ConnectCache`) and `loginusers.vdf`, needs the whole GUI
 client (Chromium web helper) and would hit the same TLS problem without JIT. Nothing ported.
+
+## Build 181 result and the directory request (build 182)
+
+Build 181 (`myiosdeck-log - 2026-10-14T164843.844.txt`, log taken 5.5 minutes in): the CM list was
+written (`[dock-cm] netfilter CMs=18 (directory)`), but Valve's client asks its HTTPS CM directory
+before every connection (`@nClientQueryCMDirectoryBeforeConnect`, default 1, read at
+`steamclient64.dll+0x580780` by the connect routine; no supported way to change it from outside),
+and this time that request neither answered nor failed for over 4 minutes, so the client never
+reached its cached list. Steam Cloud before Play was clear and is not involved.
+
+Build 182 makes that request fail at once instead: for a Dock session without JIT the app sets
+`MYIOSDECK_DNS_REFUSE=api.steampowered.com`, and Wine's `getaddrinfo` (Madeira's
+`dlls/ws2_32/unixlib.c`, `engine/wine/patches/dns_refuse.py`) answers "host not found" for the
+listed names. The connectivity test (test.steampowered.com), the CM servers (IP addresses) and every
+other name resolve as usual; the variable is cleared when the Dock session ends and for every other
+launch. Valve's client is not changed: it takes its own fallback, the cached `CM` list. Web API
+calls to that host during the session fail at once too (not a hang); a game started by the client
+that calls api.steampowered.com itself would see the same during the session.
+
+What the next log should show: `GetCMListForConnect -- web API call failed` within seconds of
+`LogOn() called`, then NetFilter (not `No NetFilter CMs`), a UDP or TCP `Connect()` to one of the
+listed addresses, `[Logged On`. The dump now also includes Valve's `configstore_log.txt`.

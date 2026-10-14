@@ -87,7 +87,9 @@ step_ntdll() {
     git -C "$M" checkout -- build/ntdll-unix/virtual_ios.c build/ntdll-unix/loader_ios.c build/ntdll-unix/process_ios.c \
         build/ntdll-unix/env_ios.c build/ntdll-unix/signal_arm64_ios.c build/ntdll-unix/server_ios.c \
         build/ntdll-unix/thread_ios.c build/ntdll-unix/audio_null_ios.c
-    git -C "$W" checkout -- dlls/ntdll/unix/sync.c
+    git -C "$W" checkout -- dlls/ntdll/unix/sync.c dlls/ws2_32/unixlib.c
+    # Madeira Dock without JIT: named hosts resolve to nothing at once (engine/wine/patches/dns_refuse.py).
+    python3 "$HERE/patches/dns_refuse.py" "$W"
     python3 "$HERE/patches/nojit_dylib.py" "$M"
     # Another game in the running session: process socket entries reused, a killed main thread ends its
     # process, an exited process's sleeping threads are ended (engine/wine/patches/session_reuse.py).

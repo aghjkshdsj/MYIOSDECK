@@ -395,7 +395,7 @@ enum MadeiraDock {
         // Also the cloud log (whether Valve's client synced Steam Cloud saves itself: the app's own
         // sync after the session then finds them identical) and the content log, shorter.
         for name in names.sorted() where name.hasPrefix("connection_log") || name.hasPrefix("stderr")
-            || name.hasPrefix("cloud_log") || name.hasPrefix("content_log") {
+            || name.hasPrefix("cloud_log") || name.hasPrefix("content_log") || name.hasPrefix("configstore_log") {
             guard let data = try? Data(contentsOf: dir.appendingPathComponent(name)) else { continue }
             let keep = name.hasPrefix("connection_log") || name.hasPrefix("stderr") ? 250 : 60
             let lines = String(decoding: data.suffix(48_000), as: UTF8.self).split(whereSeparator: \.isNewline).suffix(keep)

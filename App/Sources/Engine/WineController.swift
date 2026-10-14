@@ -284,6 +284,11 @@ final class WineController: ObservableObject, @unchecked Sendable {
         // encryption, needs no TLS: the host has the client prefer it
         // (engine/pedylib/madeira-dock-cm-transport.patch). With JIT the client decides as usual.
         if noJIT { setenv("MADEIRA_DOCK_CM_TRANSPORT", "netfilter", 1) } else { unsetenv("MADEIRA_DOCK_CM_TRANSPORT") }
+        // Build 181: the client still asks its HTTPS CM directory first and waited on it for over
+        // 4 minutes. Its address then resolves to nothing at once (engine/wine/patches/dns_refuse.py),
+        // so the request fails and the client takes the UDP/TCP servers MYIOSDECK wrote into its
+        // config.vdf (DockCMCache). Cleared for every other launch (run()).
+        if noJIT { setenv("MYIOSDECK_DNS_REFUSE", "api.steampowered.com", 1) } else { unsetenv("MYIOSDECK_DNS_REFUSE") }
         dlog("[dock-launch] app=\(game.id) launch-option=\(launchOption) noJIT=\(noJIT ? 1 : 0) signin-wait=\(noJIT ? 480 : 90)s cm-transport=\(noJIT ? "netfilter" : "client's choice")")
         nextLaunch = .dock
         run(Program(id: MadeiraDock.executable, title: title, detail: "", graphics: true, noJIT: noJIT))
@@ -341,6 +346,7 @@ final class WineController: ObservableObject, @unchecked Sendable {
             return refuse(why)
         }
         dockActive = launch == .dock
+        if launch != .dock { unsetenv("MYIOSDECK_DNS_REFUSE") }   // only a Dock session without JIT (runDockGame)
         customActive = launch == .custom
         dockFailure = nil
         forceQuitAsked.withLock { $0 = false }
@@ -499,6 +505,7 @@ final class WineController: ObservableObject, @unchecked Sendable {
                 if let failure = report.failure { dlog("[dock-launch] result=\(report.result ?? -1): \(failure)") }
                 MadeiraDock.logClientLogs()
                 MadeiraDock.cleanup()
+                unsetenv("MYIOSDECK_DNS_REFUSE")   // the Dock session ended: names resolve again
                 done.signal()
             }
             done.wait()
