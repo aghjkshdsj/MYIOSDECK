@@ -1623,7 +1623,8 @@ static void gpta_ea_pairs(void) {
 }
 // Load/arithmetic pairs preserve scalar zeroed upper lanes, source aliases,
 // all architectural XMM operands, and the incoming arithmetic flags.
-#define XL_CASE(OP,LOAD,D,S,ADDR,P) do { \
+#define XL_CASE(OP,LOAD,D,S,ADDR,P) XL_CASE_I(OP,LOAD,D,S,ADDR,P,0)
+#define XL_CASE_I(OP,LOAD,D,S,ADDR,P,IX) do { \
     v2 r, q; u64 fi = flags_in(), f; \
     __asm__ volatile(PRE "movdqu %[seed], %%xmm" #D "\n\t" \
         "movdqu %[b], %%xmm" #S "\n\t" \
@@ -1631,13 +1632,22 @@ static void gpta_ea_pairs(void) {
         OP " %%xmm" #S ", %%xmm" #D "\n\t" \
         "movdqu %%xmm" #D ", %[r]\n\tmovdqu %%xmm" #S ", %[q]" POST \
         : [r] "=m"(r), [q] "=m"(q), [f] "=&r"(f) \
-        : [seed] "m"(seed), [b] "m"(b), [p] "r"(P), [fi] "r"(fi) \
+        : [seed] "m"(seed), [b] "m"(b), [p] "r"(P), [idx] "r"((u64)(IX)), [fi] "r"(fi) \
         : "xmm" #D, "xmm" #S, "memory", "cc"); \
     h = mix(vmix(vmix(h,r),q),f & ARITH); \
 } while (0)
 #define XL_DST_CASES(OP,LOAD,D,S) \
     XL_CASE(OP,LOAD,D,S,"16(%[p])",&mem[0]); \
-    XL_CASE(OP,LOAD,D,D,"-16(%[p])",&mem[2])
+    XL_CASE(OP,LOAD,D,D,"-16(%[p])",&mem[2]); \
+    XL_CASE_I(OP,LOAD,D,S,"(%[p],%[idx])",&mem[0],16); \
+    XL_CASE_I(OP,LOAD,D,D,"(%[p],%[idx])",&mem[0],16); \
+    XL_CASE_I(OP,LOAD,D,S,"8(%[p],%[idx],2)",&mem[0],4); \
+    XL_CASE_I(OP,LOAD,D,D,"8(%[p],%[idx],2)",&mem[0],4); \
+    XL_CASE_I(OP,LOAD,D,S,"-16(%[p],%[idx],4)",&mem[0],8); \
+    XL_CASE_I(OP,LOAD,D,D,"-16(%[p],%[idx],4)",&mem[0],8); \
+    XL_CASE_I(OP,LOAD,D,S,"32(%[p],%[idx],8)",&mem[2],-6); \
+    XL_CASE_I(OP,LOAD,D,D,"32(%[p],%[idx],8)",&mem[2],-6); \
+    XL_CASE_I(OP,LOAD,D,S,"(%[p],%[idx])",(u64)&mem[1]/2,(u64)&mem[1]/2)
 #define XL_REGS(OP,LOAD) \
     XL_DST_CASES(OP,LOAD,0,8); XL_DST_CASES(OP,LOAD,1,9); \
     XL_DST_CASES(OP,LOAD,2,10); XL_DST_CASES(OP,LOAD,3,11); \

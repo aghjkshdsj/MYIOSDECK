@@ -371,6 +371,20 @@ existing general handlers, independent of program identity, values or loop
 shape. Differential tests add full register copies immediately before the
 arithmetic for both comparison orders and all conditions and operations.
 
+The next indexed-load trial extends the existing independent-corpus load +
+arithmetic family to base + index * scale + displacement, retaining every
+architectural scale and ADD/SUB/MUL in packed and scalar single/double forms.
+Both address registers and pinned vector classes are statically specialized;
+the high-bank class reads its ordinary register ordinal. Source/destination
+aliases consume the loaded value. The one guest access precedes every
+architectural effect, and the old destination remains recoverable until it
+succeeds. All tables are included in replica and recovery indexing; the
+replica map has additional capacity for them. Differential tests cover all
+sixteen vector destinations, source aliases, all scales, positive/negative
+displacements, negative indices, equal address operands, upper lanes and
+flags. Fault sites 57-60 check exact pre-load state in both Windows allocation
+modes. The recovery audit is unchanged. This trial is not measured yet.
+
 Windows mode defaults to the identity permutation. CI additionally enables
 the allocation trial with `GPTA_XMAP_WINDOWS=1` and repeats the same native
 exit, native API, fault-site and thread-stop checks. Host-state recovery

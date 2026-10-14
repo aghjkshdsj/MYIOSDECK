@@ -355,7 +355,7 @@ static int vector_pair_cost(unsigned *uses, const Uop *u, const Uop *v) {
     int k = xmem_index(gpta_xops[b->a].name);
     int width = a->fam == FAM_X && a->b && !strcmp(gpta_xops[a->a].name,"movx") ? 16 :
         a->fam == FAM_XS && a->a == XS_MOVSS_RM ? 4 : a->fam == FAM_XS && a->a == XS_MOVSD_RM ? 8 : 0;
-    if (k >= 0 && u->index == R_ZERO && u->base <= R_ZERO && width == (k < 6 ? 16 : k < 9 ? 4 : 8)) {
+    if (k >= 0 && u->index <= R_ZERO && u->base <= R_ZERO && width == (k < 6 ? 16 : k < 9 ? 4 : 8)) {
         uses[u->dst]++;
         if (v->src != u->dst) uses[v->src]++;
         return 1;
@@ -413,7 +413,7 @@ static int is_shuffle(const char *n) {
 // branch keeps one successor: Ertl and Gregg's replication of interpreter instructions. A handler
 // at one place per copy alternates between the copies of a trace, which also spaces out repeats of
 // the same branch (the probe: a branch taken again within a few dispatches costs more).
-#define RMAP_SLOTS (1u << 20)
+#define RMAP_SLOTS (1u << 21)   // capacity for indexed load/arithmetic replicas
 typedef struct { PFn p, r; } RPair;
 static RPair *g_rmap;
 static uint64_t hpfn(PFn p) { return ((uint64_t)(uintptr_t)p * 0x9E3779B97F4A7C15ull) >> 40; }
@@ -464,6 +464,7 @@ static void rmap_init(void) {
     RMAP(t_sx_shl); RMAP(t_sx_shr); RMAP(t_sx_sar); RMAP(t_sx_rol); RMAP(t_sx_ror);
     RMAP(t_xf0); RMAP(t_xf1); RMAP(t_xf2); RMAP(t_xf3);
     RMAP(t_xload_ps); RMAP(t_xload_pd); RMAP(t_xload_ss); RMAP(t_xload_sd);
+    RMAP(t_xloadi_ps); RMAP(t_xloadi_pd); RMAP(t_xloadi_ss); RMAP(t_xloadi_sd);
     RMAP(t_csh_shl); RMAP(t_csh_shr); RMAP(t_csh_sar); RMAP(t_csh_rol); RMAP(t_csh_ror);
     RMAP(t_xlz); RMAP(t_xsz);
     RMAP(t_am_add); RMAP(t_am_sub); RMAP(t_am_and); RMAP(t_am_or); RMAP(t_am_xor);
@@ -962,9 +963,9 @@ static int try_fuse(Out *o, const Uop *u, uint32_t left) {
         if (fd) edge_stubs(o, fd, t_fs_subi[a->b][D]);
         return 2;
     }
-    // SSE load D,[base+disp] ; arithmetic D,S. This corpus-selected pair
+    // SSE load D,[base+index*scale+disp] ; arithmetic D,S. This corpus-selected pair
     // has one guest access, before all effects. It retains the load's metadata.
-    if (simple_mem(u) && u->dst < 16 && b->fam == FAM_X && !b->b &&
+    if (ea_ok(u) && u->dst < 16 && b->fam == FAM_X && !b->b &&
         v->dst == u->dst && v->src < 16) {
         int k = xmem_index(gpta_xops[b->a].name);
         int width = a->fam == FAM_X && a->b && !strcmp(gpta_xops[a->a].name,"movx") ? 16 :
@@ -973,7 +974,13 @@ static int try_fuse(Out *o, const Uop *u, uint32_t left) {
         if (k >= 0 && width == (k < 6 ? 16 : k < 9 ? 4 : 8)) {
             static const PFn (*const tables[4])[16][16][17] = {
                 t_xload_ps,t_xload_pd,t_xload_ss,t_xload_sd };
-            x = put_uop(o,u,tables[k/3][k%3][u->dst][v->src][u->base]);
+            if (u->index == R_ZERO)
+                x = put_uop(o,u,tables[k/3][k%3][u->dst][v->src][u->base]);
+            else {
+                static const PFn (*const indexed[4])[9][9][17][16] = {
+                    t_xloadi_ps,t_xloadi_pd,t_xloadi_ss,t_xloadi_sd };
+                x = put_uop(o,u,indexed[k/3][k%3][xcls(u->dst)][xcls(v->src)][u->base][u->index]);
+            }
             x->src = v->src;
             return 2;
         }

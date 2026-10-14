@@ -233,7 +233,8 @@ static void on_fault(int sig, siginfo_t *si, void *ctx) {
         int dup_xmm = g_site == 37 ? 8 : g_site == 38 ? 15 : g_site == 39 ? 14 : g_site == 40 ? 13 :
                       g_site == 45 ? 9 : g_site == 46 ? 12 : g_site == 49 ? 0 :
                       g_site == 50 ? 13 : g_site == 51 ? 7 : g_site == 52 ? 15 :
-                      g_site == 54 ? 0 : g_site == 56 ? 14 : -1;
+                      g_site == 54 ? 0 : g_site == 56 ? 14 : g_site == 57 ? 0 :
+                      g_site == 58 ? 13 : g_site == 59 ? 7 : g_site == 60 ? 15 : -1;
         for (int x = 0; x < 16; x++) {
             uint64_t low = want[xsrc[x]], high = x == dup_xmm ? low : 0;
             if (g_site == 56 && x == 0) { low = UINT64_C(0x1234567889abcdef); high = UINT64_C(0xfedcba9876543210); }

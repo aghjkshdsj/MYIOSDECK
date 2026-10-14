@@ -47,3 +47,37 @@ XL_LIST(XL_OP)
 #define XL_PLANE(D,OP) { R16B(XL_ROW,D,OP) },
 #define XL_ENTRY(OP,W) { R16(XL_PLANE,OP) },
 const PFn XL_TABLE[3][16][16][17] = { XL_LIST(XL_ENTRY) };
+
+// Indexed forms specialize both address registers and the pinned vector
+// classes. All architectural scales remain ordinary runtime operands. M
+// handles any unpinned vector ordinal without multiplying the code by eight.
+#define XLI_I16(F,...) F(0,__VA_ARGS__) F(1,__VA_ARGS__) F(2,__VA_ARGS__) F(3,__VA_ARGS__) \
+    F(4,__VA_ARGS__) F(5,__VA_ARGS__) F(6,__VA_ARGS__) F(7,__VA_ARGS__) \
+    F(8,__VA_ARGS__) F(9,__VA_ARGS__) F(10,__VA_ARGS__) F(11,__VA_ARGS__) \
+    F(12,__VA_ARGS__) F(13,__VA_ARGS__) F(14,__VA_ARGS__) F(15,__VA_ARGS__)
+#define XLI_ID_0 0
+#define XLI_ID_1 1
+#define XLI_ID_2 2
+#define XLI_ID_3 3
+#define XLI_ID_4 4
+#define XLI_ID_5 5
+#define XLI_ID_6 6
+#define XLI_ID_7 7
+#define XLI_ID_M 8
+#define XLI_DEF(I,B,S,D,OP,W) \
+    PH p_xloadi_##OP##_##D##_##S##_##B##_##I(GPTA_PARAMS) { \
+        GptaV d = xldn(g##B + (g##I << u->scale) + (uint64_t)u->disp,W); \
+        XKEEP_##D; \
+        int alias = XLI_ID_##D == XLI_ID_##S && (XLI_ID_##D != 8 || u->dst == u->src); \
+        GptaV s = alias ? d : XS_##S; XW_##D(XL_##OP(d,s)); PNEXT(); }
+#define XLI_BASE(B,S,D,OP,W) XLI_I16(XLI_DEF,B,S,D,OP,W)
+#define XLI_SRC(S,D,OP,W) R17C(XLI_BASE,S,D,OP,W)
+#define XLI_DST(D,OP,W) X9B(XLI_SRC,D,OP,W)
+#define XLI_OP(OP,W) X9(XLI_DST,OP,W)
+XL_LIST(XLI_OP)
+#define XLI_E(I,B,S,D,OP) p_xloadi_##OP##_##D##_##S##_##B##_##I,
+#define XLI_ROW(B,S,D,OP) { XLI_I16(XLI_E,B,S,D,OP) },
+#define XLI_PLANE(S,D,OP) { R17C(XLI_ROW,S,D,OP) },
+#define XLI_CUBE(D,OP) { X9B(XLI_PLANE,D,OP) },
+#define XLI_ENTRY(OP,W) { X9(XLI_CUBE,OP) },
+const PFn XLI_TABLE[3][9][9][17][16] = { XL_LIST(XLI_ENTRY) };
