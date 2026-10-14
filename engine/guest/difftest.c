@@ -1576,10 +1576,16 @@ static void gpta_arith_float_trace(void) {
         union { float f[4]; v2 v; } cf; cf.v = vrand(); cf.f[0] = (float)dval(i);
         v2 c = cf.v;
         AF_TRACE_CCS("addss","ucomiss");
+        AF_TRACE_CCS("subss","ucomiss");
+        AF_TRACE_CCS("mulss","ucomiss");
+        AF_TRACE_CCS("divss","ucomiss");
         a = vdouble(1); b = vdouble(1);
         union { double d[2]; v2 v; } cd; cd.v = vrand(); cd.d[0] = dval(i);
         c = cd.v;
         AF_TRACE_CCS("addsd","ucomisd");
+        AF_TRACE_CCS("subsd","ucomisd");
+        AF_TRACE_CCS("mulsd","ucomisd");
+        AF_TRACE_CCS("divsd","ucomisd");
     }
     // Taken adjacency, including the final non-adjacent replica backedge;
     // the exit consumes the original (reversed-operand) comparison flags.

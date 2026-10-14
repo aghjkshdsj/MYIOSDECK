@@ -26,11 +26,11 @@
 #define AF_ID_M 8
 #define AF_X9C(F,...) F(0,__VA_ARGS__) F(1,__VA_ARGS__) F(2,__VA_ARGS__) F(3,__VA_ARGS__) \
     F(4,__VA_ARGS__) F(5,__VA_ARGS__) F(6,__VA_ARGS__) F(7,__VA_ARGS__) F(M,__VA_ARGS__)
-#define AF_C20(M) C16(M) M(16) M(17) M(18) M(19)
+#define AF_C20(M,E) C16(M,E) M(16,E) M(17,E) M(18,E) M(19,E)
 // The translator marks only actual adjacency in each individual trace copy.
 // The final backedge and unproved links keep the ordinary chained dispatch.
-#define AF_CHAIN(LINK,MISS,HINT) do { \
-    if (u->cc & (HINT)) PNEXT(); \
+#define AF_CHAIN(LINK,MISS,ADJ) do { \
+    if (ADJ) PNEXT(); \
     PCHAIN(LINK,MISS); \
 } while (0)
 #if defined(__aarch64__)
@@ -49,24 +49,25 @@
         if (take) goto fcj_taken; goto fcj_fall; } \
 } while (0)
 #endif
-#define AF_DEF(C,S,D,CC) AF_DEF_EXPAND(C,S,D,CC,AF_NAME)
-#define AF_DEF_EXPAND(C,S,D,CC,N) AF_DEF2(C,S,D,CC,N)
-#define AF_DEF2(C,S,D,CC,N) \
-    PH p_af_##N##_##CC##_##D##_##S##_##C(GPTA_PARAMS) { \
+#define AF_DEF(C,S,D,CC,E) AF_DEF_EXPAND(C,S,D,CC,E,AF_NAME)
+#define AF_DEF_EXPAND(C,S,D,CC,E,N) AF_DEF2(C,S,D,CC,E,N)
+#define AF_DEF2(C,S,D,CC,E,N) \
+    PH p_af_##N##_##CC##_##D##_##S##_##C##_##E(GPTA_PARAMS) { \
         GptaV result = AF_RESULT(XD_##D,XS_##S), other = AF_C_##C; \
         if (AF_ID_##C == AF_ID_##D && (AF_ID_##D != 8 || u->base == u->dst)) other = result; \
         XW_##D(result); double a = AF_LOW(result), b = AF_LOW(other); \
         AF_SELECT(CC); \
-        fcj_taken: AF_CHAIN(u->ulink,p_miss_t,GPTA_AF_ADJ_T); \
-        fcj_fall: AF_CHAIN(u->ulink2,p_miss_f,GPTA_AF_ADJ_F); }
-#define AF_SRC(S,D,CC) AF_X9C(AF_DEF,S,D,CC)
-#define AF_DST(D,CC) X9B(AF_SRC,D,CC)
-#define AF_CC(CC,...) X9(AF_DST,CC)
-AF_C20(AF_CC)
-#define AF_E(C,S,D,CC) AF_E_EXPAND(C,S,D,CC,AF_NAME)
-#define AF_E_EXPAND(C,S,D,CC,N) AF_E2(C,S,D,CC,N)
-#define AF_E2(C,S,D,CC,N) p_af_##N##_##CC##_##D##_##S##_##C,
-#define AF_ROW(S,D,CC) { AF_X9C(AF_E,S,D,CC) },
-#define AF_PLANE(D,CC) { X9B(AF_ROW,D,CC) },
-#define AF_COND(CC,...) { X9(AF_PLANE,CC) },
-const PFn AF_TABLE[20][9][9][9] = { AF_C20(AF_COND) };
+        fcj_taken: AF_CHAIN(u->ulink,p_miss_t,(E)==1); \
+        fcj_fall: AF_CHAIN(u->ulink2,p_miss_f,(E)==2); }
+#define AF_SRC(S,D,CC,E) AF_X9C(AF_DEF,S,D,CC,E)
+#define AF_DST(D,CC,E) X9B(AF_SRC,D,CC,E)
+#define AF_CC(CC,E) X9(AF_DST,CC,E)
+AF_C20(AF_CC,0) AF_C20(AF_CC,1) AF_C20(AF_CC,2)
+#define AF_E(C,S,D,CC,E) AF_E_EXPAND(C,S,D,CC,E,AF_NAME)
+#define AF_E_EXPAND(C,S,D,CC,E,N) AF_E2(C,S,D,CC,E,N)
+#define AF_E2(C,S,D,CC,E,N) p_af_##N##_##CC##_##D##_##S##_##C##_##E,
+#define AF_ROW(S,D,CC,E) { AF_X9C(AF_E,S,D,CC,E) },
+#define AF_PLANE(D,CC,E) { X9B(AF_ROW,D,CC,E) },
+#define AF_COND(CC,E) { X9(AF_PLANE,CC,E) },
+const PFn AF_TABLE[3][20][9][9][9] = {
+    { AF_C20(AF_COND,0) }, { AF_C20(AF_COND,1) }, { AF_C20(AF_COND,2) } };

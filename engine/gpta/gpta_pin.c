@@ -1278,13 +1278,13 @@ static int lower_arith_fcj(Out *o, const Uop *u) {
     int op = arith_fcj_op(u);
     if (op < 0) return 0;
     int dbl = op >= 4, reversed = u[1].dst != u[0].dst;
-    static const PFn (*const tables[8])[9][9][9] = { t_af_addss,t_af_subss,t_af_mulss,t_af_divss,
+    static const PFn (*const tables[8])[20][9][9][9] = { t_af_addss,t_af_subss,t_af_mulss,t_af_divss,
         t_af_addsd,t_af_subsd,t_af_mulsd,t_af_divsd };
     static const uint8_t reverse_cc[16] = { 0,1,16,17,4,5,18,19,8,9,10,11,12,13,14,15 };
     unsigned cc = u[2].cc & 15;
     if (reversed) cc = reverse_cc[cc];
     unsigned other = reversed ? u[1].dst : u[1].src;
-    Uop *x = put_uop(o,&u[2],tables[op][cc][xcls(u[0].dst)][xcls(u[0].src)][xcls(other)]);
+    Uop *x = put_uop(o,&u[2],tables[op][0][cc][xcls(u[0].dst)][xcls(u[0].src)][xcls(other)]);
     x->dst = u[0].dst; x->src = u[0].src; x->base = (uint8_t)other;
     x->fdir |= GPTA_AF_BRANCH;
     unsigned fd = u[2].fdir & 3;
@@ -1297,6 +1297,20 @@ static int lower_arith_fcj(Out *o, const Uop *u) {
         }
     }
     return 1;
+}
+
+// Select layout only after the actual successor in this particular trace
+// copy is known. Match handler identity and all operand classes; the final
+// nonadjacent backedge retains layout 0. No runtime adjacency hint is read.
+static PFn arith_fcj_trace_handler(const Uop *u, unsigned edge) {
+    if (!(u->fdir & GPTA_AF_BRANCH) || u->dst >= 16 || u->src >= 16 || u->base >= 16 || edge > 1) return u->p;
+    static const PFn (*const tables[8])[20][9][9][9] = {
+        t_af_addss,t_af_subss,t_af_mulss,t_af_divss,t_af_addsd,t_af_subsd,t_af_mulsd,t_af_divsd };
+    unsigned D = xcls(u->dst), S = xcls(u->src), C = xcls(u->base);
+    for (int op = 0; op < 8; op++)
+        for (int cc = 0; cc < 20; cc++)
+            if (u->p == tables[op][0][cc][D][S][C]) return tables[op][edge+1][cc][D][S][C];
+    return u->p;
 }
 
 static int lower_direct_load_pair(Out *o, const Uop *u, uint32_t left) {
@@ -1578,8 +1592,7 @@ Block *gpta_lower(struct Fxi *vm, Block *b) {
             if (ns) {   // the trace edge: the next block, or back to the start (the next copy's)
                 Uop *t = &nb->u[base + m[i] - 1], *to = i + 1 < nseg ? t + 1 : &nb->u[prefix + (c + 1 < copies ? (c + 1) * M : 0)];
                 if (edge[i]) t->ulink2 = to; else t->ulink = to;
-                if (to == t + 1 && (t->fdir & GPTA_AF_BRANCH))
-                    t->cc |= edge[i] ? GPTA_AF_ADJ_F : GPTA_AF_ADJ_T;
+                if (to == t + 1) t->p = arith_fcj_trace_handler(t,(unsigned)edge[i]);
                 // No link lookup is needed for a statically adjacent trace edge.
                 // Match the original handler so unrelated uop fields cannot opt in.
                 if (to == t + 1 && t->dst < 16 && t->src < 16) {

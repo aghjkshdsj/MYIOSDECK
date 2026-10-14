@@ -533,6 +533,16 @@ the samples. These executions are explicitly labelled PROFILE ONLY. All
 reported speed samples retain the original measure.py scales, five samples,
 rotating engine order and checksum checks. Held-out code is never profiled.
 
+The next dispatch trial compiles three layouts for every scalar arithmetic /
+compare / branch handler: ordinary linked edges, taken adjacent, and
+fallthrough adjacent. Actual per-copy trace linkage chooses the handler;
+the final nonadjacent backedge retains ordinary links. This removes runtime
+hint-byte loads and tests seen in the standard float profile and assembly
+from run 38649178056. All eight arithmetic forms, all conditions and both
+comparison orders retain their semantics and exit flag stubs. Differential
+trace tests now exercise SUB/MUL/DIV as well as ADD through both vector banks
+and beyond the replica cycle. Speed is not measured yet.
+
 Profile standard workloads with perf stat and perf record. Choose any new
 instruction-pair families from the independent corpus in engine/gpta/corpus.sh.
 Never replace a recognized guest loop with a host loop.
