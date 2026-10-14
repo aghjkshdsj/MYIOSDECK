@@ -1445,6 +1445,37 @@ static void gpta_unary_trace(void) {
     out("gpta_unary_trace",h);
 }
 typedef void (*test_fn)(void);
+#define MT_CASE(MSZ,MSRC,MDST,TSZ,TDST,CC,SETUP) do { \
+    u64 a = val(), seed = val(), r, score, fi = flags_in(), f; \
+    __asm__ volatile(PRE "movq %[a], %%rcx\n\tmovq %[seed], %%rax\n\t" SETUP \
+        "mov" MSZ " " MSRC ", " MDST "\n\t" \
+        "test" TSZ " " TDST ", " TDST "\n\tj" CC " 1f\n\t" \
+        "movq $3, %%rdx\n\tjmp 2f\n\t1: movq $5, %%rdx\n\t2:\n\t" \
+        "pushfq\n\tpopq %[f]\n\tmovq %%rax, %[r]\n\tmovq %%rdx, %[score]\n\t" \
+        "testq %%rax, %%rax" \
+        : [r] "=m"(r), [score] "=m"(score), [f] "=&r"(f) \
+        : [a] "r"(a), [seed] "r"(seed), [fi] "r"(fi) : "rax", "rcx", "rdx", "cc", "memory"); \
+    h = mix(mix(mix(h,r),score),f & LOGIC); \
+} while (0)
+#define MT_FORMS(CC) \
+    MT_CASE("l","%%ecx","%%eax","l","%%eax",CC,""); \
+    MT_CASE("l","%%ecx","%%eax","q","%%rax",CC,""); \
+    MT_CASE("q","%%rcx","%%rax","l","%%eax",CC,""); \
+    MT_CASE("q","%%rcx","%%rax","q","%%rax",CC,""); \
+    MT_CASE("l","%%eax","%%eax","l","%%eax",CC,"movq %%rcx, %%rax\n\t"); \
+    MT_CASE("l","%%eax","%%eax","q","%%rax",CC,"movq %%rcx, %%rax\n\t"); \
+    MT_CASE("q","%%rax","%%rax","l","%%eax",CC,"movq %%rcx, %%rax\n\t"); \
+    MT_CASE("q","%%rax","%%rax","q","%%rax",CC,"movq %%rcx, %%rax\n\t")
+static void gpta_mov_test_branch(void) {
+    u64 h = 14695981039346656037ull;
+    for (int i = 0; i < N; i++) {
+        MT_FORMS("o"); MT_FORMS("no"); MT_FORMS("b"); MT_FORMS("ae");
+        MT_FORMS("e"); MT_FORMS("ne"); MT_FORMS("be"); MT_FORMS("a");
+        MT_FORMS("s"); MT_FORMS("ns"); MT_FORMS("p"); MT_FORMS("np");
+        MT_FORMS("l"); MT_FORMS("ge"); MT_FORMS("le"); MT_FORMS("g");
+    }
+    out("gpta_mov_test_branch",h);
+}
 #define EA_PAIR_CASE(OP1,DST1,OP2,DST2,DISP1,DISP2,SCALE) do { \
     u64 a, b, fi = flags_in(), f; v2 x, y; \
     __asm__ volatile(PRE "movdqu %[seed], %%xmm0\n\tmovdqu %[seed], %%xmm14\n\t" \
@@ -1559,7 +1590,7 @@ static const test_fn kTests[] = {
     fz_o, fz_no, fz_b, fz_ae, fz_e, fz_ne, fz_be, fz_a, fz_s, fz_ns, fz_p, fz_np, fz_l, fz_ge, fz_le, fz_g,
     fc_o, fc_no, fc_b, fc_ae, fc_e, fc_ne, fc_be, fc_a, fc_s, fc_ns, fc_p, fc_np, fc_l, fc_ge, fc_le, fc_g,
     fz_call, fz_index, fz_xindex, fz_3op, fz_3gap, fz_x3, fz_hoist, gpta_xmem, gpta_result_flags, gpta_xhigh, gpta_cf_flow,
-    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow, gpta_fcj_trace, gpta_jresult_trace, gpta_immstores, gpta_x3high, gpta_step_trace, gpta_shift_counts, gpta_copy_shift_counts, gpta_unary_edges, gpta_alu_memory, gpta_xmm_lane_state, gpta_scalar_mem, gpta_unary_flag_inputs, gpta_xmap_transitions, gpta_cf_only, gpta_unary_trace, gpta_xload_pairs, gpta_ea_pairs,
+    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow, gpta_fcj_trace, gpta_jresult_trace, gpta_immstores, gpta_x3high, gpta_step_trace, gpta_shift_counts, gpta_copy_shift_counts, gpta_unary_edges, gpta_alu_memory, gpta_xmm_lane_state, gpta_scalar_mem, gpta_unary_flag_inputs, gpta_xmap_transitions, gpta_cf_only, gpta_unary_trace, gpta_xload_pairs, gpta_ea_pairs, gpta_mov_test_branch,
 };
 
 int guest_main(int argc, char **argv) {

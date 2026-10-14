@@ -32,6 +32,7 @@
 #include "gpta_pin_xload.h"
 #include "gpta_pin_step_noadj.h"
 #include "gpta_pin_eareuse.h"
+#include "gpta_pin_movtest.h"
 
 static Uop *architectural_uop(FxiCpu *c, Uop *u, Uop *original);
 static GPTA_CC void p_xentry(GPTA_PARAMS);
@@ -455,6 +456,7 @@ static void rmap_init(void) {
     RMAP(t_fid_trace);
     RMAP(t_sii_noadj); RMAP(t_sri_noadj);
     RMAP(t_rf); RMAP(t_rs); RMAP(t_xs);
+    RMAP(t_mtj);
     RMAP(t_xf0); RMAP(t_xf1); RMAP(t_xf2); RMAP(t_xf3);
     RMAP(t_xload_ps); RMAP(t_xload_pd); RMAP(t_xload_ss); RMAP(t_xload_sd);
     RMAP(t_csh_shl); RMAP(t_csh_shr); RMAP(t_csh_sar); RMAP(t_csh_rol); RMAP(t_csh_ror);
@@ -913,6 +915,14 @@ static int try_fuse(Out *o, const Uop *u, uint32_t left) {
             return 2;
         }
         return 0;
+    }
+    // Register copy + test of its result + jcc: a common independent-corpus
+    // family, with all copy/test widths, conditions and register aliases.
+    if (a->fam == FAM_MOV && a->a == F_RR && a->b >= 2 && D >= 0 && S >= 0 &&
+        b->fam == FAM_FJCC && b->a == 1 && !b->b && greg(v->dst) == D && greg(v->src) == D) {
+        x = put_uop(o,v,t_mtj[a->b-2][b->c2][b->d & 15][D][S]);
+        if (fd) edge_stubs(o,fd,t_fs_log[b->c2+2][D]);
+        return 2;
     }
     // mov D, [base + disp] + FXI's fused test D, D / jcc
     if (a->fam == FAM_MOV && a->a == F_RM && a->b >= 2 && D >= 0 && simple_mem(u) && b->fam == FAM_FJCC &&
@@ -1570,6 +1580,7 @@ static void hidx_build(void) {
     hidx_tab((const PFn *)t_sri_noadj, sizeof t_sri_noadj / sizeof(PFn));
 #define ER_HIDX(N) hidx_tab((const PFn *)N, sizeof N / sizeof(PFn));
     ER_HIDX(t_rf) ER_HIDX(t_rs) ER_HIDX(t_xs)
+    ER_HIDX(t_mtj)
     GPTA_EAREUSE_XTABLES(ER_HIDX)
 #undef ER_HIDX
 #define XL_HIDX(N) hidx_tab((const PFn *)N, sizeof N / sizeof(PFn));

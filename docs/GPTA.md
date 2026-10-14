@@ -267,6 +267,15 @@ breaking, region policy and all architectural recovery paths are unchanged.
 The complete existing XMM differential and allocation-enabled Windows gates
 validate the newly chosen permutations.
 
+The register-copy/test/branch pair trial is **not measured**. The independent
+corpus records this adjacent family. A register copy followed by the existing
+fused TEST of its destination and JCC now uses one handler, covering both
+copy and test widths, all conditions and source/destination aliases. Chaining
+retains the preceding behavior; live flag exits use existing TEST stubs.
+Differential cases compare the copied value, direction and defined flags
+across all width combinations, conditions and self copies. Static handler
+replicas and host-state indexing cover every form. No guest loop is replaced.
+
 Windows mode defaults to the identity permutation. CI additionally enables
 the allocation trial with `GPTA_XMAP_WINDOWS=1` and repeats the same native
 exit, native API, fault-site and thread-stop checks. Host-state recovery
