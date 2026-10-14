@@ -234,6 +234,28 @@ NTDLL_FIXES = [
      "    if (idx == ios_proc_socket_count) __atomic_store_n( &ios_proc_socket_count, idx + 1, __ATOMIC_RELEASE );\n"
      "    pthread_mutex_unlock( &lock );\n"
      "}\n"),
+    # Wine's mutex_lock()/mutex_unlock() (unix_private.h) do nothing once the global
+    # process_exiting is set, which NtTerminateProcess does for the process exiting. Here that
+    # global is the exit flag of the session's first program only (every other process has its
+    # own, ios_proc_sockets[].exiting), so once the first program ended (Steins;Gate's launcher a
+    # few seconds in, or the first game), every later program ran with no unix-side lock at all:
+    # fd_cache_mutex, virtual_mutex, ... (build 173: two Stick Fight threads received each other's
+    # fds, "HANDLE MISMATCH asked 0x46c got 0x468", and the assert ended the game). With session
+    # reuse the first program gets an exit flag of its own too.
+    ("BOOL *ios_process_exiting_ptr(void)\n"
+     "{\n"
+     "    int i = ios_proc_socket_index();\n"
+     "    return (i >= 0) ? &ios_proc_sockets[i].exiting : &process_exiting;\n"
+     "}\n",
+     "BOOL *ios_process_exiting_ptr(void)\n"
+     "{\n"
+     "    static BOOL first_program_exiting;   " + MARK + "\n"
+     "    const char *reuse = getenv( \"MYIOSDECK_SESSION_REUSE\" );\n"
+     "    int i = ios_proc_socket_index();\n"
+     "    if (i >= 0) return &ios_proc_sockets[i].exiting;\n"
+     "    /* the global would turn off every lock of every later program (mutex_lock) */\n"
+     "    return (reuse && reuse[0] == '1') ? &first_program_exiting : &process_exiting;\n"
+     "}\n"),
     # The session's first program: its socket number is free once closed, and may be another
     # process's socket by the time a late thread of this one calls the exit path again.
     ("        if (wine_launched_process_did_exit) wine_launched_process_did_exit( status );\n"
