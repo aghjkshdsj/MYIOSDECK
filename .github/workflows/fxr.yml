@@ -34,7 +34,7 @@ jobs:
       - name: Native reference outputs (for the gates on ARM64)
         run: |
           mkdir -p "$RUNNER_TEMP/native-out"
-          for t in atomics x87 difftest; do "$RUNNER_TEMP/guests/$t.elf" > "$RUNNER_TEMP/native-out/$t.txt"; done
+          for t in atomics x87 difftest bignum; do "$RUNNER_TEMP/guests/$t.elf" > "$RUNNER_TEMP/native-out/$t.txt"; done
           wc -l "$RUNNER_TEMP"/native-out/*.txt
       - name: Madeira x64 test programs (for --scan-pe)
         run: |

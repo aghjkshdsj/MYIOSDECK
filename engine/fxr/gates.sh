@@ -2,7 +2,7 @@
 # Correctness gates for an engine binary (FXR or FXI); any failure fails the job.
 #   engine/fxr/gates.sh <guest-dir> <engine> <name> <native-output-dir|run> <pe-dir>
 #  - hello runs to exit 0
-#  - atomics, x87, difftest: output identical to native line for line ("run": run the guest
+#  - atomics, x87, difftest, bignum: output identical to native line for line ("run": run the guest
 #    natively here, x86-64 hosts; else <dir>/<test>.txt from a native run on an x86-64 host)
 #  - --scan-pe: every function of the Madeira x64 test programs in <pe-dir> decodes (0 missing)
 set -uo pipefail
@@ -17,7 +17,7 @@ else
     echo "hello: FAILED: $(tail -2 "/tmp/${NAME}_hello_err.txt")"; echo "- hello: **FAILED**" >> "$summary"; fail=1
 fi
 
-for t in atomics x87 difftest; do
+for t in atomics x87 difftest bignum; do
     if [ "$NAT" = run ]; then "$G/$t.elf" > "/tmp/native_$t.txt"; ref="/tmp/native_$t.txt"; else ref="$NAT/$t.txt"; fi
     timeout 300 "$ENG" "$G/$t.elf" > "/tmp/${NAME}_$t.txt" 2> "/tmp/${NAME}_${t}_err.txt"
     if [ -s "$ref" ] && cmp -s "$ref" "/tmp/${NAME}_$t.txt"; then

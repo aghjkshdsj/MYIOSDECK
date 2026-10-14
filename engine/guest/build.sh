@@ -35,10 +35,12 @@ done
 # -mno-red-zone: the test reads flags with pushfq inside inline asm.
 # x87: the x87 FPU and the 0F AE group (fxsave, ldmxcsr, fences).
 # difftest: every common integer instruction form on random inputs and flags (one hash per form).
-for prog in atomics x87 difftest; do
+# bignum: Montgomery multiplication as OpenSSL runs it (TLS in Valve's Steam client), checked against C.
+for prog in atomics x87 difftest bignum; do
     gcc "${CFLAGS[@]}" -march=x86-64 -mno-red-zone -o "$OUT/$prog.elf" "$HERE/$prog.c"
     strip "$OUT/$prog.elf"
     "$OUT/$prog.elf" | tail -1
+    if [ "$prog" = bignum ]; then "$OUT/$prog.elf" | grep -q "all ok$" || { echo "bignum: gmont differs from C natively"; exit 1; }; fi
 done
 # winstate: FXR's state at a stop or a fault (engine/fxr-probe/winstate_test.c runs it)
 gcc "${CFLAGS[@]}" -march=x86-64 -mno-red-zone -o "$OUT/winstate.elf" "$HERE/winstate.c"
