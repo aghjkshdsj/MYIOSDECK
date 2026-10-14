@@ -3,7 +3,8 @@
 # give module+RVA): for each RVA, the function that holds it (from the exception directory), its
 # disassembly, the strings it references, and who calls it, a few levels up. Runs on the CI
 # runner with GNU objdump; nothing is written next to the PE.
-#   tools/pe_hot.pl <file.dll> <rva> [<rva> ...]     (RVAs in hex, e.g. 0x54d2d)
+#   tools/pe_hot.pl <file.dll> <rva or str:TEXT> ...    (RVAs in hex, e.g. 0x54d2d; str:CMForce shows
+#   the functions that use that string)
 use strict;
 use warnings;
 no warnings "portable";   # 64-bit addresses through hex()
@@ -113,7 +114,7 @@ sub show {
     }
     my @named = grep { defined } map { my $s = cstring(hex($_) - $base); $s ? sprintf('0x%x "%s"', hex($_) - $base, $s) : undef } sort keys %strs;
     print "$pad   strings: $_\n" for @named[0 .. ($#named < 24 ? $#named : 24)];
-    my $limit = $depth == 0 ? 400 : 60;
+    my $limit = ($depth == 0 || $why =~ /of the string/) ? 400 : 60;
     print "$pad   | $_" for @lines[0 .. ($#lines < $limit ? $#lines : $limit)];
     print "$pad   | ... (" . scalar(@lines) . " instructions)\n" if @lines > $limit + 1;
     return if $depth >= 4;
@@ -127,6 +128,29 @@ sub show {
     }
 }
 for my $r (@rvas) {
+    # str:TEXT - the functions that reference that exact string (how a log line, a setting or a
+    # registry value is used), each with its callers.
+    if ($r =~ /^str:(.+)$/) {
+        my $text = $1;
+        print "\n######## string \"$text\"\n";
+        my $n = 0;
+        for my $s (@sect) {
+            next if $s->{chars} & 0x20000000;   # data sections only
+            my $blob = substr($img, $s->{raw}, $s->{rawsize});
+            my $at = -1;
+            while (($at = index($blob, "$text\0", $at + 1)) >= 0) {
+                next if $at > 0 && substr($blob, $at - 1, 1) ne "\0";   # whole strings only
+                my $srva = $s->{va} + $at;
+                my @sites = @{$leas{$base + $srva} // []};
+                printf "string at rva 0x%x (%s), referenced at %d sites\n", $srva, $s->{name}, scalar @sites;
+                for my $site (@sites) {
+                    last if ++$n > 6;
+                    show($site - $base, 2, sprintf(' (lea of the string at 0x%x)', $site - $base));
+                }
+            }
+        }
+        next;
+    }
     my $rva = hex($r =~ s/^0x//r);
     print "\n######## hot rva 0x" . sprintf('%x', $rva) . "\n";
     show($rva, 0, '');
