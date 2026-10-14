@@ -589,6 +589,48 @@ static int prof_cmp_hit(const void *a, const void *b) {
     return x < y ? 1 : x > y ? -1 : 0;
 }
 
+// ---- Callers of the hot code (build 179) ----
+// The hottest instructions say what runs, not why: Valve's client inside Madeira Dock spent its
+// whole no-JIT sign-in in OpenSSL's bn_mul_mont, which elliptic curves, RSA and DH all use. Each
+// x64 sample also reads the top 4 KB of the guest stack and counts every value there that lies
+// in a module and follows a call instruction (a return address: a caller, a caller's caller, ...),
+// once per sample. The report lists the most frequent ones; tools/pe_hot.pl names them.
+#define PROF_CALLER_SLOTS 4096
+static prof_hit g_prof_callers[PROF_CALLER_SLOTS];
+static struct { uint64_t lo, hi; } g_prof_code[256];   // module ranges, set at each report
+static int g_prof_ncode;
+
+// Whether the bytes before v end with a call instruction (rel32, or ff /2 with any operand form).
+static int prof_after_call(uint64_t v) {
+    uint8_t b[8];
+    if (!vmr(v - 8, b, 8)) return 0;
+    if (b[3] == 0xe8) return 1;                                   // call rel32
+    for (int k = 1; k <= 6; k++)                                  // ff /2: 2 to 7 bytes long
+        if (b[k] == 0xff && (b[k + 1] & 0x38) == 0x10) return 1;
+    return 0;
+}
+
+static void prof_callers(uint64_t rsp) {
+    static uint64_t stack[512];
+    if (!g_prof_ncode || !rsp || (!vmr(rsp, stack, sizeof stack) && !vmr(rsp, stack, 1024))) return;
+    uint64_t seen[16]; int ns = 0;
+    for (int i = 0; i < 512 && ns < 16; i++) {
+        uint64_t v = stack[i];
+        int inmod = 0;
+        for (int k = 0; k < g_prof_ncode && !inmod; k++) inmod = v - g_prof_code[k].lo < g_prof_code[k].hi - g_prof_code[k].lo;
+        if (!inmod) continue;
+        int dup = 0;
+        for (int k = 0; k < ns && !dup; k++) dup = seen[k] == v;
+        if (dup || !prof_after_call(v)) continue;
+        seen[ns++] = v;
+        uint64_t h = (v * 0x9E3779B97F4A7C15ull) >> 52;
+        for (int probe = 0; probe < 32; probe++, h = (h + 1) & (PROF_CALLER_SLOTS - 1)) {
+            if (g_prof_callers[h].rip == v) { g_prof_callers[h].n++; break; }
+            if (!g_prof_callers[h].n) { g_prof_callers[h].rip = v; g_prof_callers[h].n = 1; break; }
+        }
+    }
+}
+
 static void prof_report(uint64_t period_samples) {
     static prof_hit sorted[PROF_SLOTS];
     static prof_mod mods[256];
@@ -682,6 +724,24 @@ static void prof_report(uint64_t period_samples) {
         mid_log("[fxi-prof]   hot %2d: %5.2f%% %s+%#llx (%#llx)%s: %s", i + 1, 100.0 * sorted[i].n / (double)x64, mod,
                 (unsigned long long)off, (unsigned long long)rip, ws_tag[ws], hex);
     }
+    // Return addresses on the sampled stacks (prof_callers), then the module ranges they are
+    // looked up in for the next period.
+    {
+        static prof_hit callers[PROF_CALLER_SLOTS];
+        memcpy(callers, g_prof_callers, sizeof callers);
+        memset(g_prof_callers, 0, sizeof g_prof_callers);
+        qsort(callers, PROF_CALLER_SLOTS, sizeof callers[0], prof_cmp_hit);
+        for (int i = 0; i < 24 && callers[i].n; i++) {
+            const char *mod = "?"; uint64_t off = callers[i].rip;
+            for (int k = 0; k < nm; k++)
+                if (callers[i].rip - mods[k].base < mods[k].size) { mod = mods[k].name; off = callers[i].rip - mods[k].base; break; }
+            mid_log("[fxi-prof]   on the stack %2d: %5.1f%% of x64 samples return to %s+%#llx", i + 1,
+                    100.0 * callers[i].n / (double)x64, mod, (unsigned long long)off);
+        }
+        int n = 0;
+        for (int k = 0; k < nm && n < 256; k++) { g_prof_code[n].lo = mods[k].base; g_prof_code[n].hi = mods[k].base + mods[k].size; n++; }
+        __atomic_store_n(&g_prof_ncode, n, __ATOMIC_RELEASE);
+    }
     if (g_cpu->op_name) {   // FXR: the FXI handlers (slow path) that took the most x64 time
         static prof_hit fns[512];
         memcpy(fns, g_prof_fns, sizeof fns);
@@ -755,7 +815,7 @@ static void *prof_thread(void *arg) {
             if (!c || !vmr((uint64_t)(uintptr_t)g_fault_threads[i].area, &insim, 1)) continue;
             if (!insim) { g_prof_thr[i].native++; continue; }
             g_prof_thr[i].x64++;
-            uint64_t lk, ex, bl, rip;
+            uint64_t lk, ex, bl, rip, rsp = 0;
             int ws = WS_UNKNOWN;
             if (g_cpu->sample) {   // FXR: where the thread is (see above)
                 arm_thread_state64_t st;
@@ -774,6 +834,8 @@ static void *prof_thread(void *arg) {
                     }
                 }
                 if (ws == WS_UNKNOWN) continue;
+                // The guest rsp: pinned in x27 while a pinned handler runs (HREG_4), else in the CPU struct.
+                if (ws == WS_PINNED) rsp = st.__x[27];
                 rip = (rip & ((1ull << 56) - 1)) | (uint64_t)ws << 56;
             } else {
                 rip = g_cpu->profile(c, &lk, &ex, &bl);
@@ -783,6 +845,8 @@ static void *prof_thread(void *arg) {
                 if (g_prof_hits[h].rip == rip) { g_prof_hits[h].n++; break; }
                 if (!g_prof_hits[h].n) { g_prof_hits[h].rip = rip; g_prof_hits[h].n = 1; break; }
             }
+            if (!rsp) vmr((uint64_t)(uintptr_t)c + 0x20, &rsp, 8);   // FxiCpu.r[4] (RSP), offset 0x20
+            prof_callers(rsp);
         }
         ++ticks;
         if (ticks % PROF_HZ == 0) qos_update(PROF_HZ);

@@ -1,0 +1,41 @@
+--- a/src/main.c
++++ b/src/main.c
+@@ -49,6 +49,30 @@
+     return GetEnvironmentVariableW(name, value, 4) == 1 && value[0] == L'1';
+ }
+ 
++/* MYIOSDECK: the transport Valve's client prefers for its connection to Steam (CM). Without
++ * JIT its TLS (WebSocket CMs, the HTTPS CM directory) does not complete in time, so the app
++ * asks (MADEIRA_DOCK_CM_TRANSPORT=netfilter) for the client's other transport, UDP/TCP with
++ * Valve's own channel encryption ("NetFilter"). The client rolls which one to use against the
++ * share of connections that default to WebSockets, HKCU\Software\Valve\Steam\
++ * PercentDefaultWebSockets; 0 makes the roll pick NetFilter (its built-in CM addresses when the
++ * CM directory cannot be reached). Without the request the value is removed, so the client
++ * decides as usual. Reported as cm-transport-netfilter: 1 set, 0 not asked, -1 removed,
++ * below -1 the registry error. */
++static void cm_transport(void)
++{
++    wchar_t value[16];
++    DWORD n = GetEnvironmentVariableW(L"MADEIRA_DOCK_CM_TRANSPORT", value, 16);
++    if (!n || n >= 16 || wcscmp(value, L"netfilter")) {
++        LSTATUS gone = RegDeleteKeyValueW(HKEY_CURRENT_USER, L"Software\\Valve\\Steam", L"PercentDefaultWebSockets");
++        event("cm-transport-netfilter", gone == ERROR_SUCCESS ? -1 : 0);
++        return;
++    }
++    DWORD zero = 0;
++    LSTATUS status = RegSetKeyValueW(HKEY_CURRENT_USER, L"Software\\Valve\\Steam", L"PercentDefaultWebSockets",
++                                     REG_DWORD, &zero, sizeof zero);
++    event("cm-transport-netfilter", status == ERROR_SUCCESS ? 1 : -2 - (int32_t)status);
++}
++
+ static bool client_directory(wchar_t *directory)
+ {
+     DWORD count = GetEnvironmentVariableW(L"MADEIRA_STEAM_HOST_CLIENT_DIR", directory, PATH_CAP);
+@@ -276,6 +300,7 @@
+     /* Restrict dependency search to the client directory and system32. No
+      * fallback to a current-directory LoadLibrary or to a renamed client DLL.
+      */
++    cm_transport();
+     event("load-client-begin", 0);
+     HMODULE module = LoadLibraryExW(path, NULL,
+                                    LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);

@@ -49,6 +49,9 @@ struct SettingsView: View {
                     .pickerStyle(.segmented)
                     Text("With Steam: Valve's own Steam client (downloaded once from Valve, about 72 MB) signs in with your account, checks the licence and starts the game, so games that need Steam running work. Without JIT its sign-in takes several minutes. Without Steam: the game's program starts on its own, faster (for DRM-free games).")
                         .font(.footnote).foregroundStyle(Deck.dim)
+                    Toggle("Steam Cloud saves", isOn: $settings.steamCloud).tint(Deck.accent)
+                    Text("Before a Steam game starts, its Steam Cloud saves come down to where the game reads them; when it ends (its own quit, Quit game, Force quit or a crash), the saves it changed go up. Nothing is replaced without a copy first: this iPhone's copies and the cloud's go to save-backups (Files › On My iPhone › MYIOSDECK). A save changed on both sides is never picked for you: the game's page asks which to keep. Off: nothing is synced.")
+                        .font(.footnote).foregroundStyle(Deck.dim)
                 }
 
                 DeckCard(title: "JIT", icon: "bolt.fill") {

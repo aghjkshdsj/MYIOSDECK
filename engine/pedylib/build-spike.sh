@@ -129,13 +129,17 @@ build_dock() {
     # MYIOSDECK change: MADEIRA_DOCK_SIGNIN_MS lengthens the 90 s sign-in and game-start waits
     # for a client running without JIT (the app sets it only then).
     patch -p1 -d "$src" < "$HERE/madeira-dock-signin-wait.patch"
+    # MYIOSDECK change: MADEIRA_DOCK_CM_TRANSPORT=netfilter has Valve's client prefer its UDP/TCP
+    # CM transport (Valve's own channel encryption) over TLS WebSockets, which do not complete
+    # without JIT (the app sets it only then).
+    patch -p1 -d "$src" < "$HERE/madeira-dock-cm-transport.patch"
     x86_64-w64-mingw32-clang -std=c11 -O2 -Wall -Wextra -Wno-cast-function-type \
         -static -Wl,--strip-all -Wl,--no-insert-timestamp \
         -o "$OUT/winepe/dockhost.exe" "$src"/src/*.c -ladvapi32
     {
         cat "$src/LICENSE"
         printf '\nCorresponding source: https://github.com/willfaust/madeira-dock (commit %s)\n' "$DOCK_SHA"
-        printf 'Modified by MYIOSDECK: engine/pedylib/madeira-dock-signin-wait.patch in https://github.com/aghjkshdsj/MYIOSDECK\n'
+        printf 'Modified by MYIOSDECK: engine/pedylib/madeira-dock-signin-wait.patch and madeira-dock-cm-transport.patch in https://github.com/aghjkshdsj/MYIOSDECK\n'
         printf '\n\n==== LICENSE-EXCEPTION.md (Madeira Converter Exception) ====\n\n'; cat "$src/LICENSE-EXCEPTION.md"
         printf '\n\n==== COPYING (GNU General Public License, version 3) ====\n\n'; cat "$src/COPYING"
         printf '\n\n==== MinGW-w64 runtime notice (statically linked runtime) ====\n\n'; cat "$src/notices/MinGW-w64-runtime.txt"

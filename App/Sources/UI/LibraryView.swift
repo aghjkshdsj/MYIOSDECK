@@ -275,6 +275,9 @@ struct LibraryView: View {
                 if let dockProgress {
                     HStack { ProgressView(); Text(dockProgress).font(.subheadline).foregroundStyle(Deck.dim) }
                 }
+                if let cloudSyncing {
+                    HStack { ProgressView(); Text("Syncing Steam Cloud saves of \(cloudSyncing)…").font(.subheadline).foregroundStyle(Deck.dim) }
+                }
                 if let playError {
                     StatusRow(label: "Could not start the game", detail: playError, level: .bad)
                 }
@@ -290,6 +293,17 @@ struct LibraryView: View {
             }
         }
         .sheet(isPresented: $showSteamSignIn) { SteamSignInView() }
+        .alert(cloudHold.map { Self.holdTitle($0.hold) } ?? "", isPresented: cloudHoldPresented, presenting: cloudHold) { h in
+            switch h.hold {
+            case .conflicts: Button("Choose…") { cloudPage = h.game }
+            case .failed: Button("Try again") { playSteam(h.game, noJIT: h.noJIT, viaDock: h.viaDock) }
+            }
+            Button("Play without syncing") { playSteam(h.game, noJIT: h.noJIT, viaDock: h.viaDock, skipCloud: true) }
+            Button("Cancel", role: .cancel) {}
+        } message: { h in
+            Text(Self.holdMessage(h.hold))
+        }
+        .sheet(item: $cloudPage) { game in SteamCloudPage(appID: game.id, name: game.name) }
         .onAppear {
             steamLibrary.start()
             steamLibrary.refreshInstalled()   // Valve's client (Madeira Dock) may have installed one meanwhile
@@ -399,7 +413,9 @@ struct LibraryView: View {
 
     /// Stage 4d: start of an installed Steam game on the game surface, through Valve's Steam
     /// client (viaDock) or directly. Without JIT it asks first: play without JIT (FXI) or enable JIT.
-    private func playSteam(_ game: OwnedSteamGame, noJIT: Bool = false, viaDock: Bool) {
+    /// Its Steam Cloud saves sync first (SteamCloudSync); a sync that fails or leaves saves to
+    /// choose holds the start (`skipCloud`: the user chose to play without it).
+    private func playSteam(_ game: OwnedSteamGame, noJIT: Bool = false, viaDock: Bool, skipCloud: Bool = false) {
         playError = nil
         guard jit.isReady || noJIT else {
             steamPendingDock = viaDock
@@ -408,15 +424,27 @@ struct LibraryView: View {
             return
         }
         Task { @MainActor in
+            if !skipCloud, SteamCloudSync.enabled {
+                cloudSyncing = game.name
+                let hold = await SteamCloudSync.shared.beforePlay(game.id)
+                cloudSyncing = nil
+                if let hold {
+                    try? await Task.sleep(for: .milliseconds(600))   // let the game sheet finish closing
+                    cloudHold = CloudHold(game: game, noJIT: noJIT, viaDock: viaDock, hold: hold)
+                    return
+                }
+            }
             do {
                 let plan = try await steamLibrary.launchPlan(game.id)
-                if MadeiraDock.bundled && viaDock {
+                let dock = MadeiraDock.bundled && viaDock
+                if dock {
                     try await startThroughDock(game, plan: plan)
                 } else {
                     wine.runSteamGame(appID: game.id, title: game.name, plan: plan)
                 }
                 if case .failed(let why) = wine.state { playError = why; return }
                 guard case .booting = wine.state else { return }
+                SteamCloudSync.shared.gameStarting(game.id, synced: !skipCloud, dock: dock)
                 RecentlyPlayed.shared.note(RecentlyPlayed.steam(game.id))
                 // Let the game sheet finish closing before the surface is presented.
                 try? await Task.sleep(for: .milliseconds(600))
@@ -451,11 +479,54 @@ struct LibraryView: View {
         guard let sign = SteamSignIn.credentialsForDock() else {
             throw DockError.message("Your Steam sign-in has expired. Sign in to Steam again.")
         }
+        // Steam Cloud makes no request while Valve's client holds the account (until the game ends).
+        SteamCloudSync.shared.holdForDock()
         await steamLibrary.endSessionForDock()
-        try MadeiraDock.writeHandoff(account: sign.accountName, token: sign.refreshToken, appID: game.id)
+        do {
+            try MadeiraDock.writeHandoff(account: sign.accountName, token: sign.refreshToken, appID: game.id)
+        } catch {
+            SteamCloudSync.shared.releaseDock()
+            throw error
+        }
         wine.runDockGame(dockGame, launchOption: plan.launchIndex, title: game.name)
         if case .booting = wine.state { return }
         MadeiraDock.cleanup()
+        SteamCloudSync.shared.releaseDock()
+    }
+
+    /// A Steam game whose start waits for the user: its Steam Cloud saves could not be synced, or
+    /// some need a choice.
+    struct CloudHold: Identifiable {
+        let game: OwnedSteamGame
+        let noJIT: Bool
+        let viaDock: Bool
+        let hold: SteamCloudHold
+        var id: Int { game.id }
+    }
+    @State private var cloudHold: CloudHold?
+    /// The game whose saves sync before it starts (shown in the Steam card).
+    @State private var cloudSyncing: String?
+    /// The game whose Steam Cloud page is open from the hold alert.
+    @State private var cloudPage: OwnedSteamGame?
+    private var cloudHoldPresented: Binding<Bool> {
+        Binding(get: { cloudHold != nil }, set: { if !$0 { cloudHold = nil } })
+    }
+
+    static func holdTitle(_ hold: SteamCloudHold) -> String {
+        switch hold {
+        case .failed: return "Steam Cloud saves were not synced"
+        case .conflicts(let n): return n == 1 ? "A save needs your choice" : "\(n) saves need your choice"
+        }
+    }
+
+    static func holdMessage(_ hold: SteamCloudHold) -> String {
+        let anyway = "Play without syncing starts the game with this iPhone's saves; what it changes is not uploaded over cloud saves that changed meanwhile (those wait for your choice at the next sync)."
+        switch hold {
+        case .failed(let why):
+            return "\(why)\n\n\(anyway)"
+        case .conflicts:
+            return "This iPhone and Steam Cloud have different versions, and both changed since the last sync (or there was no sync yet). Choose which to keep on the game's Steam Cloud page; the other version is kept in save-backups.\n\n\(anyway)"
+        }
     }
 
     private var windowsCard: some View {

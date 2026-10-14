@@ -289,7 +289,7 @@ enum MadeiraDock {
         "session-offline-abi", "session-offline-requested", "session-offline-can", "session-offline-logon-result",
         "session-offline-logon-retry", "session-offline-logon-state", "session-offline-callback-id",
         "session-offline-entitled", "session-offline-listed", "session-offline-timeout-state",
-        "session-offline-fallback", "session-offline-ready", "session-signin-wait-s",
+        "session-offline-fallback", "session-offline-ready", "session-signin-wait-s", "cm-transport-netfilter",
         "launch-client-error", "launch-option-index", "launch-option-invalid", "launch-option-missing",
         "launch-request-submitted", "launch-game-running", "launch-game-ended",
         "launch-update-wait", "launch-update-retry", "launch-update-ready",
@@ -392,9 +392,13 @@ enum MadeiraDock {
             let size = (try? dir.appendingPathComponent(name).resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
             SteamLog.event("[steam-logs] \(name): \(size) bytes")
         }
-        for name in names.sorted() where name.hasPrefix("connection_log") || name.hasPrefix("stderr") {
+        // Also the cloud log (whether Valve's client synced Steam Cloud saves itself: the app's own
+        // sync after the session then finds them identical) and the content log, shorter.
+        for name in names.sorted() where name.hasPrefix("connection_log") || name.hasPrefix("stderr")
+            || name.hasPrefix("cloud_log") || name.hasPrefix("content_log") {
             guard let data = try? Data(contentsOf: dir.appendingPathComponent(name)) else { continue }
-            let lines = String(decoding: data.suffix(48_000), as: UTF8.self).split(whereSeparator: \.isNewline).suffix(250)
+            let keep = name.hasPrefix("connection_log") || name.hasPrefix("stderr") ? 250 : 60
+            let lines = String(decoding: data.suffix(48_000), as: UTF8.self).split(whereSeparator: \.isNewline).suffix(keep)
             SteamLog.event("[steam-logs] == \(name), last \(lines.count) lines")
             for line in lines { SteamLog.event("[steam-logs] " + redact(String(line.prefix(400)))) }
         }

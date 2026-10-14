@@ -76,6 +76,7 @@ final class SteamLibrary: ObservableObject {
         let name = SteamSignIn.accountName
         guard name != account else { return }
         account = name
+        SteamCloudSync.shared.accountChanged(name)
         games = []; updated = nil; error = nil
         guard let name else {
             queue.removeAll()
@@ -119,6 +120,10 @@ final class SteamLibrary: ObservableObject {
     }
 
     func game(_ id: Int) -> OwnedSteamGame? { games.first { $0.id == id } }
+
+    /// The app's own Steam connection and product info, for Steam Cloud saves (SteamCloudSync).
+    var cloudSession: SteamSession { session }
+    func appInfo(_ appID: Int) async throws -> SteamAppInfo? { try await fetcher.fetchAppInfo(appID: UInt32(appID)) }
 
     // MARK: Downloads (stage 4c)
     //

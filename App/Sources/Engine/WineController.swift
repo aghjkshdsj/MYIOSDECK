@@ -82,6 +82,12 @@ final class WineController: ObservableObject, @unchecked Sendable {
             case .booting, .running: ScreenAwake.set("wine", true)
             default: ScreenAwake.set("wine", false)
             }
+            // A Steam game's end, however it ended (its own quit, Quit game, Force quit, a crash,
+            // a start that failed): its changed saves go up to Steam Cloud (SteamCloudSync).
+            switch state {
+            case .finished, .failed: Task { @MainActor in SteamCloudSync.shared.gameEnded() }
+            default: break
+            }
         }
     }
     /// The Controller API this Wine session started with (its HID / DirectInput
@@ -271,7 +277,14 @@ final class WineController: ObservableObject, @unchecked Sendable {
         // setup (OpenSSL in CHTTPClientThreadPool) when the host's 90 s sign-in wait ran out.
         // Our dockhost (engine/pedylib/madeira-dock-signin-wait.patch) reads a longer wait here.
         if noJIT { setenv("MADEIRA_DOCK_SIGNIN_MS", "480000", 1) } else { unsetenv("MADEIRA_DOCK_SIGNIN_MS") }
-        dlog("[dock-launch] app=\(game.id) launch-option=\(launchOption) noJIT=\(noJIT ? 1 : 0) signin-wait=\(noJIT ? 480 : 90)s")
+        // Without JIT Valve's client never finished a TLS handshake in time (build 178: its CM
+        // pings over WebSocket have 1 s each and failed at once, the HTTPS CM directory timed out
+        // after 27 s and its second try never returned, with the client's HTTP thread in OpenSSL's
+        // bignum code throughout). Its other transport to Steam, UDP/TCP with Valve's own channel
+        // encryption, needs no TLS: the host has the client prefer it
+        // (engine/pedylib/madeira-dock-cm-transport.patch). With JIT the client decides as usual.
+        if noJIT { setenv("MADEIRA_DOCK_CM_TRANSPORT", "netfilter", 1) } else { unsetenv("MADEIRA_DOCK_CM_TRANSPORT") }
+        dlog("[dock-launch] app=\(game.id) launch-option=\(launchOption) noJIT=\(noJIT ? 1 : 0) signin-wait=\(noJIT ? 480 : 90)s cm-transport=\(noJIT ? "netfilter" : "client's choice")")
         nextLaunch = .dock
         run(Program(id: MadeiraDock.executable, title: title, detail: "", graphics: true, noJIT: noJIT))
     }

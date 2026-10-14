@@ -52,6 +52,8 @@ final class Settings: ObservableObject {
     /// Steam client signs in and starts the game, for games that need Steam running) or "direct"
     /// (the game's program starts on its own: faster, DRM-free games).
     @Published var steamLaunchMode: String { didSet { d.set(steamLaunchMode, forKey: "steamLaunchMode") } }
+    /// Steam Cloud saves: synced before a Steam game starts and after it ends (SteamCloudSync).
+    @Published var steamCloud: Bool { didSet { d.set(steamCloud, forKey: "steamCloud") } }
     /// How Windows games see the controller: "xinput", "dinput" (XInput plus a
     /// DirectInput joystick) or "hid" (player 1 as a HID gamepad). Read at launch.
     @Published var controllerAPI: String { didSet { d.set(controllerAPI, forKey: "controllerAPI") } }
@@ -61,7 +63,7 @@ final class Settings: ObservableObject {
         d.register(defaults: ["jitPoolMB": mid_wine_linked() ? 1024 : 512, "fexPreset": FEXPreset.fast.rawValue, "multiblock": true,
                               "maxInst": 5000, "showHUD": true, "frameCap": 120, "verboseFEXLog": false,
                               "benchInterpreter": true, "useFXR": false, "noJITMuteAudio": false, "winFXR": false, "sessionReuse": false,
-                              "steamLaunchMode": "ask", "controllerAPI": "xinput"])
+                              "steamLaunchMode": "ask", "steamCloud": true, "controllerAPI": "xinput"])
         jitPoolMB = d.integer(forKey: "jitPoolMB")
         fexPreset = FEXPreset(rawValue: d.integer(forKey: "fexPreset")) ?? .fast
         multiblock = d.bool(forKey: "multiblock")
@@ -75,6 +77,7 @@ final class Settings: ObservableObject {
         winFXR = d.bool(forKey: "winFXR")
         sessionReuse = d.bool(forKey: "sessionReuse")
         steamLaunchMode = d.string(forKey: "steamLaunchMode") ?? "ask"
+        steamCloud = d.bool(forKey: "steamCloud")
         controllerAPI = d.string(forKey: "controllerAPI") ?? "xinput"
     }
 }

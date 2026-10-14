@@ -13,3 +13,8 @@ parser) come unchanged from the same commit's `app/Madeira/`; SwiftSteam uses
 them. MYIOSDECK supplies the two app types it uses (`MadeiraConfig`, `LogStore.log`)
 in `../MadeiraShims.swift`. Keep local changes out of this folder so it can be
 refreshed from a newer Madeira commit.
+
+The one MYIOSDECK change (keep it when refreshing): `Core/SteamSession.swift` adds
+`callServiceMethodResult`, which returns the response header's EResult with the body
+(`callServiceMethod` now calls it). Steam Cloud saves (`../SteamCloudSync.swift`) must tell
+a refused request from an empty answer.

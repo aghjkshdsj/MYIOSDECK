@@ -188,7 +188,12 @@ struct SteamGameSheet: View {
                         }
                     }
                     state
-                    Text("Games install into MYIOSDECK's Windows drive (C:\\Program Files (x86)\\Steam\\steamapps). Keep the app open while downloading: iOS pauses downloads in the background, and Install picks up where it stopped. Play starts the game's own program in Wine without the Steam client, so games that need Steam running (most online and DRM-protected ones) will not start yet.")
+                    if library.installedBuild(game.id) != nil {
+                        Divider().overlay(Deck.panelHi)
+                        SteamCloudSection(appID: game.id)
+                        Divider().overlay(Deck.panelHi)
+                    }
+                    Text("Games install into MYIOSDECK's Windows drive (C:\\Program Files (x86)\\Steam\\steamapps). Keep the app open while downloading: iOS pauses downloads in the background, and Install picks up where it stopped. Play starts the game with Valve's Steam client (With Steam) or on its own (Without Steam, for DRM-free games).")
                         .font(.caption).foregroundStyle(Deck.dim)
                 }
                 .padding(16)
