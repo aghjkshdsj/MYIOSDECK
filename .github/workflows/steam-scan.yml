@@ -7,6 +7,11 @@ name: Scan Valve's Steam client with FXI
 # uploaded or redistributed: the job prints the scanner's report and deletes the files.
 on:
   workflow_dispatch:
+    inputs:
+      hot:
+        description: "steamclient64.dll RVAs to name (tools/pe_hot.pl), from a log's fxi-prof hot lines"
+        required: false
+        default: ""
   push:
     branches: [main]
     paths: ["engine/fxi/fxi_decode.c", ".github/workflows/steam-scan.yml", "App/Sources/Steam/SteamRuntime.swift"]
@@ -68,6 +73,13 @@ jobs:
               grep -vE '`opcode \[c[45] |`two-byte opcode \[(66 |f2 |f3 )?(4[0-9a-f] )?0f 3[8a] |`0f 3[8a] \[' | head -120
           done | tee "$RUNNER_TEMP/dock-needs.txt"
           { echo "## Not CPUID-gated, in Dock's DLLs"; cat "$RUNNER_TEMP/dock-needs.txt"; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Name the hot code of a device log (tools/pe_hot.pl)
+        if: ${{ inputs.hot != '' }}
+        env:
+          HOT: ${{ inputs.hot }}
+        run: |
+          cd "$RUNNER_TEMP/steam/unpacked"
+          perl "$GITHUB_WORKSPACE/tools/pe_hot.pl" steamclient64.dll $HOT 2>&1 | head -6000
       - name: Remove the client files
         if: always()
         run: rm -rf "$RUNNER_TEMP/steam"
