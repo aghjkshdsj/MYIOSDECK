@@ -37,6 +37,7 @@ typedef struct {
     int fuse_at, fuse_op, fuse_form, fuse_si;
     uint64_t xt[2];            // FXR: where a direct jump/jcc/call ending the block goes (flag lookahead)
     int nxt;                   // FXR: how many of xt are known
+    int windows;               // Windows mode: syscall and int 0x2e are Windows system calls
 } Dec;
 
 static Uop *emit(Dec *d, OpFn fn) {
@@ -579,7 +580,12 @@ static int decode_one_inner(Dec *d) {
     }
     // CPU exceptions (fxi_ops.c op_trap): u->imm = interrupt vector, 0x100 = hlt, 0x106 = ud2
     case 0xcc: emit(d, named("trap"))->imm = 3; return 1;
-    case 0xcd: { uint64_t n = rd_u8(d); emit(d, named("trap"))->imm = n; return 1; }
+    case 0xcd: {
+        uint64_t n = rd_u8(d);
+        // Windows: int 0x2e in ntdll's x64 system-call stubs is a system call (op_trap 0x102)
+        emit(d, named("trap"))->imm = n == 0x2e && d->windows ? 0x102 : n;
+        return 1;
+    }
     case 0xf4: emit(d, named("trap"))->imm = 0x100; return 1;
     case 0xe8: {
         int64_t rel = rd_s32(d);
@@ -682,7 +688,10 @@ static int decode_one_inner(Dec *d) {
         return 0;
     }
     switch (op) {
-    case 0x05: { Uop *u = emit(d, named("syscall")); u->aux = next_rip(d); meta(d)->reads = 1; return 1; }
+    case 0x05:
+        // Windows: ntdll's x64 system-call stubs (op_trap 0x102); a Linux system call otherwise (the CI guests)
+        if (d->windows) { emit(d, named("trap"))->imm = 0x102; return 1; }
+        { Uop *u = emit(d, named("syscall")); u->aux = next_rip(d); meta(d)->reads = 1; return 1; }
     case 0x0b: emit(d, named("trap"))->imm = 0x106; return 1;   // ud2
     case 0x0d: case 0x18: case 0x19: case 0x1a: case 0x1b: case 0x1c: case 0x1d: case 0x1e: case 0x1f:
         modrm(d); emit(d, named("nop")); return 0;   // prefetch, hint nops, endbr64
@@ -900,6 +909,7 @@ int fxi_insn_length(const uint8_t *p, int *op_end) {
 int fxi_probe(const uint8_t *p, uint64_t rip, char *why, size_t why_len) {
     Dec *d = malloc(sizeof *d);
     d->p = p; d->rip = rip; d->n = 0; d->fuse_at = -1;
+    d->windows = 1;
     decode_one(d);
     OpFn ud = named("fail_ud");
     int ok = 1;
@@ -926,6 +936,7 @@ static int fxr_live_in(struct Fxi *vm, uint64_t rip) {
     d->n = 0;
     d->fuse_at = -1;
     d->nxt = 0;
+    d->windows = 0;
     int ended = 0;
     for (int insns = 0; insns < 32 && !ended; insns++) {
         d->rip = (uint64_t)(uintptr_t)d->p;
@@ -945,6 +956,7 @@ static int fxr_live_in(struct Fxi *vm, uint64_t rip) {
 
 Block *fxr_decode(struct Fxi *vm, uint64_t rip) {   // FXR: fxi_translate without the lowering
     Dec *d = malloc(sizeof *d);
+    d->windows = vm->windows;
     d->p = (const uint8_t *)(uintptr_t)rip;
     d->n = 0;
     d->fuse_at = -1;

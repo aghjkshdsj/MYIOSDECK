@@ -479,6 +479,12 @@ static void op_trap(FxiCpu *c, Uop *u) {
     case 0x101: fxi_raise(c, u->rip + 1, 0x80000004, 0, 0, 0, 0); break;                 // icebp (i386): SINGLE_STEP after it
     case 0x29: fxi_raise(c, u->rip, 0xC0000409, 1, 1, c->r[R_CX], 0); break;             // __fastfail: STACK_BUFFER_OVERRUN, noncontinuable
     case 0x2c: fxi_raise(c, u->rip, 0xC0000420, 0, 0, 0, 0); break;                      // ASSERTION_FAILURE
+#if !FXI_I386
+    // Windows: syscall or int 0x2e in ntdll's x64 system-call stubs. Raised as Wine's ARM64EC ntdll expects
+    // from its emulator (FEX does the same): STATUS_EMULATION_SYSCALL at the instruction after it, with
+    // the number in rax and the first argument in r10; ntdll makes the call and resumes there.
+    case 0x102: fxi_raise(c, u->rip + 2, 0x40000039, 0, 0, 0, 0); break;
+#endif
     default: fxi_raise(c, u->rip, 0xC0000005, 0, 2, 0, ~0ull); break;                    // int n: #GP -> ACCESS_VIOLATION
     }
 }

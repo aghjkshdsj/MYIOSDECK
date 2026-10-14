@@ -137,3 +137,21 @@ that calls api.steampowered.com itself would see the same during the session.
 What the next log should show: `GetCMListForConnect -- web API call failed` within seconds of
 `LogOn() called`, then NetFilter (not `No NetFilter CMs`), a UDP or TCP `Connect()` to one of the
 listed addresses, `[Logged On`. The dump now also includes Valve's `configstore_log.txt`.
+
+## Build 182 result: signed in; x64 system calls (build 183)
+
+Build 182 (`myiosdeck-log - 2026-10-14T190613.782.txt`, `...190626.094.txt`): the directory request
+failed at once (`GetCMListForConnect -- web API call failed`), the client rolled UDP, connected to a
+listed server (`ConnectionCompleted() (162.254.192.101:27017, UDP)`) and Steam accepted the sign-in
+(`RecvMsgClientLogOnResponse() : 'OK'`), all within 2 s of `LogOn()`. Then Valve's client called
+`NtQueryInformationProcess` through ntdll's x64 system-call stub (`mov r10, rcx; mov eax, 0x19;
+test byte [0x7ffe0308], 1; jne; syscall; ret; int 0x2e; ret`), and FXI had no Windows meaning for
+either instruction: `int 0x2e` raised an access violation (`x64 exception c0000005 ... CPU
+exception` at the `int 0x2e`) and `syscall` would have gone to its Linux test-guest handler. The host
+ended 0.3 s later. The DNS refusal was not involved.
+
+Build 183: in Windows mode FXI and FXR decode `syscall` and `int 0x2e` as trap 0x102, which raises
+`STATUS_EMULATION_SYSCALL` (0x40000039) at the instruction after it, the contract Wine's ARM64EC
+ntdll has with its emulator (FEX's `ECSyscallHandler` does the same): `prepare_exception_arm64ec`
+sees that code, takes the number from rax and the first argument from r10, runs the system call and
+resumes the x64 code at the stub's `ret`. The first four are logged as `[fxi-win] x64 system call`.

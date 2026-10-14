@@ -688,7 +688,8 @@ static int decode_one_inner(Dec *d) {
         // The Linux test guests' system calls (engine/guest, i386 builds): not in Windows mode.
         if (n == 0x80 && !d->windows) { Uop *u = emit(d, named("int80")); u->aux = next_rip(d); return 1; }
 #endif
-        emit(d, named("trap"))->imm = n;
+        // Windows: int 0x2e in ntdll's x64 system-call stubs is a system call (op_trap 0x102)
+        emit(d, named("trap"))->imm = n == 0x2e && d->windows ? 0x102 : n;
         return 1;
     }
     case 0xf4: emit(d, named("trap"))->imm = 0x100; return 1;
@@ -795,7 +796,10 @@ static int decode_one_inner(Dec *d) {
     case 0xa0: case 0xa8: { Uop *u = emit(d, named("push_I")); u->imm = op == 0xa0 ? 0x53 : 0x2b; return 0; }   // push fs/gs
     case 0xa1: case 0xa9: emit(d, named("pop_skip")); return 0;                                               // pop fs/gs
 #endif
-    case 0x05: { Uop *u = emit(d, named("syscall")); u->aux = next_rip(d); meta(d)->reads = 1; return 1; }
+    case 0x05:
+        // Windows: ntdll's x64 system-call stubs (op_trap 0x102); a Linux system call otherwise (the CI guests)
+        if (d->windows) { emit(d, named("trap"))->imm = 0x102; return 1; }
+        { Uop *u = emit(d, named("syscall")); u->aux = next_rip(d); meta(d)->reads = 1; return 1; }
     case 0x0b: emit(d, named("trap"))->imm = 0x106; return 1;   // ud2
     case 0x0d: case 0x18: case 0x19: case 0x1a: case 0x1b: case 0x1c: case 0x1d: case 0x1e: case 0x1f:
         modrm(d); emit(d, named("nop")); return 0;   // prefetch, hint nops, endbr64

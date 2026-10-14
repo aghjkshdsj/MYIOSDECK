@@ -257,8 +257,17 @@ static void log_exception_state(FxiCpu *c, const uint8_t *ctx64, uint64_t rip) {
 
 static void __attribute__((noreturn)) raise_x64(FxiCpu *c, uint64_t rip, uint32_t code, uint32_t flags,
                                                 uint32_t nparams, const uint64_t *info, const char *why) {
-    static int logged;
-    if (logged < 64) {
+    static int logged, syscalls;
+    // STATUS_EMULATION_SYSCALL (x64 code calling ntdll's system-call stubs, op_trap 0x102) is a
+    // system call, not a fault: frequent, so only the first few are logged.
+    int is_sys = code == 0x40000039;
+    if (is_sys && syscalls++ < 4) {
+        uint64_t rax;
+        memcpy(&rax, (const void *)c, 8);   // FxiCpu.r[0] (RAX), offset 0: the system call number
+        mid_log("[fxi-win] x64 system call %#llx through ntdll's stub, return at %#llx (STATUS_EMULATION_SYSCALL)",
+                (unsigned long long)rax, (unsigned long long)rip);
+    }
+    if (!is_sys && logged < 64) {
         logged++;
         mid_log("[fxi-win] x64 exception %08x at %#llx (%s, info %#llx %#llx)", code, (unsigned long long)rip, why,
                 (unsigned long long)(nparams > 0 ? info[0] : 0), (unsigned long long)(nparams > 1 ? info[1] : 0));
@@ -271,7 +280,7 @@ static void __attribute__((noreturn)) raise_x64(FxiCpu *c, uint64_t rip, uint32_
     uint8_t ctx64[0x4d0];
     g_cpu->save_context(c, ctx64, rip);
     static int dumped;
-    if (dumped < 3) { dumped++; log_exception_state(c, ctx64, rip); }
+    if (!is_sys && dumped < 3) { dumped++; log_exception_state(c, ctx64, rip); }
     ki_layout *k = (ki_layout *)(uintptr_t)(rd64(ctx64 + 0x98) & ~63ull) - 1;   // below RSP
     memset(k, 0, sizeof *k);
     pack_ec_context(k->context, ctx64);
