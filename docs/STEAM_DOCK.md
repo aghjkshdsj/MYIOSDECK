@@ -155,3 +155,21 @@ Build 183: in Windows mode FXI and FXR decode `syscall` and `int 0x2e` as trap 0
 ntdll has with its emulator (FEX's `ECSyscallHandler` does the same): `prepare_exception_arm64ec`
 sees that code, takes the number from rax and the first argument from r10, runs the system call and
 resumes the x64 code at the stub's `ret`. The first four are logged as `[fxi-win] x64 system call`.
+
+## Build 183 result: the game starts; a second start in the same app run (build 184)
+
+Build 183 (`myiosdeck-log - 2026-10-14T193921.148.txt`): Dokimon started "With Steam" without JIT,
+ran 95 s and quit normally (`probe-result=0`). Started again in the same app run (session reuse),
+Valve's client signed in again and accepted the launch request, and the game process it created
+ended at once with `0xC0000018` (STATUS_CONFLICTING_ADDRESSES). Dokimon.exe has its relocations
+stripped: it runs at 0x140000000 or not at all. Madeira's hand-off for such a program (ml988:
+claim the executable window, confirm it when the image maps, give the address back when the
+process exits) never confirmed the first claim: the claim is recorded in host pages (16 KB) and the
+confirmation compared it with the image's own size (a 4 KB multiple), so the first copy never
+owned the address, gave nothing back at exit, and the second copy could not map.
+`engine/wine/patches/exe_window_pagesize.py` rounds the confirmed size to the host page, as the claim
+did. The log then shows `ml988: fixed base ... is OWNED`, at the game's exit `ml988: gen N's image
+retired`, and at the next start `ml988: releasing the held image interval`.
+
+Not covered: a fixed-base 64-bit game started "Without Steam" is the session's first process, which
+is never reclaimed (docs/SESSION_REUSE.md), so starting it a second time still needs a restart.

@@ -100,6 +100,9 @@ step_ntdll() {
     python3 "$HERE/patches/nojit_child.py" "$M"
     # No-JIT: a wild guest pointer in FXI becomes an x64 access violation (engine/wine/patches/nojit_fault_hook.py).
     python3 "$HERE/patches/nojit_fault_hook.py" "$M"
+    # A fixed-base program keeps its address for its next start in a kept session: the exe-window
+    # claim is confirmed in host pages (engine/wine/patches/exe_window_pagesize.py).
+    python3 "$HERE/patches/exe_window_pagesize.py" "$M"
     # dwrite's unix side wants generated headers from the PE tree; the native
     # tree generates the same headers (include/all), so use that instead.
     sed -i '' 's#wine/build-arm64ec/include#wine/build-macos/include#g' "$M/build/ntdll-unix/build.sh"
