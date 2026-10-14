@@ -1,0 +1,37 @@
+name: GPTA independent instruction corpus
+
+on:
+  push:
+    branches: ["gpt/gpta"]
+    paths: ["engine/gpta/corpus.sh", ".github/workflows/gpta-corpus.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  corpus:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Game-adjacent libraries
+        run: |
+          sudo apt-get update -qq
+          for p in libbullet3.24 libbullet3.06 libbullet2.88 libbox2d2 libbox2d2.4.1 liblua5.4-0 libsdl2-2.0-0 libvorbis0a \
+                   libopenal1 libfreetype6 libharfbuzz0b libjpeg-turbo8 libpng16-16t64 libpng16-16; do
+            sudo apt-get install -y -qq "$p" > /dev/null 2>&1 && echo "installed $p" || echo "no $p"
+          done
+      - name: Madeira x64 Windows programs
+        run: |
+          . engine/wine/PIN
+          mkdir -p "$RUNNER_TEMP/pe"
+          for exe in hello-x64 fib-x64 clocktest-x64 heap-x64 fileio-x64 calltest-x64 fpconf-x64 child-test-x64 cube-x64 d3d12-cube-x64; do
+            curl -fsSL -o "$RUNNER_TEMP/pe/$exe.exe" \
+              "https://raw.githubusercontent.com/willfaust/Madeira/$MADEIRA_SHA/app/Madeira/arm64ec-windows/$exe.exe" || true
+          done
+      - name: Instruction and pair frequencies
+        run: bash engine/gpta/corpus.sh "$RUNNER_TEMP"/pe/*.exe | tee "$RUNNER_TEMP/corpus.txt"
+      - uses: actions/upload-artifact@v5
+        with:
+          name: gpta-independent-corpus
+          path: ${{ runner.temp }}/corpus.txt

@@ -96,6 +96,16 @@ mode == 2 && /^ *[0-9a-f]+:\t/ {
         else if (prev ~ /^(add|sub) r(32|64),r(32|64)$/ && mn == "cmp" && rel == " [uses dst]") fam = "add/sub r,r ; cmp r (loop step)"
         else if (prev ~ /^movzx r32,m$/ && rel != "") fam = "movzx load ; use"
         if (fam != "") { famc[fam]++; if (inloop) lfamc[fam]++ }
+        # Arithmetic followed by a floating comparison of its result and a
+        # branch. Count operand dependencies in the independent corpus, not
+        # benchmark loops. Both operand orders are recorded separately.
+        if (shape == "jcc" && pmn ~ /^u?comis[sd]$/ &&
+            prev2 ~ /^(add|sub|mul|div)(ss|sd) x,x$/ && ppd != "") {
+            if (ppd == p_r1) { kf = "SSE scalar arithmetic ; compare result first ; jcc";
+                famc[kf]++; if (inloop) lfamc[kf]++ }
+            if (ppd == p_r2) { kf = "SSE scalar arithmetic ; compare result second ; jcc";
+                famc[kf]++; if (inloop) lfamc[kf]++ }
+        }
         # single-instruction forms worth a specialised handler
         if (mn ~ /^(add|sub|mul|div|min|max|and|andn|or|xor)(ps|pd|ss|sd)$|^p(add|sub|and|or|xor|cmp)/ && shape ~ /,m$/) { famc["  SSE op with a memory operand"]++; if (inloop) lfamc["  SSE op with a memory operand"]++ }
         if (ops ~ /\[[a-z0-9]+\+[a-z0-9]+\*[1248]/) { famc["  operand with base + index"]++; if (inloop) lfamc["  operand with base + index"]++
@@ -122,7 +132,7 @@ mode == 2 && /^ *[0-9a-f]+:\t/ {
     }
     pmn = mn
     if (mn ~ /^(j|call|ret|jmp|ud2|hlt)/) { prev = ""; prev2 = ""; p_movd = ""; pp_movd = ""; next }
-    prev2 = (prev == "" ? "" : prev); prev = shape; pd = (mn ~ /^(push|cmp|test)/) ? "" : reg64(d)
+    prev2 = (prev == "" ? "" : prev); prev = shape; ppd = pd; pd = (mn ~ /^(push|cmp|test)/) ? "" : reg64(d)
     pp_movd = p_movd; p_movd = shape ~ /^mov r(32|64),r(32|64)$/ ? reg64(d) : ""
     p_regonly = ops !~ /\[/ && mn !~ /^(push|pop|lea|cmov)/; p_r1 = reg64(d); p_r2 = reg64(s)
 }
