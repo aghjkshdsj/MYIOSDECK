@@ -29,14 +29,14 @@ struct SettingsView: View {
                     Toggle("Use FXR for x86-64 Hello (experimental)", isOn: $settings.useFXR).tint(Deck.accent)
                     Text("FXR is FXI with the x86 registers kept in ARM registers (\(engine.fxrPinned ? "pinned in this build" : "NOT pinned in this build")), about 2-3× FXI's speed. The Performance tab benchmark measures both.")
                         .font(.footnote).foregroundStyle(Deck.dim)
-                    Toggle("Windows games: FXR (experimental)", isOn: $settings.winFXR).tint(Deck.accent)
-                    Text("Runs a Windows game's x64 code with FXR instead of FXI. Faults (x64 exceptions) are exact; a debugger or garbage collector reading another thread's registers is not supported yet. Applies to the next game you start without JIT.")
+                    Toggle("Windows games: FXR", isOn: $settings.winFXR).tint(Deck.accent)
+                    Text("Runs a 64-bit Windows game's x64 code with FXR (about 2-3× FXI's speed) instead of FXI. On by default; turn it off to compare with FXI or if a game misbehaves only with FXR. Faults (x64 exceptions) are exact; a debugger or garbage collector reading another thread's registers sees its last call into Windows, as with FXI. Applies to the next game you start without JIT; with Play another game without restarting, the first 64-bit game's choice holds until MYIOSDECK closes.")
                         .font(.footnote).foregroundStyle(Deck.dim)
                     Toggle("Windows games without audio", isOn: $settings.noJITMuteAudio).tint(Deck.accent)
                     Text("Without JIT a game's audio engine decodes and mixes sound in the interpreter, and that can take a whole CPU core (Stick Fight's menu music did). Off: the game starts with no audio device. Applies to the next game you start without JIT.")
                         .font(.footnote).foregroundStyle(Deck.dim)
                     Toggle("Play another game without restarting (experimental)", isOn: $settings.sessionReuse).tint(Deck.accent)
-                    Text("When a game ends (its own Quit, or Quit game in the game menu, which asks it to close), Wine keeps running and the next game starts in it: no need to close and reopen MYIOSDECK, and 32-bit and 64-bit games can follow each other. A game that does not close can be force-quit from the game menu. The next game must use the same controller mode if that is a HID gamepad, and 64-bit games need FXI (not FXR); otherwise MYIOSDECK asks for a restart. A 32-bit game's memory comes back when the next 32-bit game starts; a 64-bit game's only when MYIOSDECK closes, so MYIOSDECK asks for a restart when memory runs low. Applies from the next game you start.")
+                    Text("When a game ends (its own Quit, or Quit game in the game menu, which asks it to close), Wine keeps running and the next game starts in it: no need to close and reopen MYIOSDECK, and 32-bit and 64-bit games can follow each other. A game that does not close can be force-quit from the game menu. The next game must use the same controller mode if that is a HID gamepad; otherwise MYIOSDECK asks for a restart. 64-bit games keep the x64 CPU (FXR or FXI) the first one used. A 32-bit game's memory comes back when the next 32-bit game starts; a 64-bit game's only when MYIOSDECK closes, so MYIOSDECK asks for a restart when memory runs low. Applies from the next game you start.")
                         .font(.footnote).foregroundStyle(Deck.dim)
                 }
 
