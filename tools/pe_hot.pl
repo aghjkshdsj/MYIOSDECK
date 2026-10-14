@@ -114,7 +114,7 @@ sub show {
     }
     my @named = grep { defined } map { my $s = cstring(hex($_) - $base); $s ? sprintf('0x%x "%s"', hex($_) - $base, $s) : undef } sort keys %strs;
     print "$pad   strings: $_\n" for @named[0 .. ($#named < 24 ? $#named : 24)];
-    my $limit = ($depth == 0 || $why =~ /of the string/) ? 400 : 60;
+    my $limit = ($depth == 0 || $why =~ /of the string|reads/) ? 400 : 60;
     print "$pad   | $_" for @lines[0 .. ($#lines < $limit ? $#lines : $limit)];
     print "$pad   | ... (" . scalar(@lines) . " instructions)\n" if @lines > $limit + 1;
     return if $depth >= 4;
@@ -128,6 +128,23 @@ sub show {
     }
 }
 for my $r (@rvas) {
+    # ref:RVA - the functions whose instructions address RVA..RVA+0x7f (a global object such as a
+    # convar: where its value is read).
+    if ($r =~ /^ref:(?:0x)?([0-9a-f]+)$/i) {
+        my $lo = $base + hex $1;
+        print "\n######## references to 0x$1..+0x7f\n";
+        open(my $dd, '<', $dis) or die;
+        my $n = 0;
+        while (<$dd>) {
+            next unless /^\s*([0-9a-f]+):.*#\s+(?:0x)?([0-9a-f]+)/;
+            my ($site, $target) = (hex $1, hex $2);
+            next unless $target >= $lo && $target < $lo + 0x80;
+            last if ++$n > 8;
+            show($site - $base, 3, sprintf(' (reads +0x%x at 0x%x)', $target - $lo, $site - $base));
+        }
+        close $dd;
+        next;
+    }
     # dump:RVA - 32 bytes of data there (a short string a function uses, such as a separator).
     if ($r =~ /^dump:(?:0x)?([0-9a-f]+)$/i) {
         my $o = off(hex $1);
