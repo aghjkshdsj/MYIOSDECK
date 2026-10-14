@@ -117,6 +117,7 @@ static int trace_call(void) {
 static void find_terminate(wow_thread *t, uint32_t stub_ret);
 static void exit_report(wow_thread *t, uint32_t handle, uint32_t code);
 static void note_call(wow_thread *t, int unix_call, uint32_t num, uint32_t esp, uint32_t caller, uint32_t status);
+static void note_handle(wow_thread *t, uint32_t num, uint32_t esp, uint32_t caller, uint32_t status);
 static uint32_t g_terminate_num = ~0u;   // NtTerminateProcess's number, from the 32-bit ntdll's stub
 
 // [esp] return address into the stub, [esp + 4] the stub's caller, the arguments from esp + 8
@@ -137,6 +138,7 @@ static void system_call(wow_thread *t) {
     if (t->proc->pending_items) call(t, t->proc->pending_items, 0, 0, 0);
     uint32_t status = (uint32_t)call(t, t->proc->system_service, num, (long long)(t->proc->base + esp + 8), 0);
     t->ring[slot].status = status;
+    note_handle(t, num, esp, caller, status);
     note_call(t, 0, num, esp, caller, status);
     if (trace_call())
         mid_log("[fxi-wow] syscall %#x from %#x -> %08x", num, guest32(t, esp), status);
@@ -527,6 +529,62 @@ static const char *sysname(wow_thread *t, uint32_t num) {
         }
     }
     return num < SYSNAMES ? g_sysname[num] : NULL;
+}
+
+// ---- Diagnostics: where a handle came from (docs/SESSION_REUSE.md) ----
+// A later game in a kept session waits forever on one handle (Steins;Gate's Bink stop on Quit,
+// Forager's start): the [quit-watch] report names the call that made the handle it waits on.
+// Recorded: every handle a waitable-object call returned through its first argument
+// (NtDuplicateObject: its fourth), with the process window and the caller.
+typedef struct { uint64_t base; uint32_t handle, num, caller, callers[3]; } handle_note;
+enum { HANDLE_NOTES = 4096 };
+static handle_note g_handles[HANDLE_NOTES];
+static _Atomic uint32_t g_handle_next;
+static uint8_t g_handle_kind[SYSNAMES];   // 0 not looked at, 1 not recorded, 2 first argument, 3 fourth
+
+static void note_handle(wow_thread *t, uint32_t num, uint32_t esp, uint32_t caller, uint32_t status) {
+    if (status >= 0x80000000u || num >= SYSNAMES) return;
+    uint8_t kind = __atomic_load_n(&g_handle_kind[num], __ATOMIC_RELAXED);
+    if (!kind) {
+        static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;   // sysname's module scan
+        pthread_mutex_lock(&lock);
+        const char *name = sysname(t, num);
+        pthread_mutex_unlock(&lock);
+        if (!g_sysnames_ntdll) return;   // the names are not known yet: look again next time
+        static const char *const first[] = { "NtCreateEvent", "NtOpenEvent", "NtCreateThreadEx", "NtCreateThread",
+            "NtCreateSemaphore", "NtOpenSemaphore", "NtCreateMutant", "NtOpenMutant", "NtCreateTimer",
+            "NtCreateKeyedEvent", "NtCreateIoCompletion", "NtCreateUserProcess" };
+        kind = 1;
+        for (unsigned i = 0; name && i < sizeof first / sizeof first[0]; i++)
+            if (!strcmp(name, first[i])) kind = 2;
+        if (name && !strcmp(name, "NtDuplicateObject")) kind = 3;
+        __atomic_store_n(&g_handle_kind[num], kind, __ATOMIC_RELAXED);
+    }
+    if (kind < 2) return;
+    uint32_t out = guest32(t, esp + (kind == 2 ? 8 : 20));
+    if (!out) return;
+    handle_note *n = &g_handles[__atomic_fetch_add(&g_handle_next, 1, __ATOMIC_RELAXED) % HANDLE_NOTES];
+    n->base = t->proc->base;
+    n->handle = guest32(t, out);
+    n->num = num;
+    n->caller = caller;
+    // three return addresses further up (kernelbase is the direct caller of most of these)
+    uint32_t found = 0;
+    for (uint32_t off = 8; off < 0x400 && found < 3; off += 4) {
+        uint32_t v = rd_guest32(t->proc->base, esp + off);   // may run past the stack's top
+        if (v > 0x10000 && v != caller && after_call(t->proc->base, v)) n->callers[found++] = v;
+    }
+    while (found < 3) n->callers[found++] = 0;
+}
+
+// The newest note for a handle of the process at base (handles are reused after a close).
+static const handle_note *handle_origin(uint64_t base, uint32_t handle) {
+    uint32_t next = __atomic_load_n(&g_handle_next, __ATOMIC_RELAXED);
+    for (uint32_t i = 0; i < HANDLE_NOTES && i < next; i++) {
+        const handle_note *n = &g_handles[(next - 1 - i) % HANDLE_NOTES];
+        if (n->base == base && n->handle == handle) return n;
+    }
+    return NULL;
 }
 
 // A UNICODE_STRING32 of RTL_USER_PROCESS_PARAMETERS (Buffer relative to the block unless it is
@@ -938,6 +996,29 @@ void mid_wow_thread_report(const char *why) {
                 tid, (unsigned long)teb, (unsigned long long)proc.base,
                 info.run_state == TH_STATE_RUNNING ? "running" : info.run_state == TH_STATE_WAITING ? "waiting" : "stopped",
                 state, pc_name, lr_name, (unsigned long long)t.syscalls, (unsigned long long)t.unixcalls);
+        // the objects a wait is for, by the call that made their handles
+        if (!t.in_x86 && t.ring_n && t.ring[k].status == ~0u) {
+            const char *name = sysname(&t, t.ring[k].num);
+            uint32_t esp = fx32_wow_reg(t.cpu, FX32_ESP), handles[4], nh = 0;
+            if (name && !strcmp(name, "NtWaitForSingleObject")) handles[nh++] = rd_guest32(proc.base, esp + 8);
+            else if (name && !strcmp(name, "NtWaitForMultipleObjects")) {
+                uint32_t count = rd_guest32(proc.base, esp + 8), list = rd_guest32(proc.base, esp + 12);
+                for (uint32_t h = 0; h < count && nh < 4; h++) handles[nh++] = rd_guest32(proc.base, list + 4 * h);
+            }
+            for (uint32_t h = 0; h < nh; h++) {
+                const handle_note *o = handle_origin(proc.base, handles[h]);
+                const char *made = o ? sysname(&t, o->num) : NULL;
+                if (o) {
+                    char w1[128], w2[128], w3[128];
+                    mid_log("[quit-watch]   waits on handle %#x: made by %s from %s, then %s, %s, %s", handles[h],
+                            made ? made : "?", describe(proc.base, mods, nm, o->caller, where, sizeof where),
+                            o->callers[0] ? describe(proc.base, mods, nm, o->callers[0], w1, sizeof w1) : "-",
+                            o->callers[1] ? describe(proc.base, mods, nm, o->callers[1], w2, sizeof w2) : "-",
+                            o->callers[2] ? describe(proc.base, mods, nm, o->callers[2], w3, sizeof w3) : "-");
+                }
+                else mid_log("[quit-watch]   waits on handle %#x: not made by a call this report records", handles[h]);
+            }
+        }
         stack_report(&t, mods, nm, 8);
     }
     mid_log("[quit-watch] %d thread(s) with an x86 CPU", shown);

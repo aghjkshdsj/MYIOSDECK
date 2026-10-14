@@ -563,6 +563,10 @@ REAP_VIRTUAL_FIXES = [
      "            if (last && (ULONG_PTR)last - base < IOS_WOW_WINDOW_SIZE)\n"
      "                __sync_bool_compare_and_swap( &ios_exit_prev_teb, last, NULL );\n"
      "        }\n"
+     "        {   /* MYIOSDECK: the Metal textures and buffers it left (engine/dxmt/patches/metal_owner.py) */\n"
+     "            extern void winemetal_release_window( unsigned long base ) __attribute__((weak));\n"
+     "            if (winemetal_release_window) winemetal_release_window( (unsigned long)base );\n"
+     "        }\n"
      "        d3d9_native_window_teardown( (unsigned long)base );\n"),
 ]
 

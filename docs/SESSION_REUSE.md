@@ -205,6 +205,17 @@ corrupted x86 stack of log 96. The last TEB is now a global that a window teardo
 exit_thread joins and frees only a TEB of its own process. The second Forager waits on handle
 0xc4 in its main thread; its audio thread waits normally on its stream event 0xac.
 
+Build 167 (logs of 2026-10-13): four Steins;Gate starts in one run; each window was torn down
+and reused. Three issues left. (1) The footprint grew about 330 MB a game (970 MB, 1.3 GB,
+1.65 GB, 1.97 GB): DXMT's census counts 409 MB of Metal objects per game, which an ended game
+never gives back. `engine/dxmt/patches/metal_owner.py` records each texture and buffer a 32-bit
+process makes and counts its references; the window teardown gives back what the dead process
+still held (`winemetal_release_window`, called from the reclaim). (2) From the second game on,
+Quit game stops in Bink's BinkWaitStopAsyncThreadsMulti: its worker threads end as in the first
+game, but the main thread then waits on handle 0xa4 for good (Force quit ends it). (3) The second
+Forager's main thread waits on handle 0xc0 at start. The report now names the call that made a
+waited handle (NtCreateEvent, NtCreateThreadEx, ... and three return addresses above it).
+
 - **The first game is never reclaimed.** It is the session's initial process: no process socket
   entry, so none of the child exit clean-up. For a 32-bit first game its guest window also holds
   the PEB every later process is cloned from (`ios_initial_peb`), so it must stay mapped. A

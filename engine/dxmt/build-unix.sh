@@ -91,6 +91,10 @@ step_metal() {
 
 step_dxmt() {
     local D="$M/build/dxmt-ios"
+    # An ended 32-bit game's Metal textures and buffers go with its window (patches/metal_owner.py,
+    # docs/SESSION_REUSE.md). Start from the pristine file: the checkout is cached.
+    git -C "$M/dxmt" checkout -- src/winemetal/unix/winemetal_unix.c
+    python3 "$HERE/patches/metal_owner.py" "$M/dxmt"
     airconv_shader_headers "$D/shader-headers"
     bash "$D/build.sh"
     rm -f "$D/libdxmt_combined.a"
