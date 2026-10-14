@@ -1571,18 +1571,19 @@ Block *gpta_lower(struct Fxi *vm, Block *b) {
                             break;
                         }
                 }
+                if (t->dst < 128 && !(t->dst & 7)) {
+                    unsigned D = t->dst >> 3, layout = to == t+1 ? (unsigned)edge[i] : 2;
+                    for (int inc = 0; inc < 2; inc++)
+                        for (int sz = 0; sz < 2; sz++)
+                            for (int cc = 0; cc < 4; cc++)
+                                if (t->p == t_fid[inc][sz][cc][D])
+                                    t->p = t_fid_trace[layout][inc][sz][cc][D];
+                }
                 if (to == t + 1) {
-                    if (t->dst < 128 && !(t->dst & 7)) {
-                        unsigned D = t->dst >> 3;
-                        for (int inc = 0; inc < 2; inc++)
-                            for (int sz = 0; sz < 2; sz++)
-                                for (int cc = 0; cc < 4; cc++)
-                                    if (t->p == t_fid[inc][sz][cc][D])
-                                        t->p = t_fid_trace[edge[i]][inc][sz][cc][D];
-                    }
                     // The branch-layout retry in iteration 41 again regressed
                     // the standard branch workload. Keep arithmetic step
-                    // selection and ordinary/final unary links unchanged.
+                    // selection unchanged. Unary final-edge selection is a
+                    // separate trial, using the already compiled EDGE=2 form.
                     for (int si = 0; si < 4; si++)
                         for (int cc = 0; cc < 6; cc++)
                             if (t->p == t_jresult[si][cc]) t->p = t_jresult_trace[edge[i]][si][cc];

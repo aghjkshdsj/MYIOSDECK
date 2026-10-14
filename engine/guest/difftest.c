@@ -1427,20 +1427,20 @@ static void gpta_cf_only(void) {
     UT_TEST(OP,REG,START,"j" CC " 1b"); \
     UT_TEST(OP,REG,START,"j" INV " 2f\n\tjmp 1b\n\t2:")
 #define UT_WIDTH(SZ,REG,HIGH,NEG,MAX,MIN) \
-    UT_BOTH("inc" SZ,REG,(NEG)+6ull,"e","ne"); \
+    UT_BOTH("inc" SZ,REG,(NEG)+16ull,"e","ne"); \
     UT_BOTH("dec" SZ,REG,(HIGH)|1ull,"e","ne"); \
     UT_BOTH("inc" SZ,REG,(NEG),"ne","e"); \
-    UT_BOTH("dec" SZ,REG,(HIGH)|7ull,"ne","e"); \
+    UT_BOTH("dec" SZ,REG,(HIGH)|17ull,"ne","e"); \
     UT_BOTH("inc" SZ,REG,(NEG),"s","ns"); \
-    UT_BOTH("dec" SZ,REG,(MIN)+2ull,"s","ns"); \
-    UT_BOTH("inc" SZ,REG,(MAX)-2ull,"ns","s"); \
-    UT_BOTH("dec" SZ,REG,(HIGH)|6ull,"ns","s")
+    UT_BOTH("dec" SZ,REG,(MIN)+18ull,"s","ns"); \
+    UT_BOTH("inc" SZ,REG,(MAX)-18ull,"ns","s"); \
+    UT_BOTH("dec" SZ,REG,(HIGH)|18ull,"ns","s")
 static void gpta_unary_trace(void) {
     u64 h = 14695981039346656037ull;
     for (int i = 0; i < 32; i++) {
         u64 upper = val() & 0xffffffff00000000ull;
-        UT_WIDTH("l","%%ecx",upper,upper | 0xfffffff9ull,upper | 0x7fffffffull,upper | 0x80000000ull);
-        UT_WIDTH("q","%%rcx",0,~6ull,0x7fffffffffffffffull,0x8000000000000000ull);
+        UT_WIDTH("l","%%ecx",upper,upper | 0xffffffefull,upper | 0x7fffffffull,upper | 0x80000000ull);
+        UT_WIDTH("q","%%rcx",0,~16ull,0x7fffffffffffffffull,0x8000000000000000ull);
     }
     out("gpta_unary_trace",h);
 }

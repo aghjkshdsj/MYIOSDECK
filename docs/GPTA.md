@@ -66,6 +66,9 @@ row below. Interrupted or defective trials are recorded separately.
 | fe5a70c | [38500223751](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38500223751) | 27.87% | 30.60% | 8.25% | 13.97% |
 | 9a01af4 | [38641833700](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38641833700) | 29.02% | 31.29% | 8.33% | 13.97% |
 | 71ca32c | [38642282577](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38642282577) | 28.72% | 30.70% | 8.27% | 14.05% |
+| 41fc907 | [38643061148](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38643061148) | 28.85% | 31.12% | 8.09% | 14.01% |
+| d09c2e1 | [38645643029](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38645643029) | 29.20% | 31.54% | 8.23% | 14.00% |
+| e456c8a | [38647332654](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38647332654) | 29.52% | 31.10% | 8.44% | 14.01% |
 
 The third trial (result-width branches and simplified floating comparisons)
 regressed. Its ARM64, x86 and iOS gates passed. That trial is rolled back in
@@ -396,9 +399,10 @@ result into the unchanged destination. This prevents the vector arithmetic
 and upper-lane restoration observed in the ARM evidence for 38500223751.
 Portable hosts retain the original C operations. Existing differential cases
 check arithmetic, upper lanes, aliases, both comparison orders, live flags
-and trace exits. This trial is not measured yet. Its accompanying independent
+and trace exits. All gates passed in 38643061148; the standard float improvement
+was small. Its accompanying independent
 corpus diagnostics count consecutive full-width vector loads, including the
-same-base/index/scale subset, with exact raw counts. The engine does not yet
+same-base/index/scale subset, with exact raw counts. That revision did not yet
 select a new consecutive-load family.
 
 Independent corpus run
@@ -416,7 +420,11 @@ Differential cases cover every vector destination, aliases, signed indices,
 displacements, equal address registers and flags. Fault sites 61-64 check
 first-load faults and completed first results at second-load faults, including
 an aliased destination; existing site 56 also exercises the second boundary.
-This trial is not measured yet.
+The original 3ed653d failed the aliased second-load fault in 38644055183:
+the first completed XMM0 value was missing. The diagnostics-only successor
+23e3d47 failed the same check in 38645423094. ARM speed is not measured for
+either revision. Ordinary Linux tests, the assembly audit and iOS compilation
+passed, demonstrating why the runtime fault-state gate is necessary.
 
 The direct continuation now explicitly consumes its incoming destination
 through an empty fixed-register barrier before the load. The high-bank
@@ -424,6 +432,7 @@ continuation uses a memory barrier. This prevents interprocedural optimization
 from discarding the first load's completed value when the second overwrites
 the same destination, and preserves the pre-second state at a fault. The
 existing new alias fault case checks that result. Recovery checks are unchanged.
+This repair passed all gates in 38645643029.
 
 The next direct-pair trial passes the first load's effective address in the
 existing non-architectural address temporary. The second adds a predecoded
@@ -433,7 +442,8 @@ available for recovery. Both accesses and guest instruction boundaries remain
 separate. Continuations no longer need separate address-register specializations.
 Tests add negative, zero and wider displacement deltas, in addition to the
 existing absolute-address second-fault cases. The entry preservation barriers
-and unchanged recovery audit remain in force. This trial is not measured yet.
+and unchanged recovery audit remain in force. This passed all gates in
+38647332654, with no convincing standard memory timing improvement.
 
 The next indexed-load trial extends the existing independent-corpus load +
 arithmetic family to base + index * scale + displacement, retaining every
@@ -458,6 +468,22 @@ samples and held-out programs never enable it. This investigates the generic
 DEC/branch handler still sampled in the standard integer profile. The optional
 dispatch counter also counts the new direct continuation; it compiles away
 in ordinary builds. No execution handler semantics change in this revision.
+
+The trace logs in 38647332654 show that the standard integer loop already has
+an active trace. The generic unary branch is its final non-adjacent backedge;
+carry-only trace rejection was a hypothesis and is not supported here.
+The next trial selects the already compiled non-adjacent INC/DEC branch
+variant only for these final trace edges. Arithmetic-step layout and ordinary
+untraced unary handlers retain their existing selection. Differential unary
+loops now run beyond the replica cycle, checking final backedges, sign/zero
+transitions, both widths and live flags. This isolates unary final-edge
+selection from the broader layout trial that regressed in iteration 41.
+This trial is not measured yet.
+
+The post-threshold Windows and device work is planned in
+[GPTA_WINDOWS_PLAN.md](GPTA_WINDOWS_PLAN.md); implementation waits for the speed
+threshold. Current Linux tests and iOS compilation do not establish Wine/Mono
+integration or an iPhone speed result.
 
 Windows mode defaults to the identity permutation. CI additionally enables
 the allocation trial with `GPTA_XMAP_WINDOWS=1` and repeats the same native
