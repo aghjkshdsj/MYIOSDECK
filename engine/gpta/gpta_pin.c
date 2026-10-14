@@ -1266,7 +1266,13 @@ Block *gpta_lower(struct Fxi *vm, Block *b) {
     if (xmap && !g_win) {
         uint64_t inherited = region_vector_map(vm, b->rip, &xstart, &xend);
         if (inherited) xmap = inherited;
-        else xend = loop_end(vm, b->rip);
+        else {
+            xend = loop_end(vm, b->rip);
+            // Transient vector blocks use the common identity layout. A
+            // different allocation is reserved for a loop region, where it
+            // can be reused across iterations and separately decoded blocks.
+            if (!xend) xmap = GPTA_XIDENTITY;
+        }
     }
     if (xmap && g_win && !g_xmap_windows) xmap = GPTA_XIDENTITY;
     if (xmap) for (int i = 0; i < nseg; i++) map_vectors(seg[i], xmap);

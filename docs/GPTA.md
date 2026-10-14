@@ -217,6 +217,14 @@ still uses each copy's actual handler. The existing complete condition,
 width, alias and wraparound cases now also compare final exit flags against
 native execution. All guest instructions and branches remain interpreted.
 
+The loop-only allocation trial is **not measured**. Vector blocks outside a
+known cached or newly identified ELF loop region use the common identity map.
+Nonidentity allocation is reserved for a region where its map can be reused
+across iterations. This is a uniform CFG policy, using the same operand counts
+and existing bounded backedge scan; no program identity or data participates.
+The preceding transition/nested-loop/fallback tests cover both layouts.
+Windows allocation and all recovery gates retain their preceding behavior.
+
 Windows mode defaults to the identity permutation. CI additionally enables
 the allocation trial with `GPTA_XMAP_WINDOWS=1` and repeats the same native
 exit, native API, fault-site and thread-stop checks. Host-state recovery
