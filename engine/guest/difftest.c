@@ -1742,6 +1742,10 @@ static void gpta_xload_pairs(void) {
 #define LP_REG_CASE(D,E) \
     LP_SCALE_CASE(D,E,1,16); LP_SCALE_CASE(D,E,2,8); \
     LP_SCALE_CASE(D,E,4,4); LP_SCALE_CASE(D,E,8,2); \
+    LP_CASE(D,E,"16(%[p],%[idx],4)","(%[p],%[idx],4)",&mem[0],4); \
+    LP_CASE(D,E,"(%[p],%[idx],2)","(%[p],%[idx],2)",&mem[0],8); \
+    LP_CASE(D,E,"-16(%[p],%[idx],8)","16(%[p],%[idx],8)",&mem[1],2); \
+    LP_CASE(D,E,"16(%[p])","-16(%[p])",&mem[1],0); \
     LP_CASE(D,E,"(%[p],%[idx])","16(%[p],%[idx])",(u64)&mem[1]/2,(u64)&mem[1]/2)
 #define LP_DEST_CASE(D,E) LP_REG_CASE(D,E); LP_REG_CASE(D,D)
 static void gpta_direct_load_pairs(void) {

@@ -1308,7 +1308,8 @@ static int lower_direct_load_pair(Out *o, const Uop *u, uint32_t left) {
     x->fdir |= GPTA_DIRECT_LOAD_PAIR;
     x->imm = (uint64_t)(uintptr_t)f; x->aux = (uint64_t)(uintptr_t)n;
     x->ulink2 = (Uop *)(uintptr_t)next_replica[u->scale][xcls(v->dst)][u->base][u->index];
-    put_uop(o,v,n);   // a real second instruction boundary, with its own RIP
+    Uop *y = put_uop(o,v,n);   // a real second instruction boundary, with its own RIP
+    y->imm = (uint64_t)v->disp - (uint64_t)u->disp;
     return 1;
 }
 

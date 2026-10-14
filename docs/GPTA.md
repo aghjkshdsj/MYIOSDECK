@@ -65,6 +65,7 @@ row below. Interrupted or defective trials are recorded separately.
 | 650279c | [38499323627](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38499323627) | 28.71% | 30.80% | 8.32% | 13.98% |
 | fe5a70c | [38500223751](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38500223751) | 27.87% | 30.60% | 8.25% | 13.97% |
 | 9a01af4 | [38641833700](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38641833700) | 29.02% | 31.29% | 8.33% | 13.97% |
+| 71ca32c | [38642282577](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38642282577) | 28.72% | 30.70% | 8.27% | 14.05% |
 
 The third trial (result-width branches and simplified floating comparisons)
 regressed. Its ARM64, x86 and iOS gates passed. That trial is rolled back in
@@ -386,7 +387,8 @@ ordinary linked dispatch. It does not multiply the static condition tables.
 The flags are attached after each copy's actual destination is known;
 replication preserves them. Differential tests cover both comparison orders,
 all conditions, NaNs, both vector banks, taken/fallthrough paths, final
-backedges and live comparison flags on exit. This trial is not measured yet.
+backedges and live comparison flags on exit. This passed every gate in
+38642282577; the suite means did not improve and both remain below 50%.
 
 A separate scalar-code-generation trial uses statically compiled ARM scalar
 FP instructions in the arithmetic/comparison family, inserting only the low
@@ -422,6 +424,16 @@ continuation uses a memory barrier. This prevents interprocedural optimization
 from discarding the first load's completed value when the second overwrites
 the same destination, and preserves the pre-second state at a fault. The
 existing new alias fault case checks that result. Recovery checks are unchanged.
+
+The next direct-pair trial passes the first load's effective address in the
+existing non-architectural address temporary. The second adds a predecoded
+unsigned displacement delta. This preserves arbitrary signed displacements
+and address wraparound; the original second RIP and displacement remain
+available for recovery. Both accesses and guest instruction boundaries remain
+separate. Continuations no longer need separate address-register specializations.
+Tests add negative, zero and wider displacement deltas, in addition to the
+existing absolute-address second-fault cases. The entry preservation barriers
+and unchanged recovery audit remain in force. This trial is not measured yet.
 
 The next indexed-load trial extends the existing independent-corpus load +
 arithmetic family to base + index * scale + displacement, retaining every
