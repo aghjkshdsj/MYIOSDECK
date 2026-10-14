@@ -143,7 +143,7 @@ FIXES = [
      "  mo_ref((uintptr_t)*obj, 1);   " + MARK + "\n"
      "  return STATUS_SUCCESS;\n"),
     ("  [*obj release];\n  return STATUS_SUCCESS;\n",
-     "  if (mo_ref((uintptr_t)*obj, -1)) [*obj release];   " + MARK + " the record's own, after the last\n"
+     "  if (mo_ref((uintptr_t)*obj, -1)) [*obj release];   " + MARK + "  /* the record's own, after the last */\n"
      "  [*obj release];\n"
      "  return STATUS_SUCCESS;\n"),
     ("static NTSTATUS\n_MTLDevice_newBuffer(void *obj) {\n",
