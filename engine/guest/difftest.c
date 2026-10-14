@@ -1712,6 +1712,20 @@ static void gpta_ea_pairs(void) {
     XL_DST_CASES(OP,LOAD,10,2); XL_DST_CASES(OP,LOAD,11,3); \
     XL_DST_CASES(OP,LOAD,12,4); XL_DST_CASES(OP,LOAD,13,5); \
     XL_DST_CASES(OP,LOAD,14,6); XL_DST_CASES(OP,LOAD,15,7)
+static void gpta_pload_pairs(void) {
+    u64 h = 14695981039346656037ull;
+    v2 mem[3];
+    for (int i = 0; i < N; i++) {
+        v2 seed = vrand(), b = vrand(); mem[1] = vrand();
+        XL_REGS("paddb","movdqu"); XL_REGS("paddw","movdqu");
+        XL_REGS("paddd","movdqu"); XL_REGS("paddq","movdqu");
+        XL_REGS("psubb","movdqu"); XL_REGS("psubw","movdqu");
+        XL_REGS("psubd","movdqu"); XL_REGS("psubq","movdqu");
+        XL_REGS("pand","movdqu"); XL_REGS("pandn","movdqu");
+        XL_REGS("por","movdqu"); XL_REGS("pxor","movdqu");
+    }
+    out("gpta_pload_pairs",h);
+}
 static void gpta_xload_pairs(void) {
     u64 h = 14695981039346656037ull;
     v2 mem[3];
@@ -1790,7 +1804,7 @@ static const test_fn kTests[] = {
     fz_o, fz_no, fz_b, fz_ae, fz_e, fz_ne, fz_be, fz_a, fz_s, fz_ns, fz_p, fz_np, fz_l, fz_ge, fz_le, fz_g,
     fc_o, fc_no, fc_b, fc_ae, fc_e, fc_ne, fc_be, fc_a, fc_s, fc_ns, fc_p, fc_np, fc_l, fc_ge, fc_le, fc_g,
     fz_call, fz_index, fz_xindex, fz_3op, fz_3gap, fz_x3, fz_hoist, gpta_xmem, gpta_result_flags, gpta_xhigh, gpta_cf_flow,
-    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow, gpta_fcj_trace, gpta_jresult_trace, gpta_immstores, gpta_x3high, gpta_step_trace, gpta_shift_counts, gpta_copy_shift_counts, gpta_unary_edges, gpta_alu_memory, gpta_xmm_lane_state, gpta_scalar_mem, gpta_unary_flag_inputs, gpta_xmap_transitions, gpta_cf_only, gpta_unary_trace, gpta_xload_pairs, gpta_ea_pairs, gpta_mov_test_branch, gpta_arith_float_branch, gpta_shift_xor, gpta_arith_float_trace, gpta_direct_load_pairs,
+    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow, gpta_fcj_trace, gpta_jresult_trace, gpta_immstores, gpta_x3high, gpta_step_trace, gpta_shift_counts, gpta_copy_shift_counts, gpta_unary_edges, gpta_alu_memory, gpta_xmm_lane_state, gpta_scalar_mem, gpta_unary_flag_inputs, gpta_xmap_transitions, gpta_cf_only, gpta_unary_trace, gpta_xload_pairs, gpta_ea_pairs, gpta_mov_test_branch, gpta_arith_float_branch, gpta_shift_xor, gpta_arith_float_trace, gpta_direct_load_pairs, gpta_pload_pairs,
 };
 
 int guest_main(int argc, char **argv) {

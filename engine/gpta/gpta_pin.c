@@ -30,6 +30,7 @@
 #include "gpta_pin_cfonly.h"
 #include "gpta_pin_unary_trace.h"
 #include "gpta_pin_xload.h"
+#include "gpta_pin_pload.h"
 #include "gpta_pin_step_noadj.h"
 #include "gpta_pin_eareuse.h"
 #include "gpta_pin_movtest.h"
@@ -357,6 +358,11 @@ static int vector_pair_cost(unsigned *uses, const Uop *u, const Uop *v) {
     int k = xmem_index(gpta_xops[b->a].name);
     int width = a->fam == FAM_X && a->b && !strcmp(gpta_xops[a->a].name,"movx") ? 16 :
         a->fam == FAM_XS && a->a == XS_MOVSS_RM ? 4 : a->fam == FAM_XS && a->a == XS_MOVSD_RM ? 8 : 0;
+    if (width == 16 && gpta_pload_index(gpta_xops[b->a].name) >= 0 && u->index <= R_ZERO && u->base <= R_ZERO) {
+        uses[u->dst]++;
+        if (v->src != u->dst) uses[v->src]++;
+        return 1;
+    }
     if (k >= 0 && u->index <= R_ZERO && u->base <= R_ZERO && width == (k < 6 ? 16 : k < 9 ? 4 : 8)) {
         uses[u->dst]++;
         if (v->src != u->dst) uses[v->src]++;
@@ -467,6 +473,9 @@ static void rmap_init(void) {
     RMAP(t_xf0); RMAP(t_xf1); RMAP(t_xf2); RMAP(t_xf3);
     RMAP(t_xload_ps); RMAP(t_xload_pd); RMAP(t_xload_ss); RMAP(t_xload_sd);
     RMAP(t_xloadi_ps); RMAP(t_xloadi_pd); RMAP(t_xloadi_ss); RMAP(t_xloadi_sd);
+    RMAP(t_pload_paddb); RMAP(t_pload_paddw); RMAP(t_pload_paddd); RMAP(t_pload_paddq);
+    RMAP(t_pload_psubb); RMAP(t_pload_psubw); RMAP(t_pload_psubd); RMAP(t_pload_psubq);
+    RMAP(t_pload_pand); RMAP(t_pload_pandn); RMAP(t_pload_por); RMAP(t_pload_pxor);
     RMAP(t_lp_first0); RMAP(t_lp_first1); RMAP(t_lp_first2); RMAP(t_lp_first3);
     RMAP(t_lp_next0); RMAP(t_lp_next1); RMAP(t_lp_next2); RMAP(t_lp_next3);
     RMAP(t_csh_shl); RMAP(t_csh_shr); RMAP(t_csh_sar); RMAP(t_csh_rol); RMAP(t_csh_ror);
@@ -976,6 +985,16 @@ static int try_fuse(Out *o, const Uop *u, uint32_t left) {
         int width = a->fam == FAM_X && a->b && !strcmp(gpta_xops[a->a].name,"movx") ? 16 :
             a->fam == FAM_XS && a->a == XS_MOVSS_RM ? 4 :
             a->fam == FAM_XS && a->a == XS_MOVSD_RM ? 8 : 0;
+        int pk = width == 16 ? gpta_pload_index(gpta_xops[b->a].name) : -1;
+        if (pk >= 0) {
+            static const PFn (*const packed[12])[9][17][17] = {
+                t_pload_paddb,t_pload_paddw,t_pload_paddd,t_pload_paddq,
+                t_pload_psubb,t_pload_psubw,t_pload_psubd,t_pload_psubq,
+                t_pload_pand,t_pload_pandn,t_pload_por,t_pload_pxor };
+            x = put_uop(o,u,packed[pk][xcls(u->dst)][xcls(v->src)][u->base][u->index]);
+            x->src = v->src;
+            return 2;
+        }
         if (k >= 0 && width == (k < 6 ? 16 : k < 9 ? 4 : 8)) {
             static const PFn (*const tables[4])[16][16][17] = {
                 t_xload_ps,t_xload_pd,t_xload_ss,t_xload_sd };
@@ -1293,7 +1312,7 @@ static int lower_direct_load_pair(Out *o, const Uop *u, uint32_t left) {
         const Desc *c = find(u[2].fn);
         if (c && c->fam == FAM_X && !c->b && u[2].dst == v->dst) {
             int k = xmem_index(gpta_xops[c->a].name);
-            if (k >= 0 && k < 6) return 0;
+            if ((k >= 0 && k < 6) || gpta_pload_index(gpta_xops[c->a].name) >= 0) return 0;
         }
     }
     static const PFn (*const first[4])[9][17][17] = {
@@ -1735,6 +1754,7 @@ static void hidx_build(void) {
 #undef ER_HIDX
 #define XL_HIDX(N) hidx_tab((const PFn *)N, sizeof N / sizeof(PFn));
     GPTA_XLOAD_TABLES(XL_HIDX)
+    GPTA_PLOAD_TABLES(XL_HIDX)
     LP_FIRST_TABLES(XL_HIDX)
     LP_NEXT_TABLES(XL_HIDX)
 #undef XL_HIDX

@@ -478,7 +478,21 @@ untraced unary handlers retain their existing selection. Differential unary
 loops now run beyond the replica cycle, checking final backedges, sign/zero
 transitions, both widths and live flags. This isolates unary final-edge
 selection from the broader layout trial that regressed in iteration 41.
-This trial is not measured yet.
+Iteration 63: https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38649178056
+passed all gates, with standard mean 29.53% and held-out mean 30.44%
+(FXI 8.53% / 13.96%). Both remain below 50%.
+
+Independent corpus run 38649944140 counted 115 full-vector-load followed by
+packed integer ALU pairs on the loaded destination, 105 in loop bodies.
+The next trial adds wrapping ADD/SUB in all lane widths and AND/ANDNOT/OR/XOR
+for this pair. All vector ordinals, arbitrary base/index/scale/displacement
+and source/destination aliases are supported. The loaded value is consumed
+by an empty volatile assembly operand even when the ALU result cancels it;
+this prevents the compiler from removing a guest access and its fault.
+The old destination stays live through that access. Differential tests cover
+all widths, aliases, signed indexes/displacements and unchanged flags. New
+fault sites include self-SUB, self-XOR and self-ANDNOT in both vector banks.
+This trial is not measured yet. The held-out programs are evaluation-only.
 
 The post-threshold Windows and device work is planned in
 [GPTA_WINDOWS_PLAN.md](GPTA_WINDOWS_PLAN.md); implementation waits for the speed
