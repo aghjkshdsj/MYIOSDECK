@@ -79,3 +79,39 @@ code; name them with `gh workflow run steam-scan.yml -f hot="0x... 0x..."`.
 See `docs/STEAM_CLOUD.md`: MYIOSDECK syncs before the host starts and after the session ends, and
 makes no Steam request while Valve's client holds the account; Valve's client may sync too, and
 both compare hashes, so nothing is sent twice.
+
+## Build 180 result and the CM list (build 181)
+
+Build 180 (Dokimon, `myiosdeck-log - 2026-10-14T155511.684.txt`, "black screen": the game surface
+waiting for Steam): `cm-transport-netfilter=1`, and Valve's client did take the NetFilter path,
+but logged `No NetFilter CMs, defaulting to WebSockets`: without the (HTTPS) CM directory it has no
+UDP/TCP server to use, so it fell back to the same WebSocket failure. Steam Cloud before Play was
+clear in 0.6 s and is not involved.
+
+Where the client keeps a CM list (`tools/pe_hot.pl str:CMWS`, `0x57b7a0`, `dump:0x12266e0`): at
+start-up its CM interface reads `Software\Valve\Steam\CM` (NetFilter) and `...\CMWS` (WebSockets)
+from config store 1, the install store `config\config.vdf` (`InstallConfigStore`), and splits the
+value at `;`. Build 181 fills that value before Dock starts (`DockCMCache`, `SteamCMList.swift`):
+the same public directory (`ISteamDirectory/GetCMListForConnect`), fetched over iOS's HTTPS,
+NetFilter servers of the public realm, least loaded first (the last good list is kept for a start
+without network). The rest of config.vdf is kept token for token (tests/host/steam_cm); comments
+are not kept (Valve's client writes none). Log: `[dock-cm] netfilter CMs=N (directory) written`.
+
+The next log should show, in `[steam-logs]`, the CM directory still failing after its timeout, then
+NetFilter instead of `No NetFilter CMs`: a UDP or TCP `Connect()` to one of the listed addresses,
+`[Logged On, ...]`, and in the report `session-authenticated-online=1`.
+
+## GameNative's "headless Steam" (reviewed for build 181)
+
+GameNative 1.3.0 (Android, Winlator/Box64/FEX based; app code GPL-3.0) added a "headless" Steam
+mode: `steamhost`, a `steam.exe` stand-in plus `steamhost64.exe` that load Valve's real Windows
+client (build 1788652215) without its UI, sign it in with the user's refresh token (passed as
+`STEAMHOST_TOKEN`, lightly obfuscated with the app's package name), and start the game through it
+(`STEAMHOST_APPID`, `STEAMHOST_GAME_CMD`, a CEG pass, offline mode, Steam Input layouts, a one-word
+status file). That is the same design as Madeira Dock. The host itself is closed source: per its
+THIRD_PARTY_NOTICES it is "Proprietary — all rights reserved", downloaded from
+downloads.gamenative.app at run time and not in the source archive, so nothing of it can be used
+here. GameNative's open app code does nothing special for Valve's network: on Android the client
+runs under a JIT (Box64/FEX), where its TLS completes in time. Its other mode, Valve's GUI client
+with a token written into `config.vdf` (`ConnectCache`) and `loginusers.vdf`, needs the whole GUI
+client (Chromium web helper) and would hit the same TLS problem without JIT. Nothing ported.

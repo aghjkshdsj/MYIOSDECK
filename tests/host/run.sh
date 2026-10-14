@@ -11,3 +11,6 @@ swiftc --version | head -1
 # Steam Cloud saves: path mapping, comparison, sync decisions, backup retention.
 swiftc -O -o "$OUT/steam-cloud-tests" "$ROOT/App/Sources/Steam/SteamCloudCore.swift" "$HERE/steam_cloud/main.swift"
 "$OUT/steam-cloud-tests" | tee "$OUT/steam-cloud-tests.txt"
+# Madeira Dock: Steam's UDP/TCP server list for Valve's client, and the config.vdf edit.
+swiftc -O -o "$OUT/steam-cm-tests" "$ROOT/App/Sources/Steam/SteamCMList.swift" "$HERE/steam_cm/main.swift"
+"$OUT/steam-cm-tests" | tee "$OUT/steam-cm-tests.txt"

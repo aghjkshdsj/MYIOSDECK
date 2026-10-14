@@ -479,6 +479,8 @@ struct LibraryView: View {
         guard let sign = SteamSignIn.credentialsForDock() else {
             throw DockError.message("Your Steam sign-in has expired. Sign in to Steam again.")
         }
+        // Steam's UDP/TCP servers into Valve's client's cache: without JIT it cannot fetch them itself.
+        await DockCMCache.prepare(drive: MadeiraDock.drive)
         // Steam Cloud makes no request while Valve's client holds the account (until the game ends).
         SteamCloudSync.shared.holdForDock()
         await steamLibrary.endSessionForDock()
