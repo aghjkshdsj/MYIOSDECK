@@ -114,6 +114,23 @@ mode == 2 && /^ *[0-9a-f]+:\t/ {
                 famc[kv]++; if (inloop) lfamc[kv]++
             }
         }
+        if (p_load128 && reg64(d) == pd && shape ~ / x,x$/ &&
+            mn ~ /^(padd[bwdq]|psub[bwdq]|pand|pandn|por|pxor)$/) {
+            kv = "vector load ; packed integer ALU on loaded destination";
+            famc[kv]++; if (inloop) lfamc[kv]++
+            kv = "vector load ; packed integer ALU: " mn;
+            famc[kv]++; if (inloop) lfamc[kv]++
+        }
+        if (pp_movd != "" && pd == pp_movd && reg64(d) == pp_movd &&
+            prev2 ~ /^mov r(32|64),r(32|64)$/ &&
+            prev ~ /^(shl|sal|shr|sar|rol|ror) r(32|64),i$/ &&
+            mn ~ /^(add|sub|and|or|xor)$/ && shape ~ / r(32|64),r(32|64)$/ &&
+            (prev2 ~ /r64,r64$/ || prev ~ /r32,i$/) &&
+            ((prev ~ /r32,i$/ && shape ~ /r32,r32$/) ||
+             (prev ~ /r64,i$/ && shape ~ /r64,r64$/))) {
+            kv = "register copy ; immediate shift/rotate ; register ALU on result";
+            famc[kv]++; if (inloop) lfamc[kv]++
+        }
         # Arithmetic followed by a floating comparison of its result and a
         # branch. Count operand dependencies in the independent corpus, not
         # benchmark loops. Both operand orders are recorded separately.
@@ -167,8 +184,8 @@ mode == 2 && /^ *[0-9a-f]+:\t/ {
 }
 END {
     printf "instructions: %d, in loop bodies: %d\n\n", total, ltotal
-    print "== consecutive vector-load candidates: exact all-code / loop-body counts"
-    for (k in famc) if (k ~ /^consecutive 128-bit vector loads/)
+    print "== candidate families: exact all-code / loop-body counts"
+    for (k in famc) if (k ~ /^consecutive 128-bit vector loads|^vector load ; packed integer ALU|^register copy ; immediate shift/)
         printf "%d %d %s\n", famc[k], lfamc[k], k
     print ""
     print "== superinstruction families: all code / loop bodies (per mille of instructions)"
