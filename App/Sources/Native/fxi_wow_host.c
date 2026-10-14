@@ -539,7 +539,7 @@ static const char *sysname(wow_thread *t, uint32_t num) {
 typedef struct { uint64_t base; uint32_t handle, num, caller, callers[3]; } handle_note;
 enum { HANDLE_NOTES = 4096 };
 static handle_note g_handles[HANDLE_NOTES];
-static _Atomic uint32_t g_handle_next;
+static uint32_t g_handle_next;   // __atomic builtins
 static uint8_t g_handle_kind[SYSNAMES];   // 0 not looked at, 1 not recorded, 2 first argument, 3 fourth
 
 static void note_handle(wow_thread *t, uint32_t num, uint32_t esp, uint32_t caller, uint32_t status) {
