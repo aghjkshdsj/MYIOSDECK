@@ -9,7 +9,8 @@
 #define SX_sar(A,N,SZ) ((uint64_t)((ST##SZ)(A) >> (N)))
 #define SX_rol(A,N,SZ) (((A) << (N)) | ((A) >> ((SZ - (N)) & (SZ - 1))))
 #define SX_ror(A,N,SZ) (((A) >> (N)) | ((A) << ((SZ - (N)) & (SZ - 1))))
-#define SX_DEF(E,D,SZ,F,ROLE) SX_DEF2(E,D,SZ,F,ROLE,SX_OP)
+#define SX_DEF(E,D,SZ,F,ROLE) SX_DEF_EXPAND(E,D,SZ,F,ROLE,SX_OP)
+#define SX_DEF_EXPAND(E,D,SZ,F,ROLE,OP) SX_DEF2(E,D,SZ,F,ROLE,OP)
 #define SX_DEF2(E,D,SZ,F,ROLE,OP) \
     PH p_sx_##OP##_##SZ##_##F##_##ROLE##_##D##_##E(GPTA_PARAMS) { \
         unsigned n = (unsigned)u->imm & (SZ - 1); \
@@ -21,7 +22,8 @@
 #define SX_WIDTH(SZ,F,ROLE) R16(SX_DST,SZ,F,ROLE)
 #define SX_FLAGS(F,ROLE) SX_WIDTH(32,F,ROLE) SX_WIDTH(64,F,ROLE)
 SX_FLAGS(0,0) SX_FLAGS(1,0) SX_FLAGS(0,1) SX_FLAGS(1,1)
-#define SX_E(E,D,SZ,F,ROLE) SX_E2(E,D,SZ,F,ROLE,SX_OP)
+#define SX_E(E,D,SZ,F,ROLE) SX_E_EXPAND(E,D,SZ,F,ROLE,SX_OP)
+#define SX_E_EXPAND(E,D,SZ,F,ROLE,OP) SX_E2(E,D,SZ,F,ROLE,OP)
 #define SX_E2(E,D,SZ,F,ROLE,OP) p_sx_##OP##_##SZ##_##F##_##ROLE##_##D##_##E,
 #define SX_ROW(D,SZ,F,ROLE) { R16B(SX_E,D,SZ,F,ROLE) },
 #define SX_TAB(SZ,F,ROLE) { R16(SX_ROW,SZ,F,ROLE) }

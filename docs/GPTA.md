@@ -325,6 +325,13 @@ coverage checks every effective count plus wraparound encodings, all five
 operations, both widths, both roles, aliases, and live/dead flag paths. All
 static replicas are registered for recovery and the unchanged precision gate.
 
+Its first commit, 7f2c73e, failed compilation before gates or timing in
+[38496942585](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38496942585):
+token pasting retained the literal opcode macro name and generated an
+undeclared SX_SX_OP call. The isolated repair expands the opcode before
+pasting both handler names and operation names. The failed trial's speed is
+not measured. No correctness or recovery gate is weakened.
+
 Windows mode defaults to the identity permutation. CI additionally enables
 the allocation trial with `GPTA_XMAP_WINDOWS=1` and repeats the same native
 exit, native API, fault-site and thread-stop checks. Host-state recovery
