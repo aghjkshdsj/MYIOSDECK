@@ -130,7 +130,7 @@ JIT path): the phone decides.
 | `engine/fxi/fxi_win.c` | `fxi_win_invalidate_all()`: the app drops FXI's x64 blocks before a later game starts (an earlier game's freed code ranges may hold the new game's code). `fxi_invalidate` frees nothing, so a thread still inside a dropped block translates again. |
 | `engine/fxi32/fxi_wow.c`, `App/Sources/Native/fxi_wow_host.c` | `fx32_wow_process_start()` at `BTCpuProcessInit`: a window an exited process left gets a fresh FXI32 instance. The old one held that process's blocks and its BOP page address (the new process allocates its own), and its BOP exit blocks are never invalidated. Tested in `wow_test.c` (check 9). |
 | `App/Sources/Native/wine_host.c` | `mid_wine_boot` for a later program: no JIT slice, no server start, no log truncation; resets the exit status, flushes FXI, starts the program in the session. The log follower keeps reading while a session is kept. |
-| `App/Sources/Engine/WineController.swift` | `SessionKind` (no JIT, ARM64EC or aarch64, HID pad, FXR) recorded at the first program; `nextGameRefusal` says why a later game cannot join (setting off, session not kept, kind differs, FXR on for a 64-bit game, less than 1.5 GB free) or nil. There is no limit on the number of games. The Dock/added-game flags are now per launch (they stayed set for the whole app run). |
+| `App/Sources/Engine/WineController.swift` | `SessionKind` (no JIT, ARM64EC or aarch64, HID pad, FXR) recorded at the first program; `nextGameRefusal` says why a later game cannot join (setting off, session not kept, kind differs, less than 1.5 GB free) or nil. FXR (Settings › Without JIT › Windows games) runs only the first 64-bit game of an app run, since it cannot drop code it translated; a later 64-bit game takes FXI instead of being refused (build 172 refused Stick Fight after Steins;Gate because FXR was on, although no 64-bit game had run). There is no limit on the number of games. The Dock/added-game flags are now per launch (they stayed set for the whole app run). |
 | `App/Sources/UI/LibraryView.swift`, `SettingsView.swift` | The setting; Play is enabled again after a game ends when another can join; the game menu gets **Quit game**, which asks the game to close with Alt+F4 through its normal input (as Madeira's own Quit game does, `Library.swift` `requestQuit`), keeps its view up with "Closing…" until it exits, and leaves MYIOSDECK open. If the game still runs 6 s later the log gets a `[quit-watch]` report (`mid_wow_thread_report`, `fxi_wow_host.c`: each 32-bit thread's system call in progress or x86 code, its native function, the return addresses on its stack), the status says "force quitting it in 4 s", and 4 s later the game is force quit with no menu step (`WineController.forceQuit`, the server's Force quit above). Quit game chosen again while one is pending force quits at once, and the menu keeps a **Force quit** button once the watch has fired. The library then says the game "was force-quit". **Quit game and close MYIOSDECK** stays for a game even Force quit does not end. |
 | `App/Sources/Engine/RecentlyPlayed.swift`, `SteamGamesView.swift`, `CustomGamesCard.swift` | Not session reuse, asked for with it: the library lists the recently played games first (owned Steam games, installed Steam games, My games); each start is recorded per game in UserDefaults. The Steam card lists the Steam games **installed on this iPhone** (every library on C: with Steam install records, downloaded here or by Valve's client; shown signed in or not), each with its size and **Delete…**, which removes its folder under `common`, its `appmanifest_<id>.acf` and its resume journal (`SteamInstallFiles.delete`) after a confirmation; not while a Windows game runs. The game sheet's Uninstall now asks first too. |
 | `engine/wine/stage-app.sh` | Winios's per-window client rects are dropped at a new session's start, with its Metal windows. |
@@ -264,8 +264,8 @@ longer climbs (the Metal records above give back about 290 objects a game). Thre
 - **Metal objects of an ended 32-bit game are not released**: winemetal keeps no list per
   process, so the textures and buffers behind an exited game's handles stay with the window gone.
 - **What a later game must share**: no JIT, the same HID pad mode (DirectInput and XInput are
-  per process and can differ), and FXI rather than FXR for 64-bit games (FXR has no way to drop
-  code it translated). 32-bit and 64-bit games may follow each other (section 2), and there is
+  per process and can differ). FXR runs only the first 64-bit game of an app run (it has no way
+  to drop code it translated); later ones take FXI. 32-bit and 64-bit games may follow each other (section 2), and there is
   no limit on the number of games: what stops another game is memory (a 64-bit game's stays in
   use, and less than 1.5 GB free asks for a restart). Concurrent 32-bit windows are limited to 8
   (Madeira's map): a window an ended game cannot give back (a thread still running x86 code in
@@ -305,6 +305,10 @@ longer climbs (the Metal records above give back about 290 objects a game). Thre
 11. Library: the game just played is first in Steam's owned games, in "Installed on this iPhone" and
    in My games. Installed on this iPhone › Delete… on a game removes it (its size disappears from
    Settings › iPhone Storage for MYIOSDECK) and from the list; Install brings it back.
+12. Steins;Gate or Forager, Quit game, then Stick Fight (a 64-bit game after 32-bit ones, the order
+   Madeira calls "future"): it starts as `[session-reuse] … starts in the running Wine session as a
+   new top-level process (64-bit`, with FXR if that is on (`[fxi-win] x64 CPU: FXR`). A second
+   64-bit game after it: `runs with FXI: FXR already ran a 64-bit game in this app run`.
 
 If a later game fails to start, the log has `[Wine child] BOOT FAILED at stage ...`, and the
 crash report offers the log as for any game that ends with an error.
