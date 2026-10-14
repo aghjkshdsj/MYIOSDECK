@@ -7,7 +7,7 @@
 // x86_64-mont.pl, its 1x loop) with System V arguments; ref_mont is the same product in plain C.
 // Each size prints one hash of its products and how many differ from the C reference; the
 // output must equal the native run's (engine/fxr/gates.sh, engine/fxi/ci-test.sh). Timings go
-// to stderr only.
+// to stderr, and only with the argument "time".
 
 #include "guest_rt.h"
 
@@ -246,7 +246,6 @@ static void putu_err(unsigned long long v) {
 }
 
 int guest_main(int argc, char **argv) {
-    (void)argc; (void)argv;
     static const int sizes[] = {2, 3, 4, 5, 6, 7, 8, 9, 12, 16, 32};
     u64 n[MAXN], a[MAXN], b[MAXN], r[MAXN], q[MAXN];
     int bad_total = 0;
@@ -271,9 +270,10 @@ int guest_main(int argc, char **argv) {
         g_puts(bad ? " DIFFERS-FROM-C " : " ok "); g_putu((unsigned long long)bad); g_puts("\n");
         bad_total += bad;
     }
-    // Speed (stderr): 4-word (P-256 sized) and 9-word (P-521 sized) squarings.
+    // Speed, with "time" only (stderr, which FXI captures with stdout): 4-word (P-256 sized) and
+    // 9-word (P-521 sized) squarings.
     static const int timed[] = {4, 9};
-    for (unsigned s = 0; s < 2; s++) {
+    for (unsigned s = 0; argc > 1 && g_streq(argv[1], "time") && s < 2; s++) {
         int num = timed[s];
         make(n, a, b, num, 0);
         u64 n0 = neg_inv(n[0]);

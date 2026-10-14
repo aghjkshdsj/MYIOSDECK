@@ -12,6 +12,10 @@ on:
         description: "steamclient64.dll RVAs to name (tools/pe_hot.pl), from a log's fxi-prof hot lines"
         required: false
         default: ""
+      strings:
+        description: "Extended regex: list matching text strings of steamclient64.dll and tier0_s64.dll (option names, log formats)"
+        required: false
+        default: ""
   push:
     branches: [main]
     paths: ["engine/fxi/fxi_decode.c", ".github/workflows/steam-scan.yml", "App/Sources/Steam/SteamRuntime.swift"]
@@ -80,6 +84,17 @@ jobs:
         run: |
           cd "$RUNNER_TEMP/steam/unpacked"
           perl "$GITHUB_WORKSPACE/tools/pe_hot.pl" steamclient64.dll $HOT 2>&1 | head -6000
+      - name: Strings of Valve's client matching a pattern
+        if: ${{ inputs.strings != '' }}
+        env:
+          PATTERN: ${{ inputs.strings }}
+        run: |
+          cd "$RUNNER_TEMP/steam/unpacked"
+          for f in steamclient64.dll tier0_s64.dll; do
+            echo "== $f"
+            strings -a -n 3 "$f" | grep -E -- "$PATTERN" | sort -u | head -300
+            strings -a -n 3 -e l "$f" | grep -E -- "$PATTERN" | sort -u | head -100
+          done
       - name: Remove the client files
         if: always()
         run: rm -rf "$RUNNER_TEMP/steam"
