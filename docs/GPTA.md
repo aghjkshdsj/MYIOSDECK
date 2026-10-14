@@ -39,6 +39,11 @@ row below. Interrupted or defective trials are recorded separately.
 | 2efd5a0 | [38336924280](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38336924280) | 25.32% | 28.76% | 8.15% | 13.94% |
 | 845e2ab | [38409262613](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38409262613) | 23.88% | 28.18% | 8.49% | 13.96% |
 | 39daaf6 | [38409596148](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38409596148) | 23.76% | 29.39% | 8.34% | 14.03% |
+| ede3693 | [38450894640](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38450894640) | 27.04% | 31.41% | 8.34% | 13.97% |
+| f087717 | [38455426012](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38455426012) | 26.96% | 31.09% | 8.29% | 13.98% |
+| d13fd8f | [38455809669](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38455809669) | 26.50% | 31.39% | 8.17% | 14.00% |
+| 8285258 | [38456267739](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38456267739) | 27.69% | 31.78% | 8.20% | 13.96% |
+| 11de320 | [38458064927](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38458064927) | 26.28% | 26.94% | 8.40% | 13.98% |
 
 The third trial (result-width branches and simplified floating comparisons)
 regressed. Its ARM64, x86 and iOS gates passed. That trial is rolled back in
@@ -140,13 +145,23 @@ run is an inherited FXR baseline, not a new speed improvement. The second adds
 single-dispatch SSE memory arithmetic and direct result-only flag checks.
 GPTA iPhone performance is **not measured**.
 
-The trace-local XMM allocation trial is **not measured**. It selects eight
+The trace-local XMM allocation trial passed every gate, including the same
+Windows state checks with allocation enabled, but regressed. The standard
+float profile shows map-entry overhead. It selects eight
 full vectors by uniform counts of explicit operands, breaking ties by guest
 register number. Each selected set has a stable permutation; constants,
 symbols, addresses and checksums never participate. External block entries
 adapt the vector map, while internal trace edges keep it. Unpinned physical
 slots use a separate CPU bank, and FXI fallbacks receive architectural XMM
 state and original operand indices. The hot uop stride stays unchanged.
+
+The next adapter trial is **not measured**. Traces with no explicit vector
+operands retain the caller's map. Direct links can skip an equal-map adapter
+only when their source establishes an immutable map; map-free sources retain
+the target adapter because different callers can supply different maps.
+Indirect caches continue to point at complete block entries. A differential
+case reaches one vector target through a shared map-free jump under different
+incoming maps.
 
 Windows mode defaults to the identity permutation. CI additionally enables
 the allocation trial with `GPTA_XMAP_WINDOWS=1` and repeats the same native

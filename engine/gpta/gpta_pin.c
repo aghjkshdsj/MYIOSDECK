@@ -29,6 +29,8 @@
 #include "gpta_pin_copyshift.h"
 
 static Uop *architectural_uop(FxiCpu *c, Uop *u, Uop *original);
+static GPTA_CC void p_xentry(GPTA_PARAMS);
+enum { GPTA_FIXED_XMAP = 16 };   // fdir: this trace establishes an immutable vector map
 
 static uint16_t k_cctab[16];   // cmov truth tables per condition code (pcond_tab)
 
@@ -42,8 +44,10 @@ static uint16_t k_cctab[16];   // cmov truth tables per condition code (pcond_ta
         WIN_SPILL();                                                                       \
         c->gpta_phase = GPTA_PH_LOOKUP;                                                      \
         Block *b = fxi_lookup(c, (RIP));                                                   \
-        if (b != fxi_stop) __atomic_store_n(&(SLOT), b->u, __ATOMIC_RELEASE);              \
-        PGO(b->u);                                                                         \
+        Uop *entry = b->u;                                                                 \
+        if ((u->fdir & GPTA_FIXED_XMAP) && entry->p == p_xentry && entry->imm == c->gpta_xmap) entry++; \
+        if (b != fxi_stop) __atomic_store_n(&(SLOT), entry, __ATOMIC_RELEASE);                \
+        PGO(entry);                                                                         \
     }
 DEF_MISS(p_miss_t, u->ulink, u->imm)     // jump, call or taken branch: the target in imm
 DEF_MISS(p_miss_f, u->ulink2, u->aux)    // a conditional branch's fallthrough (aux)
@@ -297,13 +301,16 @@ static Uop *architectural_uop(FxiCpu *c, Uop *u, Uop *original) {
 // addresses or identity. Sorting each selected set by register number gives
 // equal sets an equal map across separately decoded traces.
 static uint64_t vector_map(Block **seg, int nseg) {
-    unsigned uses[16] = { 0 }, selected = 0;
+    unsigned uses[16] = { 0 }, selected = 0, total = 0;
     for (int i = 0; i < nseg; i++) for (uint32_t j = 0; j < seg[i]->n; j++) {
         const Uop *u = &seg[i]->u[j];
         unsigned f = vector_fields(find(u->fn));
-        if ((f & 1) && u->dst < 16) uses[u->dst]++;
-        if ((f & 2) && u->src < 16) uses[u->src]++;
+        if ((f & 1) && u->dst < 16) { uses[u->dst]++; total++; }
+        if ((f & 2) && u->src < 16) { uses[u->src]++; total++; }
     }
+    // No explicit vector operand depends on a physical slot. Fallbacks still
+    // spill through the current map, so this trace can retain its caller's map.
+    if (!total) return 0;
     for (unsigned k = 0; k < 8; k++) {
         unsigned best = 16;
         for (unsigned r = 0; r < 16; r++) if (!(selected & (1u << r)) &&
@@ -1200,8 +1207,10 @@ Block *gpta_lower(struct Fxi *vm, Block *b) {
     Block *seg[TRACE_SEGS];
     int edge[TRACE_SEGS], ns = g_traces ? find_trace(vm, b, seg, edge) : 0, nseg = ns ? ns : 1;
     if (!ns) seg[0] = b;
-    uint64_t xmap = g_win && !g_xmap_windows ? GPTA_XIDENTITY : vector_map(seg, nseg);
-    for (int i = 0; i < nseg; i++) map_vectors(seg[i], xmap);
+    uint64_t xmap = vector_map(seg, nseg);
+    if (xmap && g_win && !g_xmap_windows) xmap = GPTA_XIDENTITY;
+    if (xmap) for (int i = 0; i < nseg; i++) map_vectors(seg[i], xmap);
+    unsigned prefix = xmap != 0;
     Out o[TRACE_SEGS];
     int m[TRACE_SEGS], off[TRACE_SEGS], soff[TRACE_SEGS], M = 0, S = 0;
     for (int i = 0; i < nseg; i++) {
@@ -1220,36 +1229,43 @@ Block *gpta_lower(struct Fxi *vm, Block *b) {
     if (!ns && nseg > 1) {   // the first block alone
         for (int i = 1; i < nseg; i++) { free(o[i].out); free(seg[i]); }
         nseg = 1; M = m[0]; S = o[0].np;
+        if (xmap && !vector_map(seg, nseg)) { xmap = 0; prefix = 0; }
     }
     int copies = 1;
     if (ns) { copies = g_trace_uops / M; if (copies > TRACE_COPIES) copies = TRACE_COPIES; if (copies < 1) copies = 1; }
     if (copies > 1 && (copies & 1)) copies--;   // even: the replicas alternate between copies (replicate)
-    uint32_t n = (uint32_t)(1 + copies * M + S);
+    uint32_t n = (uint32_t)(prefix + copies * M + S);
     Block *nb = malloc(sizeof(Block) + sizeof(Uop) * ((size_t)n + 1));
     nb->rip = b->rip;
     nb->n = n;
-    memset(&nb->u[0], 0, sizeof nb->u[0]);
-    nb->u[0].p = p_xentry;
-    nb->u[0].imm = xmap;
-    nb->u[0].rip = b->rip;
-    nb->u[0].fdir = GPTA_NOBOUND;
+    if (prefix) {
+        memset(&nb->u[0], 0, sizeof nb->u[0]);
+        nb->u[0].p = p_xentry;
+        nb->u[0].imm = xmap;
+        nb->u[0].rip = b->rip;
+        nb->u[0].fdir = GPTA_NOBOUND;
+    }
     memset(&nb->u[n], 0, sizeof nb->u[n]);
     nb->u[n].p = p_stop;   // allocated lookahead sentinel, never part of the guest block
     for (int c = 0; c < copies; c++)
-        for (int i = 0; i < nseg; i++) memcpy(&nb->u[1 + c * M + off[i]], o[i].out, sizeof(Uop) * (size_t)m[i]);
-    for (int i = 0; i < nseg; i++) memcpy(&nb->u[1 + copies * M + soff[i]], o[i].out + m[i], sizeof(Uop) * (size_t)o[i].np);
+        for (int i = 0; i < nseg; i++) memcpy(&nb->u[prefix + c * M + off[i]], o[i].out, sizeof(Uop) * (size_t)m[i]);
+    for (int i = 0; i < nseg; i++) memcpy(&nb->u[prefix + copies * M + soff[i]], o[i].out + m[i], sizeof(Uop) * (size_t)o[i].np);
+    // A shared direct link may bypass an equal-map adapter only when the
+    // source establishes its own map. Map-free callers can arrive under
+    // different maps, so their cached links must retain the target adapter.
+    if (prefix) for (uint32_t k = prefix; k < n; k++) nb->u[k].fdir |= GPTA_FIXED_XMAP;
 #ifdef GPTA_PROFILE
     for (uint32_t k = 0; k < n; k++) nb->u[k].prof = 0;
 #endif
     for (int c = 0; c < copies; c++)
         for (int i = 0; i < nseg; i++) {
-            int base = 1 + c * M + off[i];
+            int base = prefix + c * M + off[i];
             for (int k = 0; k < o[i].np; k++) {   // point the branch's edges at their flag stubs
-                Uop *br = &nb->u[base + o[i].patch[k].at], *st = &nb->u[1 + copies * M + soff[i] + (o[i].patch[k].stub - m[i])];
+                Uop *br = &nb->u[base + o[i].patch[k].at], *st = &nb->u[prefix + copies * M + soff[i] + (o[i].patch[k].stub - m[i])];
                 if (o[i].patch[k].edge) br->ulink2 = st; else br->ulink = st;
             }
             if (ns) {   // the trace edge: the next block, or back to the start (the next copy's)
-                Uop *t = &nb->u[base + m[i] - 1], *to = i + 1 < nseg ? t + 1 : &nb->u[1 + (c + 1 < copies ? (c + 1) * M : 0)];
+                Uop *t = &nb->u[base + m[i] - 1], *to = i + 1 < nseg ? t + 1 : &nb->u[prefix + (c + 1 < copies ? (c + 1) * M : 0)];
                 if (edge[i]) t->ulink2 = to; else t->ulink = to;
                 // No link lookup is needed for a statically adjacent trace edge.
                 // Match the original handler so unrelated uop fields cannot opt in.
@@ -1271,7 +1287,7 @@ Block *gpta_lower(struct Fxi *vm, Block *b) {
                 }
             }
         }
-    if (g_replicas) replicate(nb->u + 1, M, copies);
+    if (g_replicas) replicate(nb->u + prefix, M, copies);
     for (int i = 0; i < nseg; i++) { free(o[i].out); free(seg[i]); }
     return nb;
 }
