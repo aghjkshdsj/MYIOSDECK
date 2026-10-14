@@ -39,6 +39,7 @@
 
 static Uop *architectural_uop(FxiCpu *c, Uop *u, Uop *original);
 static GPTA_CC void p_xentry(GPTA_PARAMS);
+extern int gpta_diag_flags_in(struct Fxi *,uint64_t,int);
 enum { GPTA_FIXED_XMAP = 16 };   // fdir: this trace establishes an immutable vector map
 
 static uint16_t k_cctab[16];   // cmov truth tables per condition code (pcond_tab)
@@ -500,7 +501,7 @@ static void replicate(Uop *u, int M, int copies) {
 
 // Diagnostic knobs, for A/B runs in CI (the defaults are what ships): GPTA_TRACES=0 no loop traces,
 // GPTA_TRACE_UOPS=n the uop budget for a trace's copies, GPTA_REPLICAS=0 no handler replicas.
-static int g_traces = 1, g_trace_uops = 48, g_replicas = 1, g_win_force, g_xmap_windows;
+static int g_traces = 1, g_trace_uops = 48, g_replicas = 1, g_win_force, g_xmap_windows, g_trace_log;
 static int g_win;   // lowering for Windows mode (gpta_lower sets it; lowering is serialised)
 // GPTA_WINLOWER=1: lower as for Windows mode (the exact-state test, engine/gpta-probe/winstate_test.c)
 static void knobs(void) {
@@ -510,6 +511,7 @@ static void knobs(void) {
     if ((e = getenv("GPTA_TRACE_UOPS"))) g_trace_uops = atoi(e);
     if ((e = getenv("GPTA_REPLICAS"))) g_replicas = atoi(e);
     if ((e = getenv("GPTA_WINLOWER"))) g_win_force = atoi(e);
+    if ((e = getenv("GPTA_TRACE_LOG"))) g_trace_log = atoi(e);
 }
 
 static void init_desc(void) {
@@ -1478,6 +1480,7 @@ Block *gpta_lower(struct Fxi *vm, Block *b) {
     g_win = (vm && vm->windows) || g_win_force;
     Block *seg[TRACE_SEGS];
     int edge[TRACE_SEGS], ns = g_traces ? find_trace(vm, b, seg, edge) : 0, nseg = ns ? ns : 1;
+    int trace_candidate = ns, trace_reject = ns ? 0 : 1;
     if (!ns) seg[0] = b;
     uint64_t xmap = vector_map(seg, nseg);
     uint64_t xstart = b->rip, xend = 0;
@@ -1506,10 +1509,12 @@ Block *gpta_lower(struct Fxi *vm, Block *b) {
     }
     // A trace edge whose successor reads the flags needs its stub: no trace then.
     for (int i = 0; ns && i < nseg; i++) {
-        if (m[i] < 1) ns = 0;
-        for (int k = 0; ns && k < o[i].np; k++) if (o[i].patch[k].edge == edge[i]) ns = 0;
+        if (m[i] < 1) { ns = 0; trace_reject = 2; }
+        for (int k = 0; ns && k < o[i].np; k++) if (o[i].patch[k].edge == edge[i]) {
+            ns = 0; trace_reject = 3;
+        }
     }
-    if (M > TRACE_MAX) ns = 0;
+    if (M > TRACE_MAX) { ns = 0; trace_reject = 4; }
     if (!ns && nseg > 1) {   // the first block alone
         for (int i = 1; i < nseg; i++) { free(o[i].out); free(seg[i]); }
         nseg = 1; M = m[0]; S = o[0].np;
@@ -1593,6 +1598,19 @@ Block *gpta_lower(struct Fxi *vm, Block *b) {
         PFn base = (PFn)(uintptr_t)u->imm, next = (PFn)(uintptr_t)u->aux;
         if (u->p != base) next = (PFn)(uintptr_t)u->ulink2;
         nb->u[k+1].p = next;
+    }
+    if (g_trace_log) {
+        static const char *const reasons[] = { "none","no-cycle","empty-body","flag-stub","size" };
+        uint64_t base = (uint64_t)(uintptr_t)vm->image;
+        uint64_t rip = b->rip >= base && b->rip-base < vm->image_size ? b->rip-base : b->rip;
+        fprintf(stderr,"[gpta-trace] rip=%#llx candidate=%d active=%d body=%d copies=%d reject=%s",
+            (unsigned long long)rip,trace_candidate,ns,M,copies,reasons[trace_reject]);
+        for (int i = 0; i < nseg; i++) {
+            uint64_t targets[2]; int count = trace_succ(seg[i],targets);
+            for (int j = 0; j < count; j++)
+                fprintf(stderr," seg%d.edge%d.flags=%d",i,j,gpta_diag_flags_in(vm,targets[j],!g_win));
+        }
+        fputc('\n',stderr);
     }
     for (int i = 0; i < nseg; i++) { free(o[i].out); free(seg[i]); }
     return nb;

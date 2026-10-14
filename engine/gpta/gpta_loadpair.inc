@@ -19,6 +19,7 @@ X9(LP_NEXT_E,LP_SCALE)
 #define LP_FIRST2(I,B,E,D,SC) \
     PH p_lp_first##SC##_##D##_##E##_##B##_##I(GPTA_PARAMS) { \
         XW_##D(xld((const void *)(uintptr_t)(g##B + (g##I << SC) + (uint64_t)u->disp))); \
+        GPTA_COUNT(u+1); \
         __attribute__((musttail)) return p_lp_next##SC##_##E##_##B##_##I GPTA_CALL(u+1); }
 #define LP_FIRST_B(B,E,D,SC) LP_I17(LP_FIRST,B,E,D,SC)
 #define LP_FIRST_E(E,D,SC) R17C(LP_FIRST_B,E,D,SC)

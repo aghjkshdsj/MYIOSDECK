@@ -16,5 +16,9 @@ for spec in integer:3 float:16 memory:50 branch:6 simd:150; do
     sudo "$PERF" report -i "$OUT/$k.data" --stdio --sort symbol > "$OUT/$k.report"
     cat "$OUT/$k.stat"
     head -45 "$OUT/$k.report"
+    # Separate diagnostic execution, never enabled in measured samples.
+    # This workflow profiles only the standard guest, never held-out code.
+    GPTA_TRACE_LOG=1 taskset -c 1 "$ENG" "$G/bench_sse2.elf" "$k" "$s" \
+        > "$OUT/$k.trace.stdout" 2> "$OUT/$k.trace.log"
 done
 sudo chmod -R a+rX "$OUT"

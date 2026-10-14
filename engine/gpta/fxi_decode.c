@@ -970,6 +970,11 @@ static int gpta_live_in(struct Fxi *vm, uint64_t rip, int unary_flags) {
     return live | (cflive << 1) | (noncf << 2);   // GPTA
 }
 
+// GPTA: read-only flag-liveness diagnostics, invoked only by explicit trace logs.
+int gpta_diag_flags_in(struct Fxi *vm, uint64_t rip, int unary_flags) {
+    return gpta_live_in(vm,rip,unary_flags);
+}
+
 Block *gpta_decode(struct Fxi *vm, uint64_t rip) {   // GPTA: fxi_translate without the lowering
     int unary_flags = !vm->windows && !getenv("GPTA_WINLOWER");
     Dec *d = malloc(sizeof *d);

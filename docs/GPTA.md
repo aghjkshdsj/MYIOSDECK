@@ -64,6 +64,7 @@ row below. Interrupted or defective trials are recorded separately.
 | d34483e | [38498960864](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38498960864) | 28.43% | 31.15% | 8.27% | 13.93% |
 | 650279c | [38499323627](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38499323627) | 28.71% | 30.80% | 8.32% | 13.98% |
 | fe5a70c | [38500223751](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38500223751) | 27.87% | 30.60% | 8.25% | 13.97% |
+| 9a01af4 | [38641833700](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38641833700) | 29.02% | 31.29% | 8.33% | 13.97% |
 
 The third trial (result-width branches and simplified floating comparisons)
 regressed. Its ARM64, x86 and iOS gates passed. That trial is rolled back in
@@ -427,7 +428,17 @@ replica map has additional capacity for them. Differential tests cover all
 sixteen vector destinations, source aliases, all scales, positive/negative
 displacements, negative indices, equal address operands, upper lanes and
 flags. Fault sites 57-60 check exact pre-load state in both Windows allocation
-modes. The recovery audit is unchanged. This trial is not measured yet.
+modes. The recovery audit is unchanged. This passed all gates in 38641833700;
+the standard SIMD timing improved, while both means remain below 50%.
+
+The next diagnostic revision logs trace candidates, rejection reasons, body
+sizes, copy counts and successor flag liveness under `GPTA_TRACE_LOG=1`.
+Flag masks distinguish any flags, carry and non-carry flags. The workflow
+enables this only in separate standard-guest diagnostic executions; measured
+samples and held-out programs never enable it. This investigates the generic
+DEC/branch handler still sampled in the standard integer profile. The optional
+dispatch counter also counts the new direct continuation; it compiles away
+in ordinary builds. No execution handler semantics change in this revision.
 
 Windows mode defaults to the identity permutation. CI additionally enables
 the allocation trial with `GPTA_XMAP_WINDOWS=1` and repeats the same native
