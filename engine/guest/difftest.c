@@ -1413,6 +1413,37 @@ static void gpta_cf_only(void) {
     out("gpta_cf_only", h);
 }
 
+// A flag-killing loop entry makes the unary pair's backedge flag-independent.
+// Exercise both adjacent-edge choices and final exits from replicated traces.
+#define UT_TEST(OP,REG,START,BR) do { \
+    u64 a = (START), r, f; \
+    __asm__ volatile("movq %[a], %%rcx\n\tstc\n\t1: xorq %%rdx, %%rdx\n\t" \
+        OP " " REG "\n\t" BR "\n\tpushfq\n\tpopq %[f]\n\tmovq %%rcx, %[r]\n\t" \
+        "testq %%rcx, %%rcx" \
+        : [r] "=m"(r), [f] "=&r"(f) : [a] "r"(a) : "rcx", "rdx", "cc", "memory"); \
+    h = mix(mix(h,r),f & ARITH); \
+} while (0)
+#define UT_BOTH(OP,REG,START,CC,INV) \
+    UT_TEST(OP,REG,START,"j" CC " 1b"); \
+    UT_TEST(OP,REG,START,"j" INV " 2f\n\tjmp 1b\n\t2:")
+#define UT_WIDTH(SZ,REG,HIGH,NEG,MAX,MIN) \
+    UT_BOTH("inc" SZ,REG,(NEG)+6ull,"e","ne"); \
+    UT_BOTH("dec" SZ,REG,(HIGH)|1ull,"e","ne"); \
+    UT_BOTH("inc" SZ,REG,(NEG),"ne","e"); \
+    UT_BOTH("dec" SZ,REG,(HIGH)|7ull,"ne","e"); \
+    UT_BOTH("inc" SZ,REG,(NEG),"s","ns"); \
+    UT_BOTH("dec" SZ,REG,(MIN)+2ull,"s","ns"); \
+    UT_BOTH("inc" SZ,REG,(MAX)-2ull,"ns","s"); \
+    UT_BOTH("dec" SZ,REG,(HIGH)|6ull,"ns","s")
+static void gpta_unary_trace(void) {
+    u64 h = 14695981039346656037ull;
+    for (int i = 0; i < 32; i++) {
+        u64 upper = val() & 0xffffffff00000000ull;
+        UT_WIDTH("l","%%ecx",upper,upper | 0xfffffff9ull,upper | 0x7fffffffull,upper | 0x80000000ull);
+        UT_WIDTH("q","%%rcx",0,~6ull,0x7fffffffffffffffull,0x8000000000000000ull);
+    }
+    out("gpta_unary_trace",h);
+}
 typedef void (*test_fn)(void);
 #define ALU_LIST(OP) OP##_q, OP##_l, OP##_w, OP##_b, OP##_mr_q, OP##_rm_l, OP##_mr_b,
 static const test_fn kTests[] = {
@@ -1443,7 +1474,7 @@ static const test_fn kTests[] = {
     fz_o, fz_no, fz_b, fz_ae, fz_e, fz_ne, fz_be, fz_a, fz_s, fz_ns, fz_p, fz_np, fz_l, fz_ge, fz_le, fz_g,
     fc_o, fc_no, fc_b, fc_ae, fc_e, fc_ne, fc_be, fc_a, fc_s, fc_ns, fc_p, fc_np, fc_l, fc_ge, fc_le, fc_g,
     fz_call, fz_index, fz_xindex, fz_3op, fz_3gap, fz_x3, fz_hoist, gpta_xmem, gpta_result_flags, gpta_xhigh, gpta_cf_flow,
-    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow, gpta_fcj_trace, gpta_jresult_trace, gpta_immstores, gpta_x3high, gpta_step_trace, gpta_shift_counts, gpta_copy_shift_counts, gpta_unary_edges, gpta_alu_memory, gpta_xmm_lane_state, gpta_scalar_mem, gpta_unary_flag_inputs, gpta_xmap_transitions, gpta_cf_only,
+    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow, gpta_fcj_trace, gpta_jresult_trace, gpta_immstores, gpta_x3high, gpta_step_trace, gpta_shift_counts, gpta_copy_shift_counts, gpta_unary_edges, gpta_alu_memory, gpta_xmm_lane_state, gpta_scalar_mem, gpta_unary_flag_inputs, gpta_xmap_transitions, gpta_cf_only, gpta_unary_trace,
 };
 
 int guest_main(int argc, char **argv) {

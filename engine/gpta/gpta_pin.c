@@ -28,6 +28,7 @@
 #include "gpta_pin_xscalar.h"
 #include "gpta_pin_copyshift.h"
 #include "gpta_pin_cfonly.h"
+#include "gpta_pin_unary_trace.h"
 
 static Uop *architectural_uop(FxiCpu *c, Uop *u, Uop *original);
 static GPTA_CC void p_xentry(GPTA_PARAMS);
@@ -389,6 +390,7 @@ static void rmap_init(void) {
     RMAP(t_sii_trace); RMAP(t_sri_trace);
     RMAP(t_shconst);
     RMAP(t_cf_rr); RMAP(t_cf_ri);
+    RMAP(t_fid_trace);
     RMAP(t_csh_shl); RMAP(t_csh_shr); RMAP(t_csh_sar); RMAP(t_csh_rol); RMAP(t_csh_ror);
     RMAP(t_xlz); RMAP(t_xsz);
     RMAP(t_am_add); RMAP(t_am_sub); RMAP(t_am_and); RMAP(t_am_or); RMAP(t_am_xor);
@@ -1316,6 +1318,14 @@ Block *gpta_lower(struct Fxi *vm, Block *b) {
                         }
                 }
                 if (to == t + 1) {
+                    if (t->dst < 128 && !(t->dst & 7)) {
+                        unsigned D = t->dst >> 3;
+                        for (int inc = 0; inc < 2; inc++)
+                            for (int sz = 0; sz < 2; sz++)
+                                for (int cc = 0; cc < 4; cc++)
+                                    if (t->p == t_fid[inc][sz][cc][D])
+                                        t->p = t_fid_trace[edge[i]][inc][sz][cc][D];
+                    }
                     // Arithmetic adjacent-edge handlers remain compiled for
                     // comparison, but the measured front-end regression in
                     // iteration 21 warrants reverting their selection.
@@ -1435,6 +1445,7 @@ static void hidx_build(void) {
     hidx_tab((const PFn *)t_shconst, sizeof t_shconst / sizeof(PFn));
     hidx_tab((const PFn *)t_cf_rr, sizeof t_cf_rr / sizeof(PFn));
     hidx_tab((const PFn *)t_cf_ri, sizeof t_cf_ri / sizeof(PFn));
+    hidx_tab((const PFn *)t_fid_trace, sizeof t_fid_trace / sizeof(PFn));
 #define CSH_HIDX(N) hidx_tab((const PFn *)N, sizeof N / sizeof(PFn));
     CSH_HIDX(t_csh_shl) CSH_HIDX(t_csh_shr) CSH_HIDX(t_csh_sar) CSH_HIDX(t_csh_rol) CSH_HIDX(t_csh_ror)
 #undef CSH_HIDX

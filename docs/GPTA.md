@@ -45,6 +45,7 @@ row below. Interrupted or defective trials are recorded separately.
 | 8285258 | [38456267739](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38456267739) | 27.69% | 31.78% | 8.20% | 13.96% |
 | 11de320 | [38458064927](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38458064927) | 26.28% | 26.94% | 8.40% | 13.98% |
 | 9a102a0 | [38488394754](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38488394754) | 27.01% | 31.16% | 8.27% | 13.96% |
+| f6ce896 | [38488865639](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38488865639) | 27.63% | 31.33% | 8.30% | 13.98% |
 
 The third trial (result-width branches and simplified floating comparisons)
 regressed. Its ARM64, x86 and iOS gates passed. That trial is rolled back in
@@ -165,7 +166,8 @@ Indirect caches continue to point at complete block entries. A differential
 case reaches one vector target through a shared map-free jump under different
 incoming maps.
 
-The carry-only flag trial is **not measured**. A separate backward liveness
+The carry-only flag trial passed every gate; both means remain below 50%.
+A separate backward liveness
 bit tracks non-carry arithmetic flags. When only carry remains live, register
 and immediate ADD/SUB/AND/OR/XOR retain their usual lazy kind but update only
 the operands its carry formula needs. INC/DEC replace non-carry flags; unknown
@@ -182,6 +184,14 @@ The first map still comes from uniform explicit-operand counts. Every guest
 instruction and branch remains interpreted. Windows retains the preceding
 allocation policy. Differential coverage alternates vector subsets across
 conditional paths and an inner loop while keeping all sixteen vectors live.
+
+The unary adjacent-edge trial is **not measured**. Existing register INC/DEC
+plus ZF/SF branch pairs receive handlers that use a successor proven adjacent
+by trace construction. Other edges retain the existing links and flag exit
+stubs; every unary instruction and branch still executes. Handler replicas
+and host-state indexing include the new forms. Differential coverage checks
+both widths, all four supported conditions, both adjacent edges and final
+exits after replicated copies, including sign transitions and zero extension.
 
 Windows mode defaults to the identity permutation. CI additionally enables
 the allocation trial with `GPTA_XMAP_WINDOWS=1` and repeats the same native
