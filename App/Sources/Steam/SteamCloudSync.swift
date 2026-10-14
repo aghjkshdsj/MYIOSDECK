@@ -667,16 +667,19 @@ final class SteamCloudSync: ObservableObject {
         do {
             let context = try await context(appID, online: true)
             var (list, _, plan) = try await compare(appID, context)
-            var changed = false
+            var done: [String] = []
             if !plan.download.isEmpty {
-                try await download(appID, plan.download, context, reason: "before download")
-                changed = true
+                let n = try await download(appID, plan.download, context, reason: "before download")
+                done.append("downloaded \(n) save\(n == 1 ? "" : "s")")
             }
             if !plan.upload.isEmpty {
-                try await upload(appID, plan.upload, context)
-                changed = true
+                let n = try await upload(appID, plan.upload, context)
+                done.append("uploaded \(n) save\(n == 1 ? "" : "s")")
             }
-            if changed { (list, _, plan) = try await compare(appID, context) }
+            // The comparison after a transfer is what records uploaded files as in sync: a cloud
+            // that does not list an upload yet shows it as still changed here (uploaded again
+            // next time), never as changed in the cloud.
+            if !done.isEmpty { (list, _, plan) = try await compare(appID, context) }
             let clear = plan.conflicts.isEmpty && plan.download.isEmpty && plan.upload.isEmpty
             update(appID) { r in
                 r.problem = nil
@@ -686,10 +689,22 @@ final class SteamCloudSync: ObservableObject {
             }
             var state = games[appID] ?? GameState()
             state.phase = .idle
-            state.lastResult = clear ? "In sync with Steam Cloud." : "\(plan.conflicts.count) save\(plan.conflicts.count == 1 ? "" : "s") need your choice."
+            var did = ""
+            if !done.isEmpty {
+                let text = done.joined(separator: ", ")
+                did = String(text.prefix(1)).uppercased() + String(text.dropFirst()) + " (replaced copies are in save-backups). "
+            }
+            if !plan.conflicts.isEmpty {
+                state.lastResult = did + "\(plan.conflicts.count) save\(plan.conflicts.count == 1 ? "" : "s") need your choice."
+            } else if !clear {
+                state.lastResult = did + "Steam Cloud has not confirmed every transfer yet; they are checked again next time."
+            } else {
+                state.lastResult = did + "In sync with Steam Cloud."
+            }
             games[appID] = state
             SteamCloudBackups.prune(appID)
-            return clear ? nil : .conflicts(plan.conflicts.count)
+            if !plan.conflicts.isEmpty { return .conflicts(plan.conflicts.count) }
+            return clear ? nil : .failed("Steam Cloud has not confirmed the saves just copied. Try again in a moment.")
         } catch {
             let message = SteamSignIn.message(error)
             update(appID) { $0.problem = message }
@@ -702,7 +717,8 @@ final class SteamCloudSync: ObservableObject {
     /// Downloads the given cloud files into the prefix, all or nothing: every file is fetched and
     /// checked against Steam's SHA-1 first, then this device's copies they replace are backed up,
     /// then they are written (each atomically).
-    private func download(_ appID: Int, _ wanted: [SteamCloudEntry], _ context: Context, reason: String) async throws {
+    @discardableResult
+    private func download(_ appID: Int, _ wanted: [SteamCloudEntry], _ context: Context, reason: String) async throws -> Int {
         setPhase(appID, .downloading(done: 0, of: wanted.count))
         var fetched: [(entry: SteamCloudEntry, url: URL, data: Data)] = []
         var total = 0
@@ -733,10 +749,8 @@ final class SteamCloudSync: ObservableObject {
                                             size: item.entry.cloudSize, time: item.entry.cloudTime)
         }
         update(appID) { r in for (k, v) in settled { r.files[k] = v } }
-        var state = games[appID] ?? GameState()
-        state.lastResult = "Downloaded \(fetched.count) save\(fetched.count == 1 ? "" : "s")" + (backup.isEmpty ? "." : "; this device's copies are in save-backups.")
-        games[appID] = state
         SteamLog.event("[steam-cloud] app=\(appID) downloaded files=\(fetched.count) backed-up=\(backup.files.count)")
+        return fetched.count
     }
 
     /// Uploads the given device saves in one Steam upload batch, as close to all or nothing as
@@ -745,7 +759,8 @@ final class SteamCloudSync: ObservableObject {
     /// part commits none (each begun file is ended as failed) and fails the batch. Only a failure
     /// between two commits can leave part of a batch in the cloud; the next sync then sees those
     /// files as identical and retries the rest.
-    private func upload(_ appID: Int, _ wanted: [SteamCloudEntry], _ context: Context) async throws {
+    @discardableResult
+    private func upload(_ appID: Int, _ wanted: [SteamCloudEntry], _ context: Context) async throws -> Int {
         setPhase(appID, .uploading(done: 0, of: wanted.count))
         // The device files as they are now; each must still be what the comparison saw.
         var files: [(entry: SteamCloudEntry, data: Data, sha: Data, time: UInt64)] = []
@@ -758,7 +773,7 @@ final class SteamCloudSync: ObservableObject {
             let time = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate?.timeIntervalSince1970
             files.append((entry, data, sha, UInt64(max(0, time ?? Date().timeIntervalSince1970))))
         }
-        guard !files.isEmpty else { return }
+        guard !files.isEmpty else { return 0 }
         // Steam keeps no copy of a cloud file an upload replaces: keep one here first.
         let replaced = files.filter { !$0.entry.cloudSHA.isEmpty }
         if !replaced.isEmpty {
@@ -829,29 +844,24 @@ final class SteamCloudSync: ObservableObject {
             SteamLog.event("[steam-cloud] app=\(appID) upload abandoned before any commit: files=\(files.count) sent=\(begun.count)")
             throw error
         }
-        // 2: commit them all.
-        var settled: [String: SteamCloudRecord.FileState] = [:]
+        // 2: commit them all. Nothing is recorded as in sync here: the comparison that follows
+        // records what the cloud then lists.
         var done = 0
         do {
             for item in files {
                 guard try await commit(item, ok: true) else { throw SteamFileError.invalid("Steam did not accept a save file.") }
                 done += 1
-                settled[item.entry.key] = .init(state: .synced, sha: SteamCloudRecord.hex(item.sha), size: UInt64(item.data.count), time: item.time)
                 setPhase(appID, .uploading(done: files.count + done, of: files.count * 2))
             }
         } catch {
             for item in files.dropFirst(done) { _ = try? await commit(item, ok: false) }
             await complete(false)
-            update(appID) { r in for (k, v) in settled { r.files[k] = v } }
             SteamLog.event("[steam-cloud] app=\(appID) upload stopped after commits=\(done)/\(files.count)")
             throw error
         }
         await complete(true)
-        update(appID) { r in for (k, v) in settled { r.files[k] = v } }
-        var state = games[appID] ?? GameState()
-        state.lastResult = "Uploaded \(done) save\(done == 1 ? "" : "s")" + (replaced.isEmpty ? "." : "; the cloud's earlier copies are in save-backups.")
-        games[appID] = state
         SteamLog.event("[steam-cloud] app=\(appID) uploaded files=\(done) batch=ok")
+        return done
     }
 
     // MARK: Game sessions
