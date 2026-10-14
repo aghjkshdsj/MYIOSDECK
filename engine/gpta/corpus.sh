@@ -51,6 +51,12 @@ function reg64(o) {   # canonical register for dependency checks ("" for non-reg
     if (o ~ /\[/ || o ~ /^(0x|-?[0-9])/) return ""
     sub(/^e/, "r", o); sub(/[dwb]$/, "", o); return o
 }
+function address_key(o) {
+    sub(/ *#.*/, "", o); gsub(/ /, "", o)
+    if (o !~ /^\[/) return ""
+    gsub(/[+-]0x[0-9a-f]+/, "", o); gsub(/[+-][0-9]+/, "", o)
+    return o
+}
 /^@@FILE/ { mode = 1; delete endat; active = -1; prev = ""; prev2 = ""; p_movd = ""; pp_movd = ""; next }
 /^@@DIS/ { mode = 2; next }
 mode == 1 { endat[$1] = $2; next }
@@ -96,6 +102,18 @@ mode == 2 && /^ *[0-9a-f]+:\t/ {
         else if (prev ~ /^(add|sub) r(32|64),r(32|64)$/ && mn == "cmp" && rel == " [uses dst]") fam = "add/sub r,r ; cmp r (loop step)"
         else if (prev ~ /^movzx r32,m$/ && rel != "") fam = "movzx load ; use"
         if (fam != "") { famc[fam]++; if (inloop) lfamc[fam]++ }
+        # Candidate static direct-dispatch pairs. Keep separate instruction
+        # boundaries; this diagnostic selects no interpreter handler.
+        load128 = mn ~ /^mov(aps|ups|apd|upd|dqa|dqu)$/ && kind(d) == "x" && kind(s) == "m"
+        if (p_load128 && load128) {
+            kv = "consecutive 128-bit vector loads";
+            famc[kv]++; if (inloop) lfamc[kv]++
+            ak = address_key(s)
+            if (ak != "" && ak == p_address) {
+                kv = "consecutive 128-bit vector loads, same base/index/scale";
+                famc[kv]++; if (inloop) lfamc[kv]++
+            }
+        }
         # Arithmetic followed by a floating comparison of its result and a
         # branch. Count operand dependencies in the independent corpus, not
         # benchmark loops. Both operand orders are recorded separately.
@@ -140,6 +158,8 @@ mode == 2 && /^ *[0-9a-f]+:\t/ {
             k3 = "mov r,r ; independent reg op ; ALU/shift imm same dst (3-operand across one)"; famc[k3]++; if (inloop) lfamc[k3]++ }
     }
     pmn = mn
+    p_load128 = mn ~ /^mov(aps|ups|apd|upd|dqa|dqu)$/ && kind(d) == "x" && kind(s) == "m"
+    p_address = p_load128 ? address_key(s) : ""
     if (mn ~ /^(j|call|ret|jmp|ud2|hlt)/) { prev = ""; prev2 = ""; p_movd = ""; pp_movd = ""; next }
     prev2 = (prev == "" ? "" : prev); prev = shape; ppd = pd; pd = (mn ~ /^(push|cmp|test)/) ? "" : reg64(d)
     pp_movd = p_movd; p_movd = shape ~ /^mov r(32|64),r(32|64)$/ ? reg64(d) : ""
@@ -147,6 +167,10 @@ mode == 2 && /^ *[0-9a-f]+:\t/ {
 }
 END {
     printf "instructions: %d, in loop bodies: %d\n\n", total, ltotal
+    print "== consecutive vector-load candidates: exact all-code / loop-body counts"
+    for (k in famc) if (k ~ /^consecutive 128-bit vector loads/)
+        printf "%d %d %s\n", famc[k], lfamc[k], k
+    print ""
     print "== superinstruction families: all code / loop bodies (per mille of instructions)"
     for (k in famc) printf "%7.2f %7.2f  %s\n", 1000 * famc[k] / total, 1000 * lfamc[k] / ltotal, k | "sort -rn"
     close("sort -rn")

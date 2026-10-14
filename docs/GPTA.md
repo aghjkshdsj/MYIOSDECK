@@ -387,6 +387,17 @@ replication preserves them. Differential tests cover both comparison orders,
 all conditions, NaNs, both vector banks, taken/fallthrough paths, final
 backedges and live comparison flags on exit. This trial is not measured yet.
 
+A separate scalar-code-generation trial uses statically compiled ARM scalar
+FP instructions in the arithmetic/comparison family, inserting only the low
+result into the unchanged destination. This prevents the vector arithmetic
+and upper-lane restoration observed in the ARM evidence for 38500223751.
+Portable hosts retain the original C operations. Existing differential cases
+check arithmetic, upper lanes, aliases, both comparison orders, live flags
+and trace exits. This trial is not measured yet. Its accompanying independent
+corpus diagnostics count consecutive full-width vector loads, including the
+same-base/index/scale subset, with exact raw counts. The engine does not yet
+select a new consecutive-load family.
+
 The next indexed-load trial extends the existing independent-corpus load +
 arithmetic family to base + index * scale + displacement, retaining every
 architectural scale and ADD/SUB/MUL in packed and scalar single/double forms.

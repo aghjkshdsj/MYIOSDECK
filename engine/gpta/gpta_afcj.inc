@@ -3,6 +3,7 @@
 // The independent corpus selected the family. Preserve instruction semantics;
 // no guest loop is replaced with a host loop.
 #include "gpta_pin.h"
+#include "gpta_scalar_fp.h"
 #include "gpta_pin_afcj.h"
 #include "gpta_fcj_select.h"
 #define AF_C_0 XD_0
