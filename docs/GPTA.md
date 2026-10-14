@@ -522,6 +522,17 @@ and matching checksums. Native and engines use clang-19, -O2, and
 -ffp-contract=off. Record every sample and exit status; compute percentages
 from raw medians, means from exact ratios, and truncate displayed percentages.
 
+Iteration 64 (corpus diagnostics only) passed all gates:
+https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38649943519
+Standard mean 29.03%, held-out mean 31.05%, FXI 8.45% / 13.97%.
+No execution handler changed from iteration 63. Neither mean reaches 50%.
+
+The separate perf diagnostics now run the standard guests with a uniform
+100-times scale so startup and replica-table initialization do not dominate
+the samples. These executions are explicitly labelled PROFILE ONLY. All
+reported speed samples retain the original measure.py scales, five samples,
+rotating engine order and checksum checks. Held-out code is never profiled.
+
 Profile standard workloads with perf stat and perf record. Choose any new
 instruction-pair families from the independent corpus in engine/gpta/corpus.sh.
 Never replace a recognized guest loop with a host loop.

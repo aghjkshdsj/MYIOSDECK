@@ -9,10 +9,14 @@ PERF=$(find /usr/lib/linux-tools -name perf -type f | head -1)
 PERF=${PERF:-perf}
 for spec in integer:3 float:16 memory:50 branch:6 simd:150; do
     k=${spec%%:*}; s=${spec##*:}
+    # Longer diagnostic executions amortize process startup and replica-table
+    # construction. This does not change measure.py or any reported sample.
+    ps=$((s * 100))
+    printf 'PROFILE ONLY kernel=%s scale=%s (measurement scale remains %s)\n' "$k" "$ps" "$s"
     sudo "$PERF" stat -o "$OUT/$k.stat" -e cycles,instructions,branches,branch-misses,stall_frontend,stall_backend \
-        taskset -c 1 "$ENG" "$G/bench_sse2.elf" "$k" "$s"
+        taskset -c 1 "$ENG" "$G/bench_sse2.elf" "$k" "$ps"
     sudo "$PERF" record -q -o "$OUT/$k.data" -e cycles:u \
-        taskset -c 1 "$ENG" "$G/bench_sse2.elf" "$k" "$s"
+        taskset -c 1 "$ENG" "$G/bench_sse2.elf" "$k" "$ps"
     sudo "$PERF" report -i "$OUT/$k.data" --stdio --sort symbol > "$OUT/$k.report"
     cat "$OUT/$k.stat"
     head -45 "$OUT/$k.report"
