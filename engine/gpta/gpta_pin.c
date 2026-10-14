@@ -302,16 +302,75 @@ static Uop *architectural_uop(FxiCpu *c, Uop *u, Uop *original) {
     if ((f & 2) && u->src < 16) original->src = (uint16_t)XARCH(c->gpta_xmap, u->src);
     return original;
 }
-// Uniform static operand counts select a set, independent of guest constants,
-// addresses or identity. Sorting each selected set by register number gives
-// equal sets an equal map across separately decoded traces.
+static int xmem_index(const char *name);
+// A full vector overwrite needs no old destination. Scalar operations and
+// partial moves retain lanes, so their high-bank destination needs a read
+// as well as a write. This cost model follows the static handler semantics.
+static int vector_overwrite(const char *name) {
+    static const char *const names[] = { "movx","movq","sqrtps","sqrtpd","rcpps","rsqrtps",
+        "pshufd","pshuflw","pshufhw","cvtdq2ps","cvtdq2pd","cvtps2pd","cvtpd2ps",
+        "cvttps2dq","cvtps2dq","cvttpd2dq","cvtpd2dq" };
+    for (unsigned i = 0; i < sizeof names / sizeof names[0]; i++)
+        if (!strcmp(name,names[i])) return 1;
+    return 0;
+}
+static void vector_cost(unsigned *uses, const Uop *u) {
+    const Desc *d = find(u->fn);
+    unsigned f = vector_fields(d), reads_dst = 0, writes_dst = !!(f & 1), reads_src = !!(f & 2);
+    if (d && d->fam == FAM_X) {
+        const char *name = gpta_xops[d->a].name;
+        if (d->d) { writes_dst = 0; reads_dst = 1; }
+        else reads_dst = !vector_overwrite(name);
+        if (!d->b && u->src == u->dst) {
+            if (!strcmp(name,"pxor") || !strcmp(name,"pandn") ||
+                !strcmp(name,"pcmpeqb") || !strcmp(name,"pcmpeqw") || !strcmp(name,"pcmpeqd"))
+                reads_dst = reads_src = 0;
+            else if (!strcmp(name,"movx") || !strcmp(name,"movss") || !strcmp(name,"movsd"))
+                reads_dst = reads_src = writes_dst = 0;
+        }
+    } else if (d && d->fam == FAM_XI) reads_dst = 1;
+    else if (d && d->fam == FAM_XS && (f & 1)) {
+        reads_dst = (d->a >= XS_XGM && d->a < XS_GX) ||
+            (d->a >= XS_XG && d->a < XS_XG + XG_MOVD32) ||
+            d->a == XS_MOVLPS_RM || d->a == XS_MOVHPS_RM;
+    }
+    if ((f & 1) && u->dst < 16) uses[u->dst] += writes_dst + reads_dst;
+    if ((f & 2) && u->src < 16 && !(reads_dst && u->dst == u->src)) uses[u->src] += reads_src;
+}
+// Account for the existing corpus-selected vector pairs, whose first result
+// stays in a handler temporary instead of visiting the physical high bank.
+static int vector_pair_cost(unsigned *uses, const Uop *u, const Uop *v) {
+    const Desc *a = find(u->fn), *b = find(v->fn);
+    if (!a || !b || u->dst >= 16 || v->src >= 16 || b->fam != FAM_X || b->b || v->dst != u->dst) return 0;
+    if (a->fam == FAM_X && !a->b && !strcmp(gpta_xops[a->a].name,"movx") && x3_index(gpta_xops[b->a].name) >= 0) {
+        unsigned s = u->src, x = v->src == u->dst ? s : v->src;
+        if (s >= 16) return 0;
+        uses[u->dst]++; uses[s]++;
+        if (x != s) uses[x]++;
+        return 1;
+    }
+    int k = xmem_index(gpta_xops[b->a].name);
+    int width = a->fam == FAM_X && a->b && !strcmp(gpta_xops[a->a].name,"movx") ? 16 :
+        a->fam == FAM_XS && a->a == XS_MOVSS_RM ? 4 : a->fam == FAM_XS && a->a == XS_MOVSD_RM ? 8 : 0;
+    if (k >= 0 && u->index == R_ZERO && u->base <= R_ZERO && width == (k < 6 ? 16 : k < 9 ? 4 : 8)) {
+        uses[u->dst]++;
+        if (v->src != u->dst) uses[v->src]++;
+        return 1;
+    }
+    return 0;
+}
+// Uniform high-bank read/write costs select a set, independent of guest
+// constants, addresses or identity. Equal sets have an equal stable map.
 static uint64_t vector_map(Block **seg, int nseg) {
     unsigned uses[16] = { 0 }, selected = 0, total = 0;
     for (int i = 0; i < nseg; i++) for (uint32_t j = 0; j < seg[i]->n; j++) {
         const Uop *u = &seg[i]->u[j];
         unsigned f = vector_fields(find(u->fn));
-        if ((f & 1) && u->dst < 16) { uses[u->dst]++; total++; }
-        if ((f & 2) && u->src < 16) { uses[u->src]++; total++; }
+        if ((f & 1) && u->dst < 16) total++;
+        if ((f & 2) && u->src < 16) total++;
+        if (j + 1 < seg[i]->n && vector_pair_cost(uses,u,&seg[i]->u[j+1])) {
+            j++; total++;   // a pair always has explicit vector operands
+        } else vector_cost(uses,u);
     }
     // No explicit vector operand depends on a physical slot. Fallbacks still
     // spill through the current map, so this trace can retain its caller's map.

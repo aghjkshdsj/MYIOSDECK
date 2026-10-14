@@ -51,6 +51,7 @@ row below. Interrupted or defective trials are recorded separately.
 | f15a6a0 | [38489988449](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38489988449) | 27.62% | 31.29% | 8.24% | 14.02% |
 | 2a44b68 | [38490572829](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38490572829) | 24.77% | 30.73% | 8.31% | 13.97% |
 | 8930ebc | [38491164550](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38491164550) | 24.71% | 30.47% | 8.16% | 13.99% |
+| 2e34eab | [38491558263](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38491558263) | 28.16% | 30.58% | 8.31% | 13.98% |
 
 The third trial (result-width branches and simplified floating comparisons)
 regressed. Its ARM64, x86 and iOS gates passed. That trial is rolled back in
@@ -213,7 +214,8 @@ allocation policies; the unchanged assembly audit checks every new handler.
 
 The branch-layout trial passed every gate, but its standard branch kernel
 regressed sharply. The following rollback restores the preceding handler
-selection; that rollback is **not measured**. The unused variants remain
+selection; its independent run passed every gate and restored the branch
+timing, while both suite means remain below 50%. The unused variants remain
 compiled and indexed for reproducibility. Existing immediate-compare step
 pairs and unary zero/sign pairs use a handler selected from the layout of
 each actual copy: a proven adjacent edge steps directly, and other copies
@@ -248,6 +250,18 @@ check first-load faults and second-load faults after a completed GPR/vector
 update, including the second instruction's exact RIP, with both Windows
 allocation modes. Handler replicas and the unchanged recovery audit include
 every new handler.
+
+The vector memory-cost allocation trial is **not measured**. Instead of
+counting each operand mention once, allocation counts uniform high-bank
+reads and writes from instruction semantics: arithmetic/partial destinations
+need both, full overwrites need only a write, and aliased reads count once.
+The existing corpus-selected copy/arithmetic and load/arithmetic pairs keep
+their intermediate result in a handler temporary, so the model counts only
+their actual source reads and final destination write. No guest data,
+constants, symbols, checksums or program identity participate. Stable tie
+breaking, region policy and all architectural recovery paths are unchanged.
+The complete existing XMM differential and allocation-enabled Windows gates
+validate the newly chosen permutations.
 
 Windows mode defaults to the identity permutation. CI additionally enables
 the allocation trial with `GPTA_XMAP_WINDOWS=1` and repeats the same native
