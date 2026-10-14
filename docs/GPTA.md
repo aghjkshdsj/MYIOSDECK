@@ -59,6 +59,8 @@ row below. Interrupted or defective trials are recorded separately.
 | 45ee02a | [38493782478](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38493782478) | 28.08% | 29.78% | 8.49% | 14.00% |
 | 5ada1ce | [38494977196](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38494977196) | 28.69% | 30.61% | 8.32% | 13.96% |
 | 7d267f1 | [38495163093](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38495163093) | 28.41% | 31.05% | 8.27% | 13.96% |
+| 60ff6de | [38497514290](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38497514290) | 28.80% | 30.86% | 8.33% | 14.02% |
+| f9d296c | [38497748838](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38497748838) | 28.26% | 30.17% | 8.35% | 13.98% |
 
 The third trial (result-width branches and simplified floating comparisons)
 regressed. Its ARM64, x86 and iOS gates passed. That trial is rolled back in
@@ -318,7 +320,8 @@ followed by register XOR consuming the result, recording both operand roles.
 It still reads only independent system/library/Madeira programs. No new
 shift/XOR handler is selected before corpus evidence is available.
 
-The immediate shift/XOR pair trial is **not measured**. Its two operand roles
+The repaired immediate shift/XOR pair trial passed every gate in 38497514290.
+It did not improve standard integer timing. Its two operand roles
 are present in independent corpus run
 [38495163837](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38495163837).
 Same-width register SHL/SHR/SAR/ROL/ROR followed by XOR consuming the result
@@ -342,6 +345,10 @@ alongside the host handler disassembly and perf reports. This diagnoses why
 a newly selected corpus family may leave the sampled dominant handlers
 unchanged. Neither held-out source nor assembly nor profiles are inspected.
 This evidence-only workflow change does not change interpreter behavior.
+The ARM GNU objdump invocation in f9d296c produced an empty disassembly.
+The next diagnostic revision creates it on the x86 guest builder, checks
+that it contains instructions, and copies it into the ARM evidence. The
+engine remains unchanged. Both measured suite means remain below 50%.
 
 Windows mode defaults to the identity permutation. CI additionally enables
 the allocation trial with `GPTA_XMAP_WINDOWS=1` and repeats the same native

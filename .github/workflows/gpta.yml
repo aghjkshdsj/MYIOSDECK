@@ -41,6 +41,10 @@ jobs:
               -Wl,-z,norelro -Wl,-z,noexecstack -Wl,-z,max-page-size=0x4000 -Wl,-z,separate-code \
               -o "$RUNNER_TEMP/guests/${spec%%:*}.elf" "engine/guest/${spec##*:}.c"
           done
+          # GNU objdump on the ARM runner cannot disassemble x86 code.
+          # Produce this standard-only diagnostic on the x86 guest builder.
+          objdump -d --no-show-raw-insn -M intel "$RUNNER_TEMP/guests/bench_sse2.elf" > "$RUNNER_TEMP/standard_guest.dis"
+          test "$(wc -l < "$RUNNER_TEMP/standard_guest.dis")" -gt 10
       - name: Native reference outputs (for the gates on ARM64)
         run: |
           mkdir -p "$RUNNER_TEMP/native-out"
@@ -62,6 +66,7 @@ jobs:
             ${{ runner.temp }}/guests/*.elf
             ${{ runner.temp }}/native-out/*.txt
             ${{ runner.temp }}/pe/*.exe
+            ${{ runner.temp }}/standard_guest.dis
 
   compare:
     needs: guests
@@ -163,7 +168,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/profile"
           # Standard guest only. Never disassemble or profile held-out code.
-          objdump -d --no-show-raw-insn -M intel guests/bench_sse2.elf > "$RUNNER_TEMP/profile/standard_guest.dis"
+          cp "$(find in -name standard_guest.dis -print -quit)" "$RUNNER_TEMP/profile/standard_guest.dis"
           bash engine/gpta/profile.sh "$RUNNER_TEMP/gpta/gpta" "$PWD/guests" "$RUNNER_TEMP/profile"
       - uses: actions/upload-artifact@v5
         if: always()
