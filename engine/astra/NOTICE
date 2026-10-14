@@ -1,0 +1,8 @@
+Astra is independently authored code under GPL-3.0-or-later.
+No FXI implementation source has been copied into Astra.
+ci-test.sh/measure.py adapt the native-vs-interpreter comparison method from
+engine/fxi/ci-test.sh (MYIOSDECK contributors, GPL-3.0-or-later).
+native.c includes the project's unmodified GPL-3.0-or-later bench_kernels.h.
+Instruction reference: Intel 64 and IA-32 Architectures Software Developer's
+Manual, volumes 2A–2D. Clang language extensions are used for vector types,
+musttail, and (when supported) preserve_none.
