@@ -416,6 +416,13 @@ first-load faults and completed first results at second-load faults, including
 an aliased destination; existing site 56 also exercises the second boundary.
 This trial is not measured yet.
 
+The direct continuation now explicitly consumes its incoming destination
+through an empty fixed-register barrier before the load. The high-bank
+continuation uses a memory barrier. This prevents interprocedural optimization
+from discarding the first load's completed value when the second overwrites
+the same destination, and preserves the pre-second state at a fault. The
+existing new alias fault case checks that result. Recovery checks are unchanged.
+
 The next indexed-load trial extends the existing independent-corpus load +
 arithmetic family to base + index * scale + displacement, retaining every
 architectural scale and ADD/SUB/MUL in packed and scalar single/double forms.
