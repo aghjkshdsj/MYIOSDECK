@@ -62,6 +62,8 @@ row below. Interrupted or defective trials are recorded separately.
 | 60ff6de | [38497514290](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38497514290) | 28.80% | 30.86% | 8.33% | 14.02% |
 | f9d296c | [38497748838](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38497748838) | 28.26% | 30.17% | 8.35% | 13.98% |
 | d34483e | [38498960864](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38498960864) | 28.43% | 31.15% | 8.27% | 13.93% |
+| 650279c | [38499323627](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38499323627) | 28.71% | 30.80% | 8.32% | 13.98% |
+| fe5a70c | [38500223751](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38500223751) | 27.87% | 30.60% | 8.25% | 13.97% |
 
 The third trial (result-width branches and simplified floating comparisons)
 regressed. Its ARM64, x86 and iOS gates passed. That trial is rolled back in
@@ -361,7 +363,8 @@ immediate value, program identity or guest loop is recognized. Differential
 tests cover both orders for every scalar arithmetic operation and condition,
 low/high registers, aliases, upper lanes, NaNs and live exit flags. Static
 handler names now expand the operation macro before token pasting, making
-perf names distinguish the operations. This trial is not measured yet.
+perf names distinguish the operations. This passed all gates in 38499323627,
+but did not improve standard floating-point timing.
 
 A separate lowering-priority trial keeps an eligible arithmetic/COMIS/JCC
 suffix available instead of consuming its arithmetic instruction in an earlier
@@ -370,6 +373,19 @@ handler with its original precise boundary. This changes selection between
 existing general handlers, independent of program identity, values or loop
 shape. Differential tests add full register copies immediately before the
 arithmetic for both comparison orders and all conditions and operations.
+This passed every gate in 38500223751. The standard float timing worsened.
+Its standard perf report confirms the arithmetic/comparison handlers now
+select, and their ARM assembly still loads and compares links to detect
+adjacent successors at runtime.
+
+The next adjacency-hint trial marks each arithmetic/comparison trace copy's
+actual adjacent edge in private condition-byte bits. The handler can step
+directly on that edge, while the final backedge and unproved edges use the
+ordinary linked dispatch. It does not multiply the static condition tables.
+The flags are attached after each copy's actual destination is known;
+replication preserves them. Differential tests cover both comparison orders,
+all conditions, NaNs, both vector banks, taken/fallthrough paths, final
+backedges and live comparison flags on exit. This trial is not measured yet.
 
 The next indexed-load trial extends the existing independent-corpus load +
 arithmetic family to base + index * scale + displacement, retaining every

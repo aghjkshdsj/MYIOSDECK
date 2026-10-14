@@ -1544,6 +1544,61 @@ static void gpta_arith_float_branch(void) {
     }
     out("gpta_arith_float_branch",h);
 }
+#define AF_TRACE_CASE(OP,CMP,D,S,C,CC,ORDER) do { \
+    v2 r; u64 score; \
+    __asm__ volatile("movdqu %[a], %%xmm" #D "\n\t" \
+        "movdqu %[b], %%xmm" #S "\n\tmovdqu %[c], %%xmm" #C "\n\t" \
+        "movl $17, %%ecx\n\txorl %%eax, %%eax\n\t1:\n\t" \
+        OP " %%xmm" #S ", %%xmm" #D "\n\t" \
+        AF_COMPARE_##ORDER(CMP,D,C) "j" CC " 2f\n\t" \
+        "addq $3, %%rax\n\tjmp 3f\n\t2: addq $5, %%rax\n\t" \
+        "3: subl $1, %%ecx\n\tjnz 1b\n\tmovdqu %%xmm" #D ", %[r]" \
+        : [r] "=m"(r), "=&a"(score) : [a] "m"(a), [b] "m"(b), [c] "m"(c) \
+        : "rcx", "xmm" #D, "xmm" #S, "xmm" #C, "cc", "memory"); \
+    h = mix(vmix(h,r),score); \
+} while (0)
+#define AF_TRACE_REGS(OP,CMP,CC) \
+    AF_TRACE_CASE(OP,CMP,0,1,2,CC,0); AF_TRACE_CASE(OP,CMP,0,1,2,CC,1); \
+    AF_TRACE_CASE(OP,CMP,14,13,7,CC,0); AF_TRACE_CASE(OP,CMP,14,13,7,CC,1)
+#define AF_TRACE_CCS(OP,CMP) \
+    AF_TRACE_REGS(OP,CMP,"o"); AF_TRACE_REGS(OP,CMP,"no"); \
+    AF_TRACE_REGS(OP,CMP,"b"); AF_TRACE_REGS(OP,CMP,"ae"); \
+    AF_TRACE_REGS(OP,CMP,"e"); AF_TRACE_REGS(OP,CMP,"ne"); \
+    AF_TRACE_REGS(OP,CMP,"be"); AF_TRACE_REGS(OP,CMP,"a"); \
+    AF_TRACE_REGS(OP,CMP,"s"); AF_TRACE_REGS(OP,CMP,"ns"); \
+    AF_TRACE_REGS(OP,CMP,"p"); AF_TRACE_REGS(OP,CMP,"np"); \
+    AF_TRACE_REGS(OP,CMP,"l"); AF_TRACE_REGS(OP,CMP,"ge"); \
+    AF_TRACE_REGS(OP,CMP,"le"); AF_TRACE_REGS(OP,CMP,"g")
+static void gpta_arith_float_trace(void) {
+    u64 h = 14695981039346656037ull;
+    for (int i = 0; i < N; i++) {
+        v2 a = vfloat(1), b = vfloat(1);
+        union { float f[4]; v2 v; } cf; cf.v = vrand(); cf.f[0] = (float)dval(i);
+        v2 c = cf.v;
+        AF_TRACE_CCS("addss","ucomiss");
+        a = vdouble(1); b = vdouble(1);
+        union { double d[2]; v2 v; } cd; cd.v = vrand(); cd.d[0] = dval(i);
+        c = cd.v;
+        AF_TRACE_CCS("addsd","ucomisd");
+    }
+    // Taken adjacency, including the final non-adjacent replica backedge;
+    // the exit consumes the original (reversed-operand) comparison flags.
+    double one = 1.0, limit = 11.0, result; u64 f;
+    __asm__ volatile("pxor %%xmm7, %%xmm7\n\tmovsd %[one], %%xmm8\n\tmovsd %[lim], %%xmm14\n\t"
+        "1: addsd %%xmm8, %%xmm7\n\tucomisd %%xmm7, %%xmm14\n\tja 1b\n\t"
+        "pushfq\n\tpopq %[f]\n\tmovsd %%xmm7, %[r]\n\txorl %%eax, %%eax"
+        : [r] "=m"(result), [f] "=&r"(f) : [one] "m"(one), [lim] "m"(limit)
+        : "rax", "xmm7", "xmm8", "xmm14", "cc", "memory");
+    h = mix(mix(h,(u64)result),f & ARITH);
+    float onef = 1.0f, limitf = 11.0f, resultf;
+    __asm__ volatile("pxor %%xmm14, %%xmm14\n\tmovss %[one], %%xmm1\n\tmovss %[lim], %%xmm0\n\t"
+        "1: addss %%xmm1, %%xmm14\n\tucomiss %%xmm14, %%xmm0\n\tja 1b\n\t"
+        "pushfq\n\tpopq %[f]\n\tmovss %%xmm14, %[r]\n\txorl %%eax, %%eax"
+        : [r] "=m"(resultf), [f] "=&r"(f) : [one] "m"(onef), [lim] "m"(limitf)
+        : "rax", "xmm0", "xmm1", "xmm14", "cc", "memory");
+    h = mix(mix(h,(u64)resultf),f & ARITH);
+    out("gpta_arith_float_trace",h);
+}
 #define MT_CASE(MSZ,MSRC,MDST,TSZ,TDST,CC,SETUP) do { \
     u64 a = val(), seed = val(), r, score, fi = flags_in(), f; \
     __asm__ volatile(PRE "movq %[a], %%rcx\n\tmovq %[seed], %%rax\n\t" SETUP \
@@ -1699,7 +1754,7 @@ static const test_fn kTests[] = {
     fz_o, fz_no, fz_b, fz_ae, fz_e, fz_ne, fz_be, fz_a, fz_s, fz_ns, fz_p, fz_np, fz_l, fz_ge, fz_le, fz_g,
     fc_o, fc_no, fc_b, fc_ae, fc_e, fc_ne, fc_be, fc_a, fc_s, fc_ns, fc_p, fc_np, fc_l, fc_ge, fc_le, fc_g,
     fz_call, fz_index, fz_xindex, fz_3op, fz_3gap, fz_x3, fz_hoist, gpta_xmem, gpta_result_flags, gpta_xhigh, gpta_cf_flow,
-    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow, gpta_fcj_trace, gpta_jresult_trace, gpta_immstores, gpta_x3high, gpta_step_trace, gpta_shift_counts, gpta_copy_shift_counts, gpta_unary_edges, gpta_alu_memory, gpta_xmm_lane_state, gpta_scalar_mem, gpta_unary_flag_inputs, gpta_xmap_transitions, gpta_cf_only, gpta_unary_trace, gpta_xload_pairs, gpta_ea_pairs, gpta_mov_test_branch, gpta_arith_float_branch, gpta_shift_xor,
+    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow, gpta_fcj_trace, gpta_jresult_trace, gpta_immstores, gpta_x3high, gpta_step_trace, gpta_shift_counts, gpta_copy_shift_counts, gpta_unary_edges, gpta_alu_memory, gpta_xmm_lane_state, gpta_scalar_mem, gpta_unary_flag_inputs, gpta_xmap_transitions, gpta_cf_only, gpta_unary_trace, gpta_xload_pairs, gpta_ea_pairs, gpta_mov_test_branch, gpta_arith_float_branch, gpta_shift_xor, gpta_arith_float_trace,
 };
 
 int guest_main(int argc, char **argv) {

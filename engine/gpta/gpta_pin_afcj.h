@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #ifndef GPTA_PIN_AFCJ_H
 #define GPTA_PIN_AFCJ_H
+#define GPTA_AF_BRANCH 128     // private Uop.fdir marker
+#define GPTA_AF_ADJ_T 64       // private Uop.cc hints, after ordinary lowering
+#define GPTA_AF_ADJ_F 128
 #define GPTA_AFCJ_TABLES(M) M(t_af_addss) M(t_af_subss) M(t_af_mulss) M(t_af_divss) \
     M(t_af_addsd) M(t_af_subsd) M(t_af_mulsd) M(t_af_divsd)
 // 0..15 are ordinary COMIS conditions; 16..19 are the four ordered/unordered

@@ -1262,6 +1262,7 @@ static int lower_arith_fcj(Out *o, const Uop *u) {
     unsigned other = reversed ? u[1].dst : u[1].src;
     Uop *x = put_uop(o,&u[2],tables[op][cc][xcls(u[0].dst)][xcls(u[0].src)][xcls(other)]);
     x->dst = u[0].dst; x->src = u[0].src; x->base = (uint8_t)other;
+    x->fdir |= GPTA_AF_BRANCH;
     unsigned fd = u[2].fdir & 3;
     if (fd) {
         int np = o->np;
@@ -1514,6 +1515,8 @@ Block *gpta_lower(struct Fxi *vm, Block *b) {
             if (ns) {   // the trace edge: the next block, or back to the start (the next copy's)
                 Uop *t = &nb->u[base + m[i] - 1], *to = i + 1 < nseg ? t + 1 : &nb->u[prefix + (c + 1 < copies ? (c + 1) * M : 0)];
                 if (edge[i]) t->ulink2 = to; else t->ulink = to;
+                if (to == t + 1 && (t->fdir & GPTA_AF_BRANCH))
+                    t->cc |= edge[i] ? GPTA_AF_ADJ_F : GPTA_AF_ADJ_T;
                 // No link lookup is needed for a statically adjacent trace edge.
                 // Match the original handler so unrelated uop fields cannot opt in.
                 if (to == t + 1 && t->dst < 16 && t->src < 16) {

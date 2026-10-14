@@ -26,6 +26,12 @@
 #define AF_X9C(F,...) F(0,__VA_ARGS__) F(1,__VA_ARGS__) F(2,__VA_ARGS__) F(3,__VA_ARGS__) \
     F(4,__VA_ARGS__) F(5,__VA_ARGS__) F(6,__VA_ARGS__) F(7,__VA_ARGS__) F(M,__VA_ARGS__)
 #define AF_C20(M) C16(M) M(16) M(17) M(18) M(19)
+// The translator marks only actual adjacency in each individual trace copy.
+// The final backedge and unproved links keep the ordinary chained dispatch.
+#define AF_CHAIN(LINK,MISS,HINT) do { \
+    if (u->cc & (HINT)) PNEXT(); \
+    PCHAIN(LINK,MISS); \
+} while (0)
 #if defined(__aarch64__)
 #define AF_SELECT(CC) do { \
     if ((CC) == 16) FCJ_ASM("hi"); \
@@ -50,8 +56,8 @@
         if (AF_ID_##C == AF_ID_##D && (AF_ID_##D != 8 || u->base == u->dst)) other = result; \
         XW_##D(result); double a = AF_LOW(result), b = AF_LOW(other); \
         AF_SELECT(CC); \
-        fcj_taken: PCHAIN_T(u->ulink,p_miss_t); \
-        fcj_fall: PCHAIN_T(u->ulink2,p_miss_f); }
+        fcj_taken: AF_CHAIN(u->ulink,p_miss_t,GPTA_AF_ADJ_T); \
+        fcj_fall: AF_CHAIN(u->ulink2,p_miss_f,GPTA_AF_ADJ_F); }
 #define AF_SRC(S,D,CC) AF_X9C(AF_DEF,S,D,CC)
 #define AF_DST(D,CC) X9B(AF_SRC,D,CC)
 #define AF_CC(CC,...) X9(AF_DST,CC)
