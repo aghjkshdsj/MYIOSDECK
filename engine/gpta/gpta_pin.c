@@ -1204,11 +1204,8 @@ static int lower_ea_pair(Out *o, const Uop *a, const Uop *b) {
 static void lower_block(Out *o, const Block *b) {
     for (uint32_t i = 0; i < b->n; i++) {
         int start = o->n, np = o->np;
-        if (i + 1 < b->n && lower_ea_pair(o,&b->u[i],&b->u[i+1])) {
-            bound(o,start,np,0,0);   // each load retains its own RIP and boundary
-            i++;
-            continue;
-        }
+        // EA reuse selection regressed both means in iteration 44. Keep its
+        // indexed handlers and stronger fault cases, but use ordinary loads.
         if (i + 2 < b->n && can_hoist(&b->u[i], &b->u[i + 1], &b->u[i + 2])) {
             // [a][x][c] runs as x, then a + c: x starts where a did; between x and the pair is no
             // x64 instruction boundary

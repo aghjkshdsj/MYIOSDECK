@@ -52,6 +52,7 @@ row below. Interrupted or defective trials are recorded separately.
 | 2a44b68 | [38490572829](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38490572829) | 24.77% | 30.73% | 8.31% | 13.97% |
 | 8930ebc | [38491164550](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38491164550) | 24.71% | 30.47% | 8.16% | 13.99% |
 | 2e34eab | [38491558263](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38491558263) | 28.16% | 30.58% | 8.31% | 13.98% |
+| 439ac59 | [38492014687](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38492014687) | 27.29% | 30.15% | 8.27% | 13.94% |
 
 The third trial (result-width branches and simplified floating comparisons)
 regressed. Its ARM64, x86 and iOS gates passed. That trial is rolled back in
@@ -237,7 +238,10 @@ and existing bounded backedge scan; no program identity or data participates.
 The preceding transition/nested-loop/fallback tests cover both layouts.
 Windows allocation and all recovery gates retain their preceding behavior.
 
-The effective-address reuse trial is **not measured**. Consecutive GPR/vector
+The effective-address reuse trial passed every gate, including faults after
+a completed first load, but regressed both means. Its selection is rolled
+back next while retaining all stronger correctness cases and indexed
+handlers; the rollback is **not measured**. Consecutive GPR/vector
 loads with the same base/index/scale compute that address once in T. Each load
 still has its own dispatch, original RIP and instruction boundary; canonical
 address metadata remains intact. A first GPR destination that changes the
