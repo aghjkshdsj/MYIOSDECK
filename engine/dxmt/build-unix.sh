@@ -96,7 +96,11 @@ step_dxmt() {
     git -C "$M/dxmt" checkout -- src/winemetal/unix/winemetal_unix.c
     python3 "$HERE/patches/metal_owner.py" "$M/dxmt"
     airconv_shader_headers "$D/shader-headers"
-    bash "$D/build.sh"
+    bash "$D/build.sh" || {
+        # Madeira's script keeps each failed object's compiler output in obj/<name>.err only
+        for e in "$D"/obj/*.err; do [ -s "$e" ] && grep -q "error:" "$e" && { echo "== $e"; grep -B2 -A3 "error:" "$e" | head -60; }; done
+        return 1
+    }
     rm -f "$D/libdxmt_combined.a"
     xcrun -sdk iphoneos libtool -static -o "$D/libdxmt_combined.a" "$D"/obj/*.o "$T"/llvm-ios-build/lib/*.a
     ls -la "$D/libdxmt_combined.a"
