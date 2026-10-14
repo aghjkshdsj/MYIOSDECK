@@ -1377,6 +1377,34 @@ static void gpta_xmap_transitions(void) {
     out("gpta_xmap_transitions", h);
 }
 
+// The producer's non-carry flags are overwritten by INC/DEC, while CF
+// remains observable. Test register aliases, immediates and a block boundary.
+#define CF_ONLY_CASE(PRODUCER, UNARY, EDGE) do { \
+    u64 a = val(), b = val(), d = val(), r, q, f; \
+    __asm__ volatile("movq %[a], %%rax\n\tmovq %[b], %%rcx\n\tmovq %[d], %%rdx\n\t" \
+        PRODUCER "\n\t" EDGE UNARY "\n\tpushfq\n\tpopq %[f]\n\t" \
+        "movq %%rax, %[r]\n\tmovq %%rdx, %[q]\n\ttestq %%rax, %%rax" \
+        : [r] "=m"(r), [q] "=m"(q), [f] "=&r"(f) \
+        : [a] "r"(a), [b] "r"(b), [d] "r"(d) : "rax", "rcx", "rdx", "cc", "memory"); \
+    h = mix(mix(mix(h, r), q), f & ARITH); \
+} while (0)
+#define CF_ONLY_TARGETS(PRODUCER) \
+    CF_ONLY_CASE(PRODUCER, "incb %%dl", ""); CF_ONLY_CASE(PRODUCER, "decw %%dx", ""); \
+    CF_ONLY_CASE(PRODUCER, "incl %%edx", ""); CF_ONLY_CASE(PRODUCER, "decq %%rdx", ""); \
+    CF_ONLY_CASE(PRODUCER, "incq %%rdx", "jmp 1f\n\t1:\n\t")
+#define CF_ONLY_FORMS(OP) \
+    CF_ONLY_TARGETS(OP "l %%ecx, %%eax"); CF_ONLY_TARGETS(OP "q %%rcx, %%rax"); \
+    CF_ONLY_TARGETS(OP "l %%eax, %%eax"); CF_ONLY_TARGETS(OP "q %%rax, %%rax"); \
+    CF_ONLY_TARGETS(OP "l $-1, %%eax"); CF_ONLY_TARGETS(OP "q $0x7fffffff, %%rax")
+static void gpta_cf_only(void) {
+    u64 h = 14695981039346656037ull;
+    for (int i = 0; i < N; i++) {
+        CF_ONLY_FORMS("add"); CF_ONLY_FORMS("sub"); CF_ONLY_FORMS("and");
+        CF_ONLY_FORMS("or"); CF_ONLY_FORMS("xor");
+    }
+    out("gpta_cf_only", h);
+}
+
 typedef void (*test_fn)(void);
 #define ALU_LIST(OP) OP##_q, OP##_l, OP##_w, OP##_b, OP##_mr_q, OP##_rm_l, OP##_mr_b,
 static const test_fn kTests[] = {
@@ -1407,7 +1435,7 @@ static const test_fn kTests[] = {
     fz_o, fz_no, fz_b, fz_ae, fz_e, fz_ne, fz_be, fz_a, fz_s, fz_ns, fz_p, fz_np, fz_l, fz_ge, fz_le, fz_g,
     fc_o, fc_no, fc_b, fc_ae, fc_e, fc_ne, fc_be, fc_a, fc_s, fc_ns, fc_p, fc_np, fc_l, fc_ge, fc_le, fc_g,
     fz_call, fz_index, fz_xindex, fz_3op, fz_3gap, fz_x3, fz_hoist, gpta_xmem, gpta_result_flags, gpta_xhigh, gpta_cf_flow,
-    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow, gpta_fcj_trace, gpta_jresult_trace, gpta_immstores, gpta_x3high, gpta_step_trace, gpta_shift_counts, gpta_copy_shift_counts, gpta_unary_edges, gpta_alu_memory, gpta_xmm_lane_state, gpta_scalar_mem, gpta_unary_flag_inputs, gpta_xmap_transitions,
+    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow, gpta_fcj_trace, gpta_jresult_trace, gpta_immstores, gpta_x3high, gpta_step_trace, gpta_shift_counts, gpta_copy_shift_counts, gpta_unary_edges, gpta_alu_memory, gpta_xmm_lane_state, gpta_scalar_mem, gpta_unary_flag_inputs, gpta_xmap_transitions, gpta_cf_only,
 };
 
 int guest_main(int argc, char **argv) {

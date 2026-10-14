@@ -27,6 +27,7 @@
 #include "gpta_pin_stzero.h"
 #include "gpta_pin_xscalar.h"
 #include "gpta_pin_copyshift.h"
+#include "gpta_pin_cfonly.h"
 
 static Uop *architectural_uop(FxiCpu *c, Uop *u, Uop *original);
 static GPTA_CC void p_xentry(GPTA_PARAMS);
@@ -387,6 +388,7 @@ static void rmap_init(void) {
     RMAP(t_fjc_rr); RMAP(t_fjc_ri); RMAP(t_fjt_ri); RMAP(t_fjt_rr); RMAP(t_fjt_rrx); RMAP(t_sic); RMAP(t_sicr);
     RMAP(t_sii_trace); RMAP(t_sri_trace);
     RMAP(t_shconst);
+    RMAP(t_cf_rr); RMAP(t_cf_ri);
     RMAP(t_csh_shl); RMAP(t_csh_shr); RMAP(t_csh_sar); RMAP(t_csh_rol); RMAP(t_csh_ror);
     RMAP(t_xlz); RMAP(t_xsz);
     RMAP(t_am_add); RMAP(t_am_sub); RMAP(t_am_and); RMAP(t_am_or); RMAP(t_am_xor);
@@ -547,6 +549,11 @@ static void lower_one(Out *o, const Uop *u) {
         }
         // cmp/test of registers whose flags nothing reads: no effect at all
         if (!fl && (op == ALU_CMP || op == ALU_TEST) && (fm == F_RR || fm == F_RI)) return;
+        if (!g_win && (u->fdir & GPTA_CFONLY) && si >= 2 && D >= 0) {
+            int k = op == ALU_ADD ? 0 : op == ALU_SUB ? 1 : op == ALU_AND ? 2 : op == ALU_OR ? 3 : op == ALU_XOR ? 4 : -1;
+            if (k >= 0 && fm == F_RR && S >= 0) { put_uop(o, u, t_cf_rr[k][si-2][D][S]); return; }
+            if (k >= 0 && fm == F_RI) { put_uop(o, u, t_cf_ri[k][si-2][D]); return; }
+        }
         if (fm == F_RR && si >= 2 && D >= 0 && S >= 0) { put_uop(o, u, t_alu_rr[fl][op][si - 2][D][S]); return; }
         if (fm == F_RI && si >= 2 && D >= 0) { put_uop(o, u, t_alu_ri[fl][op][si - 2][D]); return; }
         if (fm == F_RM && si >= 2 && D >= 0 && ea_ok(u)) {
@@ -1395,6 +1402,8 @@ static void hidx_build(void) {
     hidx_tab(&t_jresult[0][0], 24);
     hidx_tab(&t_jresult_trace[0][0][0], 48);
     hidx_tab((const PFn *)t_shconst, sizeof t_shconst / sizeof(PFn));
+    hidx_tab((const PFn *)t_cf_rr, sizeof t_cf_rr / sizeof(PFn));
+    hidx_tab((const PFn *)t_cf_ri, sizeof t_cf_ri / sizeof(PFn));
 #define CSH_HIDX(N) hidx_tab((const PFn *)N, sizeof N / sizeof(PFn));
     CSH_HIDX(t_csh_shl) CSH_HIDX(t_csh_shr) CSH_HIDX(t_csh_sar) CSH_HIDX(t_csh_rol) CSH_HIDX(t_csh_ror)
 #undef CSH_HIDX

@@ -163,6 +163,15 @@ Indirect caches continue to point at complete block entries. A differential
 case reaches one vector target through a shared map-free jump under different
 incoming maps.
 
+The carry-only flag trial is **not measured**. A separate backward liveness
+bit tracks non-carry arithmetic flags. When only carry remains live, register
+and immediate ADD/SUB/AND/OR/XOR retain their usual lazy kind but update only
+the operands its carry formula needs. INC/DEC replace non-carry flags; unknown
+readers, including SYSCALL's R11 flag snapshot, remain conservative. Windows
+and GPTA_WINLOWER retain full flag bookkeeping. Differential cases cover both
+widths, register aliases, immediate forms, narrow unary consumers and direct
+block boundaries.
+
 Windows mode defaults to the identity permutation. CI additionally enables
 the allocation trial with `GPTA_XMAP_WINDOWS=1` and repeats the same native
 exit, native API, fault-site and thread-stop checks. Host-state recovery
