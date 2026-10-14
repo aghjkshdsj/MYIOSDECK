@@ -1480,12 +1480,17 @@ static void gpta_shift_xor(void) {
     }
     out("gpta_shift_xor",h);
 }
+#define AF_COMPARE_0(CMP,D,C) CMP " %%xmm" #C ", %%xmm" #D "\n\t"
+#define AF_COMPARE_1(CMP,D,C) CMP " %%xmm" #D ", %%xmm" #C "\n\t"
 #define AF_CASE(OP,CMP,D,S,C,CC) do { \
+    AF_CASE_ORDER(OP,CMP,D,S,C,CC,0); AF_CASE_ORDER(OP,CMP,D,S,C,CC,1); \
+} while (0)
+#define AF_CASE_ORDER(OP,CMP,D,S,C,CC,ORDER) do { \
     v2 r; u64 score, f; \
     __asm__ volatile("movdqu %[a], %%xmm" #D "\n\t" \
         "movdqu %[b], %%xmm" #S "\n\tmovdqu %[c], %%xmm" #C "\n\t" \
         OP " %%xmm" #S ", %%xmm" #D "\n\t" \
-        CMP " %%xmm" #C ", %%xmm" #D "\n\tj" CC " 1f\n\t" \
+        AF_COMPARE_##ORDER(CMP,D,C) "j" CC " 1f\n\t" \
         "movq $3, %[score]\n\tjmp 2f\n\t1: movq $5, %[score]\n\t2:\n\t" \
         "pushfq\n\tpopq %[f]\n\tmovdqu %%xmm" #D ", %[r]\n\ttestq %[f], %[f]" \
         : [r] "=m"(r), [score] "=m"(score), [f] "=&r"(f) \
@@ -1502,11 +1507,14 @@ static void gpta_shift_xor(void) {
     AF_REGS(OP,CMP,"s"); AF_REGS(OP,CMP,"ns"); AF_REGS(OP,CMP,"p"); AF_REGS(OP,CMP,"np"); \
     AF_REGS(OP,CMP,"l"); AF_REGS(OP,CMP,"ge"); AF_REGS(OP,CMP,"le"); AF_REGS(OP,CMP,"g")
 #define AF_ALIAS_CASE(OP,CMP,D,S,C) do { \
+    AF_ALIAS_ORDER(OP,CMP,D,S,C,0); AF_ALIAS_ORDER(OP,CMP,D,S,C,1); \
+} while (0)
+#define AF_ALIAS_ORDER(OP,CMP,D,S,C,ORDER) do { \
     v2 r; u64 score, f; \
     __asm__ volatile("movdqu %[a], %%xmm" #D "\n\t" \
         "movdqu %[b], %%xmm" #S "\n\t" \
         OP " %%xmm" #S ", %%xmm" #D "\n\t" \
-        CMP " %%xmm" #C ", %%xmm" #D "\n\tjbe 1f\n\t" \
+        AF_COMPARE_##ORDER(CMP,D,C) "jbe 1f\n\t" \
         "movq $3, %[score]\n\tjmp 2f\n\t1: movq $5, %[score]\n\t2:\n\t" \
         "pushfq\n\tpopq %[f]\n\tmovdqu %%xmm" #D ", %[r]\n\ttestq %[f], %[f]" \
         : [r] "=m"(r), [score] "=m"(score), [f] "=&r"(f) \

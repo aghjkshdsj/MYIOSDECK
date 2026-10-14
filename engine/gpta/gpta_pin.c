@@ -1233,7 +1233,9 @@ static int lower_ea_pair(Out *o, const Uop *a, const Uop *b) {
 static int lower_arith_fcj(Out *o, const Uop *u) {
     const Desc *a = find(u[0].fn), *b = find(u[1].fn), *j = find(u[2].fn);
     if (!a || !b || !is_named(j,N_JCC) || a->fam != FAM_X || a->b || b->fam != FAM_X || b->b || !b->d ||
-        u[0].dst >= 16 || u[0].src >= 16 || u[1].src >= 16 || u[1].dst != u[0].dst) return 0;
+        u[0].dst >= 16 || u[0].src >= 16 || u[1].dst >= 16 || u[1].src >= 16) return 0;
+    int reversed = u[1].dst != u[0].dst;
+    if (reversed && u[1].src != u[0].dst) return 0;
     static const char *const names[] = { "addss","subss","mulss","divss","addsd","subsd","mulsd","divsd" };
     static const PFn (*const tables[8])[9][9][9] = { t_af_addss,t_af_subss,t_af_mulss,t_af_divss,
         t_af_addsd,t_af_subsd,t_af_mulsd,t_af_divsd };
@@ -1241,8 +1243,12 @@ static int lower_arith_fcj(Out *o, const Uop *u) {
     for (int k = 0; k < 8; k++) if (!strcmp(gpta_xops[a->a].name,names[k])) op = k;
     int dbl = !strcmp(gpta_xops[b->a].name,"comisd");
     if (op < 0 || dbl != (op >= 4)) return 0;
-    Uop *x = put_uop(o,&u[2],tables[op][u[2].cc & 15][xcls(u[0].dst)][xcls(u[0].src)][xcls(u[1].src)]);
-    x->dst = u[0].dst; x->src = u[0].src; x->base = (uint8_t)u[1].src;
+    static const uint8_t reverse_cc[16] = { 0,1,16,17,4,5,18,19,8,9,10,11,12,13,14,15 };
+    unsigned cc = u[2].cc & 15;
+    if (reversed) cc = reverse_cc[cc];
+    unsigned other = reversed ? u[1].dst : u[1].src;
+    Uop *x = put_uop(o,&u[2],tables[op][cc][xcls(u[0].dst)][xcls(u[0].src)][xcls(other)]);
+    x->dst = u[0].dst; x->src = u[0].src; x->base = (uint8_t)other;
     unsigned fd = u[2].fdir & 3;
     if (fd) {
         int np = o->np;

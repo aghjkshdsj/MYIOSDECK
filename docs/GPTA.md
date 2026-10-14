@@ -350,6 +350,18 @@ The next diagnostic revision creates it on the x86 guest builder, checks
 that it contains instructions, and copies it into the ARM evidence. The
 engine remains unchanged. Both measured suite means remain below 50%.
 
+The next arithmetic/COMIS/JCC trial supports the result as either comparison
+operand, as already observed in independent corpus run 38493680532. Four
+additional static condition variants preserve the distinct unordered cases
+when operands are swapped: greater-or-unordered, ordered less-or-equal,
+greater-or-equal-or-unordered, and ordered less-than. Other COMIS conditions
+are symmetric. Exit flag stubs retain the original operand order. No
+immediate value, program identity or guest loop is recognized. Differential
+tests cover both orders for every scalar arithmetic operation and condition,
+low/high registers, aliases, upper lanes, NaNs and live exit flags. Static
+handler names now expand the operation macro before token pasting, making
+perf names distinguish the operations. This trial is not measured yet.
+
 Windows mode defaults to the identity permutation. CI additionally enables
 the allocation trial with `GPTA_XMAP_WINDOWS=1` and repeats the same native
 exit, native API, fault-site and thread-stop checks. Host-state recovery
