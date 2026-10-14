@@ -31,6 +31,7 @@
 #include "gpta_pin_unary_trace.h"
 #include "gpta_pin_xload.h"
 #include "gpta_pin_pload.h"
+#include "gpta_pin_asm_pload.h"
 #include "gpta_pin_step_noadj.h"
 #include "gpta_pin_eareuse.h"
 #include "gpta_pin_movtest.h"
@@ -421,7 +422,11 @@ static int is_shuffle(const char *n) {
 // branch keeps one successor: Ertl and Gregg's replication of interpreter instructions. A handler
 // at one place per copy alternates between the copies of a trace, which also spaces out repeats of
 // the same branch (the probe: a branch taken again within a few dispatches costs more).
-#define RMAP_SLOTS (1u << 21)   // capacity for indexed load/arithmetic replicas
+#if GPTA_USE_ASM_PLOAD
+#define RMAP_SLOTS (1u << 22)   // include all static ARM scale/operand replicas
+#else
+#define RMAP_SLOTS (1u << 21)
+#endif
 typedef struct { PFn p, r; } RPair;
 static RPair *g_rmap;
 static uint64_t hpfn(PFn p) { return ((uint64_t)(uintptr_t)p * 0x9E3779B97F4A7C15ull) >> 40; }
@@ -476,6 +481,11 @@ static void rmap_init(void) {
     RMAP(t_pload_paddb); RMAP(t_pload_paddw); RMAP(t_pload_paddd); RMAP(t_pload_paddq);
     RMAP(t_pload_psubb); RMAP(t_pload_psubw); RMAP(t_pload_psubd); RMAP(t_pload_psubq);
     RMAP(t_pload_pand); RMAP(t_pload_pandn); RMAP(t_pload_por); RMAP(t_pload_pxor);
+#if GPTA_USE_ASM_PLOAD
+    RMAP(t_apl_paddb); RMAP(t_apl_paddw); RMAP(t_apl_paddd); RMAP(t_apl_paddq);
+    RMAP(t_apl_psubb); RMAP(t_apl_psubw); RMAP(t_apl_psubd); RMAP(t_apl_psubq);
+    RMAP(t_apl_pand); RMAP(t_apl_pandn); RMAP(t_apl_por); RMAP(t_apl_pxor);
+#endif
     RMAP(t_lp_first0); RMAP(t_lp_first1); RMAP(t_lp_first2); RMAP(t_lp_first3);
     RMAP(t_lp_next0); RMAP(t_lp_next1); RMAP(t_lp_next2); RMAP(t_lp_next3);
     RMAP(t_csh_shl); RMAP(t_csh_shr); RMAP(t_csh_sar); RMAP(t_csh_rol); RMAP(t_csh_ror);
@@ -987,11 +997,22 @@ static int try_fuse(Out *o, const Uop *u, uint32_t left) {
             a->fam == FAM_XS && a->a == XS_MOVSD_RM ? 8 : 0;
         int pk = width == 16 ? gpta_pload_index(gpta_xops[b->a].name) : -1;
         if (pk >= 0) {
-            static const PFn (*const packed[12])[9][17][17] = {
-                t_pload_paddb,t_pload_paddw,t_pload_paddd,t_pload_paddq,
-                t_pload_psubb,t_pload_psubw,t_pload_psubd,t_pload_psubq,
-                t_pload_pand,t_pload_pandn,t_pload_por,t_pload_pxor };
-            x = put_uop(o,u,packed[pk][xcls(u->dst)][xcls(v->src)][u->base][u->index]);
+#if GPTA_USE_ASM_PLOAD
+            if (u->dst < 8 && v->src < 8 && u->scale < 4) {
+                static const PFn (*const arm[12])[8][8][17][17] = {
+                    t_apl_paddb,t_apl_paddw,t_apl_paddd,t_apl_paddq,
+                    t_apl_psubb,t_apl_psubw,t_apl_psubd,t_apl_psubq,
+                    t_apl_pand,t_apl_pandn,t_apl_por,t_apl_pxor };
+                x = put_uop(o,u,arm[pk][u->scale][u->dst][v->src][u->base][u->index]);
+            } else
+#endif
+            {
+                static const PFn (*const packed[12])[9][17][17] = {
+                    t_pload_paddb,t_pload_paddw,t_pload_paddd,t_pload_paddq,
+                    t_pload_psubb,t_pload_psubw,t_pload_psubd,t_pload_psubq,
+                    t_pload_pand,t_pload_pandn,t_pload_por,t_pload_pxor };
+                x = put_uop(o,u,packed[pk][xcls(u->dst)][xcls(v->src)][u->base][u->index]);
+            }
             x->src = v->src;
             return 2;
         }
@@ -1768,6 +1789,7 @@ static void hidx_build(void) {
 #define XL_HIDX(N) hidx_tab((const PFn *)N, sizeof N / sizeof(PFn));
     GPTA_XLOAD_TABLES(XL_HIDX)
     GPTA_PLOAD_TABLES(XL_HIDX)
+    GPTA_ASM_PLOAD_TABLES(XL_HIDX)
     LP_FIRST_TABLES(XL_HIDX)
     LP_NEXT_TABLES(XL_HIDX)
 #undef XL_HIDX

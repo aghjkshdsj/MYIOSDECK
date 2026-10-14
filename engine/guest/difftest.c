@@ -1718,6 +1718,11 @@ static void gpta_ea_pairs(void) {
     XL_DST_CASES(OP,LOAD,10,2); XL_DST_CASES(OP,LOAD,11,3); \
     XL_DST_CASES(OP,LOAD,12,4); XL_DST_CASES(OP,LOAD,13,5); \
     XL_DST_CASES(OP,LOAD,14,6); XL_DST_CASES(OP,LOAD,15,7)
+#define PL_LOW_REGS(OP) \
+    XL_DST_CASES(OP,"movdqu",0,1); XL_DST_CASES(OP,"movdqu",1,2); \
+    XL_DST_CASES(OP,"movdqu",2,3); XL_DST_CASES(OP,"movdqu",3,4); \
+    XL_DST_CASES(OP,"movdqu",4,5); XL_DST_CASES(OP,"movdqu",5,6); \
+    XL_DST_CASES(OP,"movdqu",6,7); XL_DST_CASES(OP,"movdqu",7,0)
 static void gpta_pload_pairs(void) {
     u64 h = 14695981039346656037ull;
     v2 mem[3];
@@ -1729,6 +1734,9 @@ static void gpta_pload_pairs(void) {
         XL_REGS("psubd","movdqu"); XL_REGS("psubq","movdqu");
         XL_REGS("pand","movdqu"); XL_REGS("pandn","movdqu");
         XL_REGS("por","movdqu"); XL_REGS("pxor","movdqu");
+        PL_LOW_REGS("paddb"); PL_LOW_REGS("paddw"); PL_LOW_REGS("paddd"); PL_LOW_REGS("paddq");
+        PL_LOW_REGS("psubb"); PL_LOW_REGS("psubw"); PL_LOW_REGS("psubd"); PL_LOW_REGS("psubq");
+        PL_LOW_REGS("pand"); PL_LOW_REGS("pandn"); PL_LOW_REGS("por"); PL_LOW_REGS("pxor");
     }
     out("gpta_pload_pairs",h);
 }

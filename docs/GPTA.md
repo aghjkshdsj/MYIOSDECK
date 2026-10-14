@@ -560,6 +560,23 @@ Regression fixtures check unsafe writes and stores, safe restored state,
 branch merging and duplicate-name coverage. This is an audit-only change;
 engine execution and benchmark measurement are unchanged.
 
+The following ARM trial implements the same packed load/ALU pairs in static
+assembly for pinned vector operands, retaining C handlers for other operands
+and hosts. All four scales, all base/index choices and all operand pairs are
+compiled. The build-only source generator reads the engine's host-register
+map; it never reads a guest program. No code is generated or made executable
+at runtime. The iOS compile gate checks every assembly module; app linking,
+signing and device execution still follow the speed threshold.
+The load goes to a scratch vector before any architectural effect, including
+for self-cancelling arithmetic; the second instruction then writes its result.
+The uop layout has C static assertions, and replicas retain separate entries.
+A native ARM matrix checks all table entries against byte-wise arithmetic,
+including unchanged GPRs, lazy flags, other vectors and the EA temporary.
+Guest differential cases additionally cover distinct low-vector operands.
+All existing exact-fault and assembly-audit gates remain mandatory. The
+replica hash table is enlarged on this configuration to hold the extra static
+entries. This trial is not measured yet; iPhone execution remains untested.
+
 Profile standard workloads with perf stat and perf record. Choose any new
 instruction-pair families from the independent corpus in engine/gpta/corpus.sh.
 Never replace a recognized guest loop with a host loop.
