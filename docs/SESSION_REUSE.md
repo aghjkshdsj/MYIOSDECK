@@ -123,13 +123,16 @@ JIT path): the phone decides.
 | `engine/wine/patches/session_reuse.py win32u` (from `build-unix.sh`) | Wine's `dlls/win32u/window.c`: win32u's client objects (`client_objects[]`, the WND behind each window handle index) are per process in Wine and shared by every pseudo-process here. A window the wineserver made for this process itself (its desktop and message windows) has no WND, and its index was usually an exited process's window, whose WND, freed or not, was still in the slot. The second Forager (build 158) dispatched WM_PARENTNOTIFY to its message window through such a WND and called its window procedure, read as 0x3c. A WND is now the window's only when its own handle is the window's full handle; window enumeration skips the others. Also `[winproc]` diagnostics in `class_ios.c` (window procedures allocated, and any dispatched below 64 KB). |
 | same, `ntdll` | **Threads an exited process leaves asleep.** A process ends by the server killing its threads, and a thread learns it from its next server request. DXMT's encode, finish and other worker threads sleep in address waits (`NtWaitForAlertByThreadId`) that never ask the server, and its shared-event listener sits in a CFRunLoop: six threads per Direct3D game stayed (build 159, logs 93/94), their TEBs inside the guest window, and Madeira keeps a window while a thread of it lives, so the first Steins;Gate's window and its memory never came back ("teardown did not complete", the second game took another window). When a window's owner has exited, the reclaim (`virtual_ios.c`) now asks `myiosdeck_reap_range` (`signal_arm64_ios.c`) first: every thread of the window is woken (`myiosdeck_reap_alert`, `sync.c`), and a woken thread that sees a new reap generation asks the server about itself (`get_thread_info`); a killed thread's request finds its pipe closed and the thread exits through Wine's own path. What still sleeps half a second later where no alert reaches it (the run loop), suspended inside a system call and so holding no lock of this side, has its server pipes closed and is terminated. Then the window is torn down as Madeira does for a launcher. |
 | same, `ntdll` | **A killed main thread ends its process.** `abort_thread` ended a killed thread alone; for a pseudo-process's main thread that meant its boot thread never got back to its `setjmp`, so the process's slot, socket and window stayed taken and the app never heard that the program ended. `myiosdeck_main_thread_killed` (`server_ios.c`, called from `thread_ios.c`) ends the process through `process_exit_wrapper` instead; its requests fail from then on (the deferred-abort state of a section) rather than ending the thread halfway. |
-| `engine/wine/patches/session_reuse.py server` (from `build-unix.sh`) | **Force quit.** `wineserver_kill_programs` (`request_ios.c`) sets a flag the server loop reads (`fd_ios.c`), and `myiosdeck_kill_programs` (`process.c`) terminates every program of the session (not a system process) as `TerminateProcess` does, on the server's own thread, then wakes their threads so one asleep in an address wait finds out. |
+| `engine/wine/patches/session_reuse.py server` (from `build-unix.sh`) | **Force quit.** `wineserver_kill_programs` (`request_ios.c`) sets a flag the server loop reads (`fd_ios.c`), and `myiosdeck_kill_programs` (`process.c`) terminates every program of the session (not a system process) as `TerminateProcess` does, on the server's own thread, then wakes their threads so one asleep in an address wait finds out. It also counts the Force quits (`g_myiosdeck_force_quits`) for the bridge below. |
+| same, `server` | **A thread that ended itself.** Wine's server treats a thread as dead once its request pipe closes; `NtTerminateThread` on itself only records the exit code. From the second program of a kept session on, threads that ended this way stayed alive in the server (build 171): their handles never became signaled and the game waited for them. `terminate_thread` (`wine/server/thread.c`) now arms a 250 ms timer for such a thread; if the server still has it then, it is ended as the pipe's close would have ended it (`kill_thread`), and a `[session-reuse] thread … ended itself 0.25 s ago, but its request pipe (server fd N: …) never closed` line says what had become of the pipe (still open at the thread's end, closed and missed by the server's poll, or no longer open). |
+| same, `app` | **Force quit and a child that never comes back.** The bridge waits for a launcher's game (a child) by its slot, which only the child's main thread gives back when it returns to its start. 3 s after a Force quit (the count above changed since the program started) it stops waiting: `[session-reuse] Force quit 3 s ago and N child process(es) (…) still hold their slot`, and the session ends; the next program counts that slot as an earlier program's. |
 | `engine/wine/patches/nojit_dylib.py` | The no-JIT image table, one entry per DLL per process, grows from 512 to 4096 entries. 512 lasted only a few processes. |
 | `engine/fxi/fxi_win.c` | `fxi_win_invalidate_all()`: the app drops FXI's x64 blocks before a later game starts (an earlier game's freed code ranges may hold the new game's code). `fxi_invalidate` frees nothing, so a thread still inside a dropped block translates again. |
 | `engine/fxi32/fxi_wow.c`, `App/Sources/Native/fxi_wow_host.c` | `fx32_wow_process_start()` at `BTCpuProcessInit`: a window an exited process left gets a fresh FXI32 instance. The old one held that process's blocks and its BOP page address (the new process allocates its own), and its BOP exit blocks are never invalidated. Tested in `wow_test.c` (check 9). |
 | `App/Sources/Native/wine_host.c` | `mid_wine_boot` for a later program: no JIT slice, no server start, no log truncation; resets the exit status, flushes FXI, starts the program in the session. The log follower keeps reading while a session is kept. |
 | `App/Sources/Engine/WineController.swift` | `SessionKind` (no JIT, ARM64EC or aarch64, HID pad, FXR) recorded at the first program; `nextGameRefusal` says why a later game cannot join (setting off, session not kept, kind differs, FXR on for a 64-bit game, less than 1.5 GB free) or nil. There is no limit on the number of games. The Dock/added-game flags are now per launch (they stayed set for the whole app run). |
-| `App/Sources/UI/LibraryView.swift`, `SettingsView.swift` | The setting; Play is enabled again after a game ends when another can join; the game menu gets **Quit game**, which asks the game to close with Alt+F4 through its normal input (as Madeira's own Quit game does, `Library.swift` `requestQuit`), keeps its view up with "Closing…" until it exits, and leaves MYIOSDECK open. If the game still runs 6 s later, or Quit game is chosen again, the log gets a `[quit-watch]` report (`mid_wow_thread_report`, `fxi_wow_host.c`: each 32-bit thread's system call in progress or x86 code, its native function, the return addresses on its stack) and the menu offers **Force quit** (`WineController.forceQuit`, the server's Force quit above); the library then says the game "was force-quit". **Quit game and close MYIOSDECK** stays for a game even Force quit does not end. |
+| `App/Sources/UI/LibraryView.swift`, `SettingsView.swift` | The setting; Play is enabled again after a game ends when another can join; the game menu gets **Quit game**, which asks the game to close with Alt+F4 through its normal input (as Madeira's own Quit game does, `Library.swift` `requestQuit`), keeps its view up with "Closing…" until it exits, and leaves MYIOSDECK open. If the game still runs 6 s later the log gets a `[quit-watch]` report (`mid_wow_thread_report`, `fxi_wow_host.c`: each 32-bit thread's system call in progress or x86 code, its native function, the return addresses on its stack), the status says "force quitting it in 4 s", and 4 s later the game is force quit with no menu step (`WineController.forceQuit`, the server's Force quit above). Quit game chosen again while one is pending force quits at once, and the menu keeps a **Force quit** button once the watch has fired. The library then says the game "was force-quit". **Quit game and close MYIOSDECK** stays for a game even Force quit does not end. |
+| `App/Sources/Engine/RecentlyPlayed.swift`, `SteamGamesView.swift`, `CustomGamesCard.swift` | Not session reuse, asked for with it: the library lists the recently played games first (owned Steam games, installed Steam games, My games); each start is recorded per game in UserDefaults. The Steam card lists the Steam games **installed on this iPhone** (every library on C: with Steam install records, downloaded here or by Valve's client; shown signed in or not), each with its size and **Delete…**, which removes its folder under `common`, its `appmanifest_<id>.acf` and its resume journal (`SteamInstallFiles.delete`) after a confirmation; not while a Windows game runs. The game sheet's Uninstall now asks first too. |
 | `engine/wine/stage-app.sh` | Winios's per-window client rects are dropped at a new session's start, with its Metal windows. |
 
 ## 4. Limits
@@ -216,6 +219,29 @@ game, but the main thread then waits on handle 0xa4 for good (Force quit ends it
 Forager's main thread waits on handle 0xc0 at start. The report now names the call that made a
 waited handle (NtCreateEvent, NtCreateThreadEx, ... and three return addresses above it).
 
+Build 171 (logs of 2026-10-14: six Steins;Gate starts in one run; Steins;Gate then Forager). RAM no
+longer climbs (the Metal records above give back about 290 objects a game). Three hangs were left:
+- From the second Steins;Gate on, Quit game stopped in BinkWaitStopAsyncThreadsMulti every time.
+  The main thread waited on handle 0xa4, a thread `_BinkOpenXAudio28` made. Game 1 and game 2 end
+  the same way: the six Bink async threads (waiting on semaphores from `CreateSemaphoreA` at
+  bink2w32.dll+0x2c76e) wake, run `RtlExitUserThread` and `NtTerminateThread` on themselves and
+  free the previous exiting thread's stacks (three `[vfree]` lines each). In game 1 each is then
+  followed by `read_request EOF tid=… -> kill_thread`; in game 2 by nothing, and Force quit later
+  found all six still alive in the server (`kill_thread tid=015c … violent=1`). Short-lived
+  threads of the same game 2 got their EOF, so it is not every exit. Where the pipe's end went is
+  still open: the new timer above ends such a thread anyway and its line names the pipe's state.
+- Forager after Steins;Gate (and after Forager): its main thread waits on handle 0xc0, the thread
+  it made at Forager.exe+0x134f69a, which ended (`thread exit: 2013 system calls`) and is listed no
+  more. The same shape, the same timer.
+- The last Steins;Gate: Force quit killed both processes and Game.exe's main thread ran its exit
+  path (`the main thread of process 0540 was killed`, its window and fd cache released), but it
+  never got back to its start: it faulted in `_MetalLayer_getProps32` writing to the untranslated
+  guest address 0x350fd70 (its window was already released, so the 32-bit thunk's pointer
+  conversion added nothing), and the bridge kept waiting for the child's slot ("still running 8 s
+  after Force quit"). The bridge now stops waiting 3 s after a Force quit (above). The mouse report
+  for that game: 194 mouse events reached Wine (`[winios] drain`), touch was set to Off, then to
+  Trackpad during the game; no input fault was found in the log.
+
 - **The first game is never reclaimed.** It is the session's initial process: no process socket
   entry, so none of the child exit clean-up. For a 32-bit first game its guest window also holds
   the PEB every later process is cloned from (`ios_initial_peb`), so it must stay mapped. A
@@ -225,9 +251,10 @@ waited handle (NtCreateEvent, NtCreateThreadEx, ... and three return addresses a
   JIT-pool copies are released when a 64-bit pseudo-process exits. The game's heap and its
   Metal objects stay until MYIOSDECK closes. The app refuses another game with less than
   1.5 GB free (`os_proc_available_memory`).
-- **Quit game asks; Force quit kills.** Quit game asks with Alt+F4, so a game can save. Force
-  quit ends a game that ignores it or hangs on its way out, as Task Manager would: unsaved
-  progress is lost. A game thread that runs x86 code without ever calling the system is not
+- **Quit game asks; Force quit kills.** Quit game asks with Alt+F4, so a game can save; a game
+  that has not closed 10 s later is force quit (a game whose exit dialog waits longer than that
+  for an answer is force quit too). Force quit ends a game that ignores it or hangs on its way
+  out, as Task Manager would: unsaved progress is lost. A game thread that runs x86 code without ever calling the system is not
   stopped by it (the server cannot interrupt a thread on iOS); Quit game and close MYIOSDECK is
   left for that.
 - **Memory of a 32-bit game comes back when the next 32-bit game starts**, not when it ends: the
@@ -260,13 +287,24 @@ waited handle (NtCreateEvent, NtCreateThreadEx, ... and three return addresses a
 5. After a restart: Steins;Gate, Quit game, Steins;Gate again (a 32-bit session): look for
    `[wow-window] ... released` and, at the second start, `FXI32 instance ... dropped`.
 6. The game's own quit (from its menu) ends the session the same way.
-7. A game that does not close within 6 s of Quit game (or Quit game chosen twice): the status says so, the log has
-   `[quit-watch]` lines, and the game menu offers **Force quit**. After it: `[wineserver] force
-   quit: N program process(es) terminated`, `[session-reuse] the main thread of process ... was
-   killed`, and the library says the game "was force-quit".
+7. A game that does not close within 6 s of Quit game: the status says "force quitting it in 4 s",
+   the log has `[quit-watch]` lines, and 4 s later the game is force quit by itself (Quit game
+   chosen twice force quits at once). After it: `[wineserver] force quit: N program process(es)
+   terminated`, maybe `[session-reuse] the main thread of process ... was killed` or `Force quit 3 s
+   ago and N child process(es) ... still hold their slot`, and the library says the game "was
+   force-quit" within about 4 s.
 8. Steins;Gate twice: at the second start, `[session-reuse] window B=0x72...: 6 thread(s) the
    exited process left were woken ...` and no `REJECTED: the slot is still held by an exited
    process` line; the second Game.exe gets the first one's window back.
+9. Steins;Gate three times in a row, each ended with Quit game: from the second on it closes by
+   itself (no Force quit). The log has `[session-reuse] thread … ended itself 0.25 s ago, but its
+   request pipe (server fd N: …) never closed: the server ends it` for the Bink threads; send the
+   log, the part after the colon tells where their pipes went.
+10. Steins;Gate, Quit game, then Forager: Forager gets past its black screen (the same line may
+   appear for its start thread).
+11. Library: the game just played is first in Steam's owned games, in "Installed on this iPhone" and
+   in My games. Installed on this iPhone › Delete… on a game removes it (its size disappears from
+   Settings › iPhone Storage for MYIOSDECK) and from the list; Install brings it back.
 
 If a later game fails to start, the log has `[Wine child] BOOT FAILED at stage ...`, and the
 crash report offers the log as for any game that ends with an error.

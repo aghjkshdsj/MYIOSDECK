@@ -27,6 +27,8 @@ loader builds its process from argv and the environment, as for the session's fi
          window and its memory go back when the next 32-bit program starts.
   server wine/server/process.c, build/wineserver/request_ios.c and fd_ios.c: the app's Force
          quit ends every program of the session, as TerminateProcess does (FORCE_*).
+         wine/server/thread.c: a thread that ended itself but whose request pipe never closed is
+         ended 250 ms later (SELF_EXIT_FIXES).
   win32u wine/dlls/win32u/window.c (engine/wine/build-unix.sh): a window's client object (WND) is
          taken from the shared slot only when it is that window's (WINDOW_FIXES, below); and
          build/win32u-unix/class_ios.c: [winproc] diagnostics.
@@ -57,10 +59,16 @@ extern void ios_wow_window_release_current(void);        /* virtual_ios.c */
 extern void ios_wow_window_retire_current(void);         /* virtual_ios.c */
 extern pthread_key_t ios_teb_tls_key;
 extern int madeira_live_game_children(char *buf, int len, double max_age);   /* process_ios.c */
+extern volatile int g_myiosdeck_force_quits __attribute__((weak));   /* request_ios.c: the app's Force quits */
+static int g_force_quits_at_start;   /* their count when this program started */
 static int myiosdeck_session_reuse(void)
 {
     const char *v = getenv("MYIOSDECK_SESSION_REUSE");
     return v && v[0] == '1';
+}
+static int myiosdeck_force_quits(void)
+{
+    return &g_myiosdeck_force_quits ? g_myiosdeck_force_quits : 0;
 }
 /* 1 when another program can start in this session now: the first one has run, nothing runs
  * and the wineserver was kept. */
@@ -112,6 +120,7 @@ APP_FIXES = [
      "        if (!next_program) ios_main_image_i386 = is_i386_target ? 1 : 0;\n"
      "        madeira_publish_host_probe();   /* both FEX modules read it (A12/A13: FlagM, FlagM2) */\n"
      "        g_stale_children = next_program ? madeira_live_game_children(NULL, 0, -1.0) : 0;\n"
+     "        g_force_quits_at_start = myiosdeck_force_quits();\n"
      "\n"
      "        if (setjmp(wine_ios_exit_jmpbuf) == 0) {\n"
      "            if (next_program) {\n"
@@ -140,9 +149,19 @@ APP_FIXES = [
      "            ios_wow_window_release_current();   /* a boot that failed before binding its window */\n"
      "            pthread_setspecific(ios_teb_tls_key, NULL);\n"
      "        }\n"),
-    # Children of earlier programs that never released their slot do not hold this session up.
+    # Children of earlier programs that never released their slot do not hold this session up. Nor,
+    # 3 s after the app's Force quit, does a child whose main thread never got back to its start
+    # (build 171: the last Steins;Gate's Game.exe ran its exit path, then faulted in a unix call
+    # with its window already released, and the session waited for its slot for good).
     ("                while ((n = madeira_live_game_children(names, sizeof names, -1.0)) > 0) {\n",
-     "                while ((n = madeira_live_game_children(names, sizeof names, -1.0)) > g_stale_children) {   /* MYIOSDECK */\n"),
+     "                unsigned forced_ticks = 0;   /* MYIOSDECK session reuse */\n"
+     "                while ((n = madeira_live_game_children(names, sizeof names, -1.0)) > g_stale_children) {   /* MYIOSDECK */\n"
+     "                    if (myiosdeck_force_quits() != g_force_quits_at_start && ++forced_ticks > 15) {\n"
+     '                        dprintf(STDERR_FILENO, "[session-reuse] Force quit 3 s ago and %d child process(es) (%s) "\n'
+     '                                "still hold their slot: a thread of theirs never got back to its start; the "\n'
+     '                                "session goes on without them\\n", n - g_stale_children, names);\n'
+     "                        break;\n"
+     "                    }\n"),
     # The running flag drops once this thread's own clean-up is done: the next program's
     # environment (set by the app before it starts) must not lose the per-launch variables.
     ("        g_wine_running = 0;\n"
@@ -624,13 +643,73 @@ FORCE_REQUEST_FIXES = [
      "/* The app's Force quit (engine/wine/patches/session_reuse.py): the server loop ends every\n"
      " * program of the session (myiosdeck_kill_programs, process.c) on its own thread. */\n"
      "volatile int g_myiosdeck_kill_programs = -1;\n"
+     "volatile int g_myiosdeck_force_quits;   /* how many: the bridge stops waiting for a stuck child */\n"
      "void wineserver_kill_programs(int exit_code)\n"
      "{\n"
      "    extern void ios_wineserver_wake(void);\n"
      "    ws_log(\"[wineserver] kill_programs: exit code %d (the app's Force quit)\", exit_code);\n"
+     "    __atomic_add_fetch( &g_myiosdeck_force_quits, 1, __ATOMIC_SEQ_CST );\n"
      "    g_myiosdeck_kill_programs = exit_code;\n"
      "    ios_wineserver_wake();\n"
      "}\n"),
+]
+
+# A thread that ends itself (NtTerminateThread on itself: the reply says "self", the thread then
+# leaves through exit_thread) is dead for the server once its request pipe closes (thread.c,
+# thread_poll_event / read_request). From the second program of a kept session on, threads that
+# ended this way stayed alive here (logs of 2026-10-14): in every later Steins;Gate, Bink's six
+# async threads ran NtTerminateThread and freed the previous exiting thread's stacks, and the
+# server never saw their pipes close, so BinkWaitStopAsyncThreadsMulti waited on their handles for
+# good (Force quit found the six still alive); Forager after another game waited on its start
+# thread's handle the same way. 250 ms after such a reply a thread the server still has is ended
+# as that close would have ended it, and the line says what had become of its pipe.
+SELF_EXIT_FIXES = [
+    ("/* terminate a thread */\n"
+     "DECL_HANDLER(terminate_thread)\n",
+     MARK + r'''
+/* MYIOSDECK session-reuse (engine/wine/patches/session_reuse.py): a thread that ended itself and
+ * whose request pipe never closed here is ended 250 ms after its NtTerminateThread. */
+static void myiosdeck_self_exit_timeout( void *private )
+{
+    struct thread *thread = private;
+
+    if (thread->state != TERMINATED)
+    {
+        int fd = thread->request_fd ? get_unix_fd( thread->request_fd ) : -1;
+        struct pollfd pfd = { fd, POLLIN, 0 };
+        const char *what = fd < 0 ? "no fd" :
+                           poll( &pfd, 1, 0 ) < 0 || (pfd.revents & POLLNVAL) ? "no longer open here" :
+                           (pfd.revents & POLLHUP) ? "closed by the thread, and the server's poll missed it" :
+                           "still open at the thread's end";
+        fprintf( stderr, "[session-reuse] thread %04x of process %04x ended itself 0.25 s ago, but its request "
+                 "pipe (server fd %d: %s) never closed: the server ends it\n",
+                 thread->id, thread->process->id, fd, what );
+        kill_thread( thread, 0 );
+    }
+    release_object( thread );
+}
+
+static void myiosdeck_watch_self_exit( struct thread *thread )
+{
+    const char *reuse = getenv( "MYIOSDECK_SESSION_REUSE" );
+
+    if (reuse && reuse[0] == '1')
+        add_timeout_user( -TICKS_PER_SEC / 4, myiosdeck_self_exit_timeout, grab_object( thread ) );
+}
+
+/* terminate a thread */
+DECL_HANDLER(terminate_thread)
+'''),
+    ("        if (thread != current) kill_thread( thread, 1 );\n"
+     "        else reply->self = 1;\n"
+     "        cancel_terminating_thread_asyncs( thread );\n",
+     "        if (thread != current) kill_thread( thread, 1 );\n"
+     "        else\n"
+     "        {\n"
+     "            reply->self = 1;\n"
+     "            myiosdeck_watch_self_exit( thread );   /* MYIOSDECK session-reuse */\n"
+     "        }\n"
+     "        cancel_terminating_thread_asyncs( thread );\n"),
 ]
 
 FORCE_FD_FIXES = [
@@ -752,6 +831,7 @@ def main():
         apply(root + "/wine/server/process.c", FORCE_PROCESS_FIXES, what + " process.c")
         apply(root + "/build/wineserver/request_ios.c", FORCE_REQUEST_FIXES, what + " request_ios.c")
         apply(root + "/build/wineserver/fd_ios.c", FORCE_FD_FIXES, what + " fd_ios.c")
+        apply(root + "/wine/server/thread.c", SELF_EXIT_FIXES, what + " thread.c")
     elif what == "win32u":
         apply(root + "/build/win32u-unix/class_ios.c", WIN32U_FIXES, what)
         apply(root + "/wine/dlls/win32u/window.c", WINDOW_FIXES, what + " window.c")

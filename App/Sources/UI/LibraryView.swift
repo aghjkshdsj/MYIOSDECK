@@ -149,7 +149,7 @@ struct LibraryView: View {
                 if wine.sessionKept && quitStuck {
                     Text("\(session.title) has not closed. Force quit ends it at once (unsaved progress is lost) and MYIOSDECK stays open for the next game.")
                 } else if wine.sessionKept {
-                    Text("Quit game asks the game to close, as its window's close button does: confirm in the game if it asks. MYIOSDECK stays open for the next game. Quit game and close MYIOSDECK stops it at once; unsaved progress is lost.")
+                    Text("Quit game asks the game to close, as its window's close button does: confirm in the game if it asks. A game still running 10 s later is force quit (unsaved progress is lost). MYIOSDECK stays open for the next game. Quit game and close MYIOSDECK stops it at once.")
                 } else {
                     Text("A Windows game can only be stopped by closing MYIOSDECK; unsaved progress is lost.")
                 }
@@ -206,19 +206,16 @@ struct LibraryView: View {
         GameHostView.shared.setStatus("Closing \(session.title)… confirm in the game if it asks")
         let title = session.title
         // Quit game again while the first is pending: the game is not closing. Say where its
-        // threads are now, and offer Force quit (build 161: the second press came before the
-        // first one's report, and the log was taken before either).
+        // threads are now (build 161: the second press came before the first one's report, and
+        // the log was taken before either), and end it.
         if quitPending {
-            if !quitStuck {
-                dlog("[ui] Quit game again: \(title) is still running")
-                mid_wow_thread_report("Quit game again: \(title) still runs")
-                quitStuck = true
-                GameHostView.shared.setStatus("\(title) has not closed. Open the menu to force quit it.")
-            }
+            dlog("[ui] Quit game again: \(title) is still running")
+            mid_wow_thread_report("Quit game again: \(title) still runs")
+            forceQuit()
             return
         }
         // Still running 6 s later (a game can hang on its way out, or wait in a dialog): say where
-        // its threads are in the log, and offer Force quit in the game menu.
+        // its threads are in the log, and force quit it 4 s after that unless it ends meanwhile.
         quitPending = true
         quitAttempt += 1
         let attempt = quitAttempt
@@ -227,7 +224,12 @@ struct LibraryView: View {
             dlog("[ui] \(title) is still running 6 s after Quit game")
             mid_wow_thread_report("\(title) still runs 6 s after Quit game")
             quitStuck = true
-            GameHostView.shared.setStatus("\(title) has not closed. Open the menu to force quit it.")
+            GameHostView.shared.setStatus("\(title) has not closed: force quitting it in 4 s.")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+                guard attempt == quitAttempt, session.title == title, case .running = wine.state else { return }
+                dlog("[ui] \(title) is still running 10 s after Quit game: force quit")
+                forceQuit()
+            }
         }
     }
 
@@ -268,6 +270,7 @@ struct LibraryView: View {
                         .frame(width: 110)
                 }
                 Divider().overlay(Deck.panelHi)
+                SteamInstalledList(library: steamLibrary, blocker: steamDeleteBlocker)
                 SteamGamesGrid(library: steamLibrary, playBlocker: steamPlayBlocker, onPlay: { chooseSteamLaunch($0) })
                 if let dockProgress {
                     HStack { ProgressView(); Text(dockProgress).font(.subheadline).foregroundStyle(Deck.dim) }
@@ -283,10 +286,14 @@ struct LibraryView: View {
                     .font(.subheadline).foregroundStyle(Deck.dim)
                 Button("Sign in to Steam") { showSteamSignIn = true }
                     .buttonStyle(DeckButtonStyle())
+                SteamInstalledList(library: steamLibrary, blocker: steamDeleteBlocker)
             }
         }
         .sheet(isPresented: $showSteamSignIn) { SteamSignInView() }
-        .onAppear { steamLibrary.start() }
+        .onAppear {
+            steamLibrary.start()
+            steamLibrary.refreshInstalled()   // Valve's client (Madeira Dock) may have installed one meanwhile
+        }
         .confirmationDialog(steamChoiceGame.map { "Start \($0.name)" } ?? "", isPresented: steamChoicePresented,
                             titleVisibility: .visible, presenting: steamChoiceGame) { game in
             Button("With Steam") { playSteam(game, viaDock: true) }
@@ -339,6 +346,14 @@ struct LibraryView: View {
         }
     }
 
+    /// Installed Steam games cannot be deleted while a Windows game runs (it may be one of them).
+    private var steamDeleteBlocker: String? {
+        switch wine.state {
+        case .booting, .running: return "Quit the running game to delete an installed one."
+        default: return nil
+        }
+    }
+
     /// A Steam game waiting for the with / without Steam choice.
     @State private var steamChoiceGame: OwnedSteamGame?
     private var steamChoicePresented: Binding<Bool> {
@@ -362,6 +377,7 @@ struct LibraryView: View {
         wine.runCustomGame(game)
         if case .failed(let why) = wine.state { customError = why; return }
         guard case .booting = wine.state else { return }
+        RecentlyPlayed.shared.note(RecentlyPlayed.custom(game.id))
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(600))   // let the alert finish closing
             session.title = game.name
@@ -401,6 +417,7 @@ struct LibraryView: View {
                 }
                 if case .failed(let why) = wine.state { playError = why; return }
                 guard case .booting = wine.state else { return }
+                RecentlyPlayed.shared.note(RecentlyPlayed.steam(game.id))
                 // Let the game sheet finish closing before the surface is presented.
                 try? await Task.sleep(for: .milliseconds(600))
                 session.title = game.name

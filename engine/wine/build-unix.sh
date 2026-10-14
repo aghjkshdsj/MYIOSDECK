@@ -143,10 +143,10 @@ build_wineserver() {
         -DBINDIR=\"/usr/local/bin\" -DDATADIR=\"/usr/local/share\"
         -D__WINESRC__ -DWINE_IOS=1 -Dmain=wineserver_main
         -Wno-implicit-function-declaration -Wno-int-conversion)
-    # The app's Force quit for a kept session (engine/wine/patches/session_reuse.py). Start from the
-    # pristine files: the checkout is cached.
+    # The app's Force quit for a kept session, and a thread that ended itself but whose pipe never
+    # closed (engine/wine/patches/session_reuse.py). Start from the pristine files: the checkout is cached.
     git -C "$M" checkout -- build/wineserver/request_ios.c build/wineserver/fd_ios.c
-    git -C "$W" checkout -- server/process.c
+    git -C "$W" checkout -- server/process.c server/thread.c
     python3 "$HERE/patches/session_reuse.py" "$M" server
     local fail=0 src name repl
     for src in "$W"/server/*.c; do

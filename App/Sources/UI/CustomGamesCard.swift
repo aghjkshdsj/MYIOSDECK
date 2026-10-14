@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 /// from anywhere else in Files. Play goes back to the library, which owns the game surface.
 struct CustomGamesCard: View {
     @ObservedObject private var store = CustomGames.shared
+    @ObservedObject private var recent = RecentlyPlayed.shared
     let prefix: URL
     let playBlocker: String?
     let onPlay: (CustomGame) -> Void
@@ -32,7 +33,7 @@ struct CustomGamesCard: View {
                     Text(copying).font(.subheadline).foregroundStyle(Deck.dim)
                 }
             }
-            ForEach(store.games) { game in
+            ForEach(recent.sorted(store.games) { RecentlyPlayed.custom($0.id) }) { game in   // recently played first
                 Divider().overlay(Deck.panelHi)
                 row(game)
             }
@@ -51,7 +52,10 @@ struct CustomGamesCard: View {
         .sheet(item: $choosingProgram) { game in programPicker(game) }
         .confirmationDialog(deleting.map { "Delete \($0.name)?" } ?? "", isPresented: deletingPresented,
                             titleVisibility: .visible, presenting: deleting) { game in
-            Button("Delete the game's files", role: .destructive) { store.remove(game, files: true) }
+            Button("Delete the game's files", role: .destructive) {
+                store.remove(game, files: true)
+                recent.forget(RecentlyPlayed.custom(game.id))
+            }
             Button("Cancel", role: .cancel) {}
         } message: { game in
             Text("Removes Games/\(game.folder) from this iPhone. This cannot be undone.")

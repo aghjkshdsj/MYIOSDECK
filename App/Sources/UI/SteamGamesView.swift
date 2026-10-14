@@ -38,10 +38,13 @@ struct SteamGamesGrid: View {
     var playBlocker: String?
     var onPlay: (OwnedSteamGame) -> Void = { _ in }
     @State private var filter = ""
+    @ObservedObject private var recent = RecentlyPlayed.shared
 
+    /// The recently played first, then by name.
     private var shown: [OwnedSteamGame] {
         let f = filter.trimmingCharacters(in: .whitespaces)
-        return f.isEmpty ? library.games : library.games.filter { $0.name.localizedCaseInsensitiveContains(f) }
+        let games = f.isEmpty ? library.games : library.games.filter { $0.name.localizedCaseInsensitiveContains(f) }
+        return recent.sorted(games) { RecentlyPlayed.steam($0.id) }
     }
 
     var body: some View {
@@ -102,6 +105,64 @@ struct SteamGamesGrid: View {
     }
 }
 
+/// The Steam games installed on this iPhone (every Steam library on C:, downloaded here or by
+/// Valve's client), the recently played first, each with its size and Delete, which removes its
+/// files and its install record. Shown signed in or not.
+struct SteamInstalledList: View {
+    @ObservedObject var library: SteamLibrary
+    /// Why nothing can be deleted now (a Windows game is running), or nil.
+    var blocker: String?
+    @ObservedObject private var recent = RecentlyPlayed.shared
+    @State private var deleting: DockGame?
+
+    var body: some View {
+        let games = recent.sorted(library.installed) { RecentlyPlayed.steam($0.id) }
+        if !games.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Installed on this iPhone (\(games.count))").font(.headline)
+                ForEach(games) { game in
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(game.name).font(.body.weight(.semibold)).lineLimit(1)
+                            Text(detail(game)).font(.caption).foregroundStyle(Deck.dim).lineLimit(1)
+                        }
+                        Spacer()
+                        Button("Delete…", role: .destructive) { deleting = game }
+                            .disabled(blocker != nil || library.downloads[game.id] != nil)
+                    }
+                }
+                if let blocker {
+                    Text(blocker).font(.caption).foregroundStyle(Deck.dim)
+                }
+            }
+            .confirmationDialog(deleting.map { "Delete \($0.name)?" } ?? "", isPresented: deletingPresented,
+                                titleVisibility: .visible, presenting: deleting) { game in
+                Button("Delete the game's files", role: .destructive) { library.delete(game) }
+                Button("Cancel", role: .cancel) {}
+            } message: { game in
+                Text("Removes C:\\\(game.library.replacingOccurrences(of: "/", with: "\\"))\\common\\\(game.installDir) and Steam's install record from this iPhone. Saves kept elsewhere (Documents, AppData, Steam Cloud) stay. This cannot be undone.")
+            }
+        }
+    }
+
+    private var deletingPresented: Binding<Bool> {
+        Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })
+    }
+
+    private func detail(_ game: DockGame) -> String {
+        let apps = SteamLibrary.drive.appendingPathComponent(game.library, isDirectory: true)
+        var parts: [String] = []
+        if let size = SteamInstallFiles.sizeOnDisk(appID: game.id, steamApps: apps) {
+            parts.append(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))
+        }
+        if !game.installed { parts.append("not fully installed") }
+        if let at = recent.started[RecentlyPlayed.steam(game.id)] {
+            parts.append("played " + Date(timeIntervalSince1970: at).formatted(.relative(presentation: .named)))
+        }
+        return parts.isEmpty ? "App ID \(game.id)" : parts.joined(separator: " · ")
+    }
+}
+
 /// One owned game: play (4d, direct start), install, cancel, uninstall (4c).
 struct SteamGameSheet: View {
     let game: OwnedSteamGame
@@ -109,6 +170,7 @@ struct SteamGameSheet: View {
     var playBlocker: String?
     var onPlay: (OwnedSteamGame) -> Void
     @Environment(\.dismiss) private var dismiss
+    @State private var confirmUninstall = false
 
     var body: some View {
         NavigationStack {
@@ -159,7 +221,16 @@ struct SteamGameSheet: View {
                     Text(playBlocker).font(.caption).foregroundStyle(Deck.dim)
                 }
                 Button("Check for update / repair") { library.install(game.id) }.buttonStyle(DeckButtonStyle())
-                Button("Uninstall", role: .destructive) { library.uninstall(game.id) }
+                Button("Uninstall…", role: .destructive) { confirmUninstall = true }
+                    .confirmationDialog("Uninstall \(game.name)?", isPresented: $confirmUninstall, titleVisibility: .visible) {
+                        Button("Delete the game's files", role: .destructive) {
+                            library.uninstall(game.id)
+                            RecentlyPlayed.shared.forget(RecentlyPlayed.steam(game.id))
+                        }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("Removes the game's folder and Steam's install record from this iPhone. Install downloads it again.")
+                    }
             } else {
                 Button("Install") { library.install(game.id) }.buttonStyle(DeckButtonStyle())
             }

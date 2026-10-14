@@ -65,6 +65,7 @@ final class SteamLibrary: ObservableObject {
     func start() {
         guard !started else { return }
         started = true
+        refreshInstalled()
         NotificationCenter.default.addObserver(forName: SteamSignIn.didChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.signInChanged() }
         }
@@ -134,7 +135,14 @@ final class SteamLibrary: ObservableObject {
 
     @Published private(set) var downloads: [Int: DownloadState] = [:]
     /// Bumped when an install finishes or is removed, so views re-read disk state.
-    @Published private(set) var installGeneration = 0
+    @Published private(set) var installGeneration = 0 { didSet { refreshInstalled() } }
+    /// The Steam games installed on C: (MadeiraDock.games: the install records in this library and
+    /// in every other one Steam lists), whether downloaded here or by Valve's client.
+    @Published private(set) var installed: [DockGame] = []
+
+    func refreshInstalled() {
+        installed = MadeiraDock.games(drive: Self.drive)
+    }
     private var queue: [Int] = []
     private var active: (id: Int, task: Task<Void, Never>)?
     private lazy var downloader = DepotDownloader(session: session)
@@ -223,6 +231,21 @@ final class SteamLibrary: ObservableObject {
             await MainActor.run { self.installGeneration += 1 }
         }
         dlog("[steam-depot] uninstalled app=\(appID)")
+    }
+
+    /// Deletes an installed game, owned by this account or not: its folder under its library's
+    /// `common`, its install record and its resume journal (SteamInstallFiles.delete).
+    func delete(_ game: DockGame) {
+        guard downloads[game.id] == nil else { return }
+        let id = game.id, folder = game.installDir
+        let apps = Self.drive.appendingPathComponent(game.library, isDirectory: true)
+        installed.removeAll { $0.id == id }
+        Task.detached(priority: .utility) {
+            SteamInstallFiles.delete(appID: id, folderName: folder, steamApps: apps)
+            await MainActor.run { self.installGeneration += 1 }
+        }
+        RecentlyPlayed.shared.forget(RecentlyPlayed.steam(id))
+        dlog("[steam-depot] deleted app=\(id) from \(game.library)")
     }
 
     private func pump() {
