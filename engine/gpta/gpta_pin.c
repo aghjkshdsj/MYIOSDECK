@@ -1230,19 +1230,25 @@ static int lower_ea_pair(Out *o, const Uop *a, const Uop *b) {
     return 1;
 }
 
-static int lower_arith_fcj(Out *o, const Uop *u) {
+static int arith_fcj_op(const Uop *u) {
     const Desc *a = find(u[0].fn), *b = find(u[1].fn), *j = find(u[2].fn);
     if (!a || !b || !is_named(j,N_JCC) || a->fam != FAM_X || a->b || b->fam != FAM_X || b->b || !b->d ||
-        u[0].dst >= 16 || u[0].src >= 16 || u[1].dst >= 16 || u[1].src >= 16) return 0;
+        u[0].dst >= 16 || u[0].src >= 16 || u[1].dst >= 16 || u[1].src >= 16) return -1;
     int reversed = u[1].dst != u[0].dst;
-    if (reversed && u[1].src != u[0].dst) return 0;
+    if (reversed && u[1].src != u[0].dst) return -1;
     static const char *const names[] = { "addss","subss","mulss","divss","addsd","subsd","mulsd","divsd" };
-    static const PFn (*const tables[8])[9][9][9] = { t_af_addss,t_af_subss,t_af_mulss,t_af_divss,
-        t_af_addsd,t_af_subsd,t_af_mulsd,t_af_divsd };
     int op = -1;
     for (int k = 0; k < 8; k++) if (!strcmp(gpta_xops[a->a].name,names[k])) op = k;
     int dbl = !strcmp(gpta_xops[b->a].name,"comisd");
-    if (op < 0 || dbl != (op >= 4)) return 0;
+    return op >= 0 && dbl == (op >= 4) ? op : -1;
+}
+
+static int lower_arith_fcj(Out *o, const Uop *u) {
+    int op = arith_fcj_op(u);
+    if (op < 0) return 0;
+    int dbl = op >= 4, reversed = u[1].dst != u[0].dst;
+    static const PFn (*const tables[8])[9][9][9] = { t_af_addss,t_af_subss,t_af_mulss,t_af_divss,
+        t_af_addsd,t_af_subsd,t_af_mulsd,t_af_divsd };
     static const uint8_t reverse_cc[16] = { 0,1,16,17,4,5,18,19,8,9,10,11,12,13,14,15 };
     unsigned cc = u[2].cc & 15;
     if (reversed) cc = reverse_cc[cc];
@@ -1266,6 +1272,17 @@ static void lower_block(Out *o, const Block *b) {
         int start = o->n, np = o->np;
         if (i + 2 < b->n && lower_arith_fcj(o,&b->u[i])) {
             bound(o,start,np,b->u[i].rip,0); i += 2; continue;
+        }
+        // Prefer arithmetic + comparison over consuming that arithmetic in
+        // an earlier pair. The preceding instruction still executes first,
+        // with its own precise boundary. This applies to any eligible suffix.
+        if (i + 3 < b->n && arith_fcj_op(&b->u[i+1]) >= 0) {
+            lower_one(o,&b->u[i]);
+            bound(o,start,np,b->u[i].rip,0);
+            start = o->n; np = o->np;
+            lower_arith_fcj(o,&b->u[i+1]);
+            bound(o,start,np,b->u[i+1].rip,0);
+            i += 3; continue;
         }
         // EA reuse selection regressed both means in iteration 44. Keep its
         // indexed handlers and stronger fault cases, but use ordinary loads.

@@ -61,6 +61,7 @@ row below. Interrupted or defective trials are recorded separately.
 | 7d267f1 | [38495163093](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38495163093) | 28.41% | 31.05% | 8.27% | 13.96% |
 | 60ff6de | [38497514290](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38497514290) | 28.80% | 30.86% | 8.33% | 14.02% |
 | f9d296c | [38497748838](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38497748838) | 28.26% | 30.17% | 8.35% | 13.98% |
+| d34483e | [38498960864](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38498960864) | 28.43% | 31.15% | 8.27% | 13.93% |
 
 The third trial (result-width branches and simplified floating comparisons)
 regressed. Its ARM64, x86 and iOS gates passed. That trial is rolled back in
@@ -361,6 +362,14 @@ tests cover both orders for every scalar arithmetic operation and condition,
 low/high registers, aliases, upper lanes, NaNs and live exit flags. Static
 handler names now expand the operation macro before token pasting, making
 perf names distinguish the operations. This trial is not measured yet.
+
+A separate lowering-priority trial keeps an eligible arithmetic/COMIS/JCC
+suffix available instead of consuming its arithmetic instruction in an earlier
+overlapping pair. The preceding instruction still executes first in its own
+handler with its original precise boundary. This changes selection between
+existing general handlers, independent of program identity, values or loop
+shape. Differential tests add full register copies immediately before the
+arithmetic for both comparison orders and all conditions and operations.
 
 Windows mode defaults to the identity permutation. CI additionally enables
 the allocation trial with `GPTA_XMAP_WINDOWS=1` and repeats the same native

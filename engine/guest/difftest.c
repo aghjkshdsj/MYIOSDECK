@@ -1482,20 +1482,24 @@ static void gpta_shift_xor(void) {
 }
 #define AF_COMPARE_0(CMP,D,C) CMP " %%xmm" #C ", %%xmm" #D "\n\t"
 #define AF_COMPARE_1(CMP,D,C) CMP " %%xmm" #D ", %%xmm" #C "\n\t"
+#define AF_COPY_0(D) ""
+#define AF_COPY_1(D) "movapd %%xmm" #D ", %%xmm3\n\tmovapd %%xmm3, %%xmm" #D "\n\t"
 #define AF_CASE(OP,CMP,D,S,C,CC) do { \
-    AF_CASE_ORDER(OP,CMP,D,S,C,CC,0); AF_CASE_ORDER(OP,CMP,D,S,C,CC,1); \
+    AF_CASE_ORDER(OP,CMP,D,S,C,CC,0,0); AF_CASE_ORDER(OP,CMP,D,S,C,CC,1,0); \
+    AF_CASE_ORDER(OP,CMP,D,S,C,CC,0,1); AF_CASE_ORDER(OP,CMP,D,S,C,CC,1,1); \
 } while (0)
-#define AF_CASE_ORDER(OP,CMP,D,S,C,CC,ORDER) do { \
+#define AF_CASE_ORDER(OP,CMP,D,S,C,CC,ORDER,COPY) do { \
     v2 r; u64 score, f; \
     __asm__ volatile("movdqu %[a], %%xmm" #D "\n\t" \
         "movdqu %[b], %%xmm" #S "\n\tmovdqu %[c], %%xmm" #C "\n\t" \
+        AF_COPY_##COPY(D) \
         OP " %%xmm" #S ", %%xmm" #D "\n\t" \
         AF_COMPARE_##ORDER(CMP,D,C) "j" CC " 1f\n\t" \
         "movq $3, %[score]\n\tjmp 2f\n\t1: movq $5, %[score]\n\t2:\n\t" \
         "pushfq\n\tpopq %[f]\n\tmovdqu %%xmm" #D ", %[r]\n\ttestq %[f], %[f]" \
         : [r] "=m"(r), [score] "=m"(score), [f] "=&r"(f) \
         : [a] "m"(a), [b] "m"(b), [c] "m"(c) \
-        : "xmm" #D, "xmm" #S, "xmm" #C, "cc", "memory"); \
+        : "xmm" #D, "xmm" #S, "xmm" #C, "xmm3", "cc", "memory"); \
     h = mix(mix(vmix(h,r),score),f & ARITH); \
 } while (0)
 #define AF_REGS(OP,CMP,CC) \
