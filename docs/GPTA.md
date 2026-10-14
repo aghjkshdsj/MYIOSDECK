@@ -57,6 +57,8 @@ row below. Interrupted or defective trials are recorded separately.
 | 2120516 | [38492982469](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38492982469) | 27.49% | 31.40% | 8.12% | 13.98% |
 | b782565 | [38493209646](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38493209646) | 27.53% | 30.87% | 8.30% | 13.98% |
 | 45ee02a | [38493782478](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38493782478) | 28.08% | 29.78% | 8.49% | 14.00% |
+| 5ada1ce | [38494977196](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38494977196) | 28.69% | 30.61% | 8.32% | 13.96% |
+| 7d267f1 | [38495163093](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38495163093) | 28.41% | 31.05% | 8.27% | 13.96% |
 
 The third trial (result-width branches and simplified floating comparisons)
 regressed. Its ARM64, x86 and iOS gates passed. That trial is rolled back in
@@ -283,7 +285,10 @@ Differential cases compare the copied value, direction and defined flags
 across all width combinations, conditions and self copies. Static handler
 replicas and host-state indexing cover every form. No guest loop is replaced.
 
-The scalar arithmetic/comparison group trial is **not measured**. Its family
+The repaired scalar arithmetic/comparison group trial passed every gate,
+but did not improve the standard float timing. Both means remain below 50%.
+The next diagnostics-only run leaves its interpreter unchanged and likewise
+passes all gates, with fresh timings recorded above. Its family
 was selected from the independent system/library/Madeira corpus in run
 [38493680532](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38493680532),
 which records arithmetic followed by COMIS/UCOMIS comparing the result and a
@@ -331,6 +336,12 @@ token pasting retained the literal opcode macro name and generated an
 undeclared SX_SX_OP call. The isolated repair expands the opcode before
 pasting both handler names and operation names. The failed trial's speed is
 not measured. No correctness or recovery gate is weakened.
+
+Standard profiling evidence now includes the standard guest's disassembly
+alongside the host handler disassembly and perf reports. This diagnoses why
+a newly selected corpus family may leave the sampled dominant handlers
+unchanged. Neither held-out source nor assembly nor profiles are inspected.
+This evidence-only workflow change does not change interpreter behavior.
 
 Windows mode defaults to the identity permutation. CI additionally enables
 the allocation trial with `GPTA_XMAP_WINDOWS=1` and repeats the same native

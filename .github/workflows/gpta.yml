@@ -160,7 +160,11 @@ jobs:
       - name: Profile dispatch, spills and register traffic (ARM64)
         if: runner.arch == 'ARM64'
         continue-on-error: true
-        run: bash engine/gpta/profile.sh "$RUNNER_TEMP/gpta/gpta" "$PWD/guests" "$RUNNER_TEMP/profile"
+        run: |
+          mkdir -p "$RUNNER_TEMP/profile"
+          # Standard guest only. Never disassemble or profile held-out code.
+          objdump -d --no-show-raw-insn -M intel guests/bench_sse2.elf > "$RUNNER_TEMP/profile/standard_guest.dis"
+          bash engine/gpta/profile.sh "$RUNNER_TEMP/gpta/gpta" "$PWD/guests" "$RUNNER_TEMP/profile"
       - uses: actions/upload-artifact@v5
         if: always()
         with:
