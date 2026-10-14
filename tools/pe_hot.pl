@@ -6,6 +6,7 @@
 #   tools/pe_hot.pl <file.dll> <rva> [<rva> ...]     (RVAs in hex, e.g. 0x54d2d)
 use strict;
 use warnings;
+no warnings "portable";   # 64-bit addresses through hex()
 
 my ($pe, @rvas) = @ARGV;
 die "usage: $0 file.dll rva...\n" unless $pe && @rvas;
