@@ -30,6 +30,7 @@
 #include "gpta_pin_cfonly.h"
 #include "gpta_pin_unary_trace.h"
 #include "gpta_pin_xload.h"
+#include "gpta_pin_step_noadj.h"
 
 static Uop *architectural_uop(FxiCpu *c, Uop *u, Uop *original);
 static GPTA_CC void p_xentry(GPTA_PARAMS);
@@ -392,6 +393,7 @@ static void rmap_init(void) {
     RMAP(t_shconst);
     RMAP(t_cf_rr); RMAP(t_cf_ri);
     RMAP(t_fid_trace);
+    RMAP(t_sii_noadj); RMAP(t_sri_noadj);
     RMAP(t_xload_ps); RMAP(t_xload_pd); RMAP(t_xload_ss); RMAP(t_xload_sd);
     RMAP(t_csh_shl); RMAP(t_csh_shr); RMAP(t_csh_sar); RMAP(t_csh_rol); RMAP(t_csh_ror);
     RMAP(t_xlz); RMAP(t_xsz);
@@ -1222,8 +1224,10 @@ static PFn step_trace_handler(const Uop *u, unsigned edge) {
     for (int op = 0; op < 2; op++)
         for (int sz = 0; sz < 2; sz++)
             for (int cc = 0; cc < 10; cc++) {
-                if (S == 16 && u->p == t_sii[op][sz][cc][D]) return t_sii_trace[edge][op][sz][cc][D];
-                if (S < 16 && u->p == t_sri[op][sz][cc][D][S]) return t_sri_trace[edge][op][sz][cc][D][S];
+                if (S == 16 && u->p == t_sii[op][sz][cc][D])
+                    return edge < 2 ? t_sii_trace[edge][op][sz][cc][D] : t_sii_noadj[op][sz][cc][D];
+                if (S < 16 && u->p == t_sri[op][sz][cc][D][S])
+                    return edge < 2 ? t_sri_trace[edge][op][sz][cc][D][S] : t_sri_noadj[op][sz][cc][D][S];
             }
     return u->p;
 }
@@ -1322,9 +1326,12 @@ Block *gpta_lower(struct Fxi *vm, Block *b) {
                 Uop *br = &nb->u[base + o[i].patch[k].at], *st = &nb->u[prefix + copies * M + soff[i] + (o[i].patch[k].stub - m[i])];
                 if (o[i].patch[k].edge) br->ulink2 = st; else br->ulink = st;
             }
+            Uop *t = m[i] > 0 ? &nb->u[base + m[i] - 1] : NULL;
+            unsigned adjacent = 2;
             if (ns) {   // the trace edge: the next block, or back to the start (the next copy's)
-                Uop *t = &nb->u[base + m[i] - 1], *to = i + 1 < nseg ? t + 1 : &nb->u[prefix + (c + 1 < copies ? (c + 1) * M : 0)];
+                Uop *to = i + 1 < nseg ? t + 1 : &nb->u[prefix + (c + 1 < copies ? (c + 1) * M : 0)];
                 if (edge[i]) t->ulink2 = to; else t->ulink = to;
+                if (to == t + 1) adjacent = (unsigned)edge[i];
                 // No link lookup is needed for a statically adjacent trace edge.
                 // Match the original handler so unrelated uop fields cannot opt in.
                 if (to == t + 1 && t->dst < 16 && t->src < 16) {
@@ -1336,20 +1343,20 @@ Block *gpta_lower(struct Fxi *vm, Block *b) {
                         }
                 }
                 if (to == t + 1) {
-                    if (t->dst < 128 && !(t->dst & 7)) {
-                        unsigned D = t->dst >> 3;
-                        for (int inc = 0; inc < 2; inc++)
-                            for (int sz = 0; sz < 2; sz++)
-                                for (int cc = 0; cc < 4; cc++)
-                                    if (t->p == t_fid[inc][sz][cc][D])
-                                        t->p = t_fid_trace[edge[i]][inc][sz][cc][D];
-                    }
-                    // Arithmetic adjacent-edge handlers remain compiled for
-                    // comparison, but the measured front-end regression in
-                    // iteration 21 warrants reverting their selection.
                     for (int si = 0; si < 4; si++)
                         for (int cc = 0; cc < 6; cc++)
                             if (t->p == t_jresult[si][cc]) t->p = t_jresult_trace[edge[i]][si][cc];
+                }
+            }
+            if (t) {
+                t->p = step_trace_handler(t,adjacent);
+                if (t->dst < 128 && !(t->dst & 7)) {
+                    unsigned D = t->dst >> 3;
+                    for (int inc = 0; inc < 2; inc++)
+                        for (int sz = 0; sz < 2; sz++)
+                            for (int cc = 0; cc < 4; cc++)
+                                if (t->p == t_fid[inc][sz][cc][D])
+                                    t->p = t_fid_trace[adjacent][inc][sz][cc][D];
                 }
             }
         }
@@ -1464,6 +1471,8 @@ static void hidx_build(void) {
     hidx_tab((const PFn *)t_cf_rr, sizeof t_cf_rr / sizeof(PFn));
     hidx_tab((const PFn *)t_cf_ri, sizeof t_cf_ri / sizeof(PFn));
     hidx_tab((const PFn *)t_fid_trace, sizeof t_fid_trace / sizeof(PFn));
+    hidx_tab((const PFn *)t_sii_noadj, sizeof t_sii_noadj / sizeof(PFn));
+    hidx_tab((const PFn *)t_sri_noadj, sizeof t_sri_noadj / sizeof(PFn));
 #define XL_HIDX(N) hidx_tab((const PFn *)N, sizeof N / sizeof(PFn));
     GPTA_XLOAD_TABLES(XL_HIDX)
 #undef XL_HIDX

@@ -18,10 +18,10 @@
 #define UT_CCS(M,...) M(4,__VA_ARGS__) M(5,__VA_ARGS__) M(8,__VA_ARGS__) M(9,__VA_ARGS__)
 #define UT_EDGE(EDGE) UT_CCS(UT_CC,32,dec,EDGE) UT_CCS(UT_CC,64,dec,EDGE) \
     UT_CCS(UT_CC,32,inc,EDGE) UT_CCS(UT_CC,64,inc,EDGE)
-UT_EDGE(0) UT_EDGE(1)
+UT_EDGE(0) UT_EDGE(1) UT_EDGE(2)
 #define UT_E(D,CC,SZ,OP,EDGE) p_ut_##OP##_##SZ##_##CC##_##D##_##EDGE,
 #define UT_ROW(CC,SZ,OP,EDGE) { R16(UT_E,CC,SZ,OP,EDGE) },
 #define UT_TABLE(EDGE) { \
     { { UT_CCS(UT_ROW,32,dec,EDGE) }, { UT_CCS(UT_ROW,64,dec,EDGE) } }, \
     { { UT_CCS(UT_ROW,32,inc,EDGE) }, { UT_CCS(UT_ROW,64,inc,EDGE) } } }
-const PFn t_fid_trace[2][2][2][4][16] = { UT_TABLE(0), UT_TABLE(1) };
+const PFn t_fid_trace[3][2][2][4][16] = { UT_TABLE(0), UT_TABLE(1), UT_TABLE(2) };

@@ -47,6 +47,7 @@ row below. Interrupted or defective trials are recorded separately.
 | 9a102a0 | [38488394754](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38488394754) | 27.01% | 31.16% | 8.27% | 13.96% |
 | f6ce896 | [38488865639](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38488865639) | 27.63% | 31.33% | 8.30% | 13.98% |
 | 19ed75e | [38489068854](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38489068854) | 28.06% | 31.53% | 8.19% | 13.98% |
+| 1f2d829 | [38489428585](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38489428585) | 27.75% | 30.66% | 8.39% | 13.97% |
 
 The third trial (result-width branches and simplified floating comparisons)
 regressed. Its ARM64, x86 and iOS gates passed. That trial is rolled back in
@@ -187,7 +188,8 @@ instruction and branch remains interpreted. Windows retains the preceding
 allocation policy. Differential coverage alternates vector subsets across
 conditional paths and an inner loop while keeping all sixteen vectors live.
 
-The unary adjacent-edge trial is **not measured**. Existing register INC/DEC
+The unary adjacent-edge trial passed every gate but regressed both suite
+means. Existing register INC/DEC
 plus ZF/SF branch pairs receive handlers that use a successor proven adjacent
 by trace construction. Other edges retain the existing links and flag exit
 stubs; every unary instruction and branch still executes. Handler replicas
@@ -204,6 +206,16 @@ precedes every visible side effect. New differential cases cover all sixteen
 XMM destinations, upper-lane clearing, aliases and preserved flags. New exact
 fault sites 49-52 check nonzero upper lanes for each type, with both Windows
 allocation policies; the unchanged assembly audit checks every new handler.
+
+The branch-layout trial is **not measured**. Existing immediate-compare step
+pairs and unary zero/sign pairs use a handler selected from the layout of
+each actual copy: a proven adjacent edge steps directly, and other copies
+chain through links without runtime adjacency checks. This revisits the
+arithmetic adjacent handlers disabled after iteration 21, together with
+non-adjacent handlers for ordinary blocks and final backedges. Replication
+still uses each copy's actual handler. The existing complete condition,
+width, alias and wraparound cases now also compare final exit flags against
+native execution. All guest instructions and branches remain interpreted.
 
 Windows mode defaults to the identity permutation. CI additionally enables
 the allocation trial with `GPTA_XMAP_WINDOWS=1` and repeats the same native

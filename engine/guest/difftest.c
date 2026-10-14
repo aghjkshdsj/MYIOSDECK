@@ -924,11 +924,11 @@ static void gpta_fcj_trace(void) {
     STEP_TRACE_CASE(CC, OP, "l", "eax", "%%eax", "13")
 #define STEP_TRACE_COND(CC) STEP_TRACE_FORMS(CC, "add"); STEP_TRACE_FORMS(CC, "sub")
 #define STEP_BACKEDGE(OP, SUF, DST, SRC, START, LIMIT, CC) do { \
-    u64 r = START; \
+    u64 r = START, f; \
     __asm__ volatile("1:\t" OP SUF " " SRC ", %%" DST "\n\tcmp" SUF \
-        " $" LIMIT ", %%" DST "\n\tj" #CC " 1b" \
-        : "+a"(r) : "d"((u64)3) : "cc"); \
-    h = mix(h, r); \
+        " $" LIMIT ", %%" DST "\n\tj" #CC " 1b\n\tpushfq\n\tpopq %[f]\n\ttestq %%rax, %%rax" \
+        : "+a"(r), [f] "=&r"(f) : "d"((u64)3) : "cc", "memory"); \
+    h = mix(mix(h, r),f & ARITH); \
 } while (0)
 static void gpta_step_trace(void) {
     u64 h = 14695981039346656037ull;
