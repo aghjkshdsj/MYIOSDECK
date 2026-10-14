@@ -458,9 +458,8 @@ static void rmap_init(void) {
     RMAP(t_sii_noadj); RMAP(t_sri_noadj);
     RMAP(t_rf); RMAP(t_rs); RMAP(t_xs);
     RMAP(t_mtj);
-#define AF_RMAP(N) RMAP(N);
-    GPTA_AFCJ_TABLES(AF_RMAP)
-#undef AF_RMAP
+    RMAP(t_af_addss); RMAP(t_af_subss); RMAP(t_af_mulss); RMAP(t_af_divss);
+    RMAP(t_af_addsd); RMAP(t_af_subsd); RMAP(t_af_mulsd); RMAP(t_af_divsd);
     RMAP(t_xf0); RMAP(t_xf1); RMAP(t_xf2); RMAP(t_xf3);
     RMAP(t_xload_ps); RMAP(t_xload_pd); RMAP(t_xload_ss); RMAP(t_xload_sd);
     RMAP(t_csh_shl); RMAP(t_csh_shr); RMAP(t_csh_sar); RMAP(t_csh_rol); RMAP(t_csh_ror);

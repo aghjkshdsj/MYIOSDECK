@@ -296,6 +296,14 @@ results, unordered comparisons, all conditions, upper lanes, aliases and
 live exit flags. The preceding floating trace case exercises final backedges.
 All replicas are indexed for host recovery and the unchanged precision audit.
 
+Its first commit, 1fe3bc4, failed compilation in
+[38494669280](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38494669280):
+the existing C16 helper supplies a trailing empty argument when no extra
+arguments are passed, and a forwarding replica macro expanded table aliases
+before token pasting. The isolated repair accepts the empty condition
+argument and names replica tables directly. No timing ran on the failed
+commit; its speed is not measured and its gates did not pass.
+
 Windows mode defaults to the identity permutation. CI additionally enables
 the allocation trial with `GPTA_XMAP_WINDOWS=1` and repeats the same native
 exit, native API, fault-site and thread-stop checks. Host-state recovery

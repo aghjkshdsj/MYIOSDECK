@@ -36,11 +36,11 @@
         fcj_fall: PCHAIN_T(u->ulink2,p_miss_f); }
 #define AF_SRC(S,D,CC) AF_X9C(AF_DEF,S,D,CC)
 #define AF_DST(D,CC) X9B(AF_SRC,D,CC)
-#define AF_CC(CC) X9(AF_DST,CC)
+#define AF_CC(CC,...) X9(AF_DST,CC)
 C16(AF_CC)
 #define AF_E(C,S,D,CC) AF_E2(C,S,D,CC,AF_NAME)
 #define AF_E2(C,S,D,CC,N) p_af_##N##_##CC##_##D##_##S##_##C,
 #define AF_ROW(S,D,CC) { AF_X9C(AF_E,S,D,CC) },
 #define AF_PLANE(D,CC) { X9B(AF_ROW,D,CC) },
-#define AF_COND(CC) { X9(AF_PLANE,CC) },
+#define AF_COND(CC,...) { X9(AF_PLANE,CC) },
 const PFn AF_TABLE[16][9][9][9] = { C16(AF_COND) };
