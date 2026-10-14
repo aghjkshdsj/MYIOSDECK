@@ -128,6 +128,12 @@ sub show {
     }
 }
 for my $r (@rvas) {
+    # dump:RVA - 32 bytes of data there (a short string a function uses, such as a separator).
+    if ($r =~ /^dump:(?:0x)?([0-9a-f]+)$/i) {
+        my $o = off(hex $1);
+        printf "\n######## dump 0x%s: %s\n", $1, defined $o ? join(' ', map { sprintf '%02x', $_ } unpack('C32', substr($img, $o, 32))) : 'not in the file';
+        next;
+    }
     # str:TEXT - the functions that reference that exact string (how a log line, a setting or a
     # registry value is used), each with its callers.
     if ($r =~ /^str:(.+)$/) {
