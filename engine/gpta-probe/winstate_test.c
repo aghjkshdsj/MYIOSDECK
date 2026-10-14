@@ -234,10 +234,13 @@ static void on_fault(int sig, siginfo_t *si, void *ctx) {
                       g_site == 45 ? 9 : g_site == 46 ? 12 : g_site == 49 ? 0 :
                       g_site == 50 ? 13 : g_site == 51 ? 7 : g_site == 52 ? 15 :
                       g_site == 54 ? 0 : g_site == 56 ? 14 : g_site == 57 ? 0 :
-                      g_site == 58 ? 13 : g_site == 59 ? 7 : g_site == 60 ? 15 : -1;
+                      g_site == 58 ? 13 : g_site == 59 ? 7 : g_site == 60 ? 15 :
+                      g_site == 61 ? 0 : g_site == 62 ? 15 : g_site == 63 ? 0 : g_site == 64 ? 15 : -1;
         for (int x = 0; x < 16; x++) {
             uint64_t low = want[xsrc[x]], high = x == dup_xmm ? low : 0;
-            if (g_site == 56 && x == 0) { low = UINT64_C(0x1234567889abcdef); high = UINT64_C(0xfedcba9876543210); }
+            if (((g_site == 56 || g_site == 63) && x == 0) || (g_site == 64 && x == 13)) {
+                low = UINT64_C(0x1234567889abcdef); high = UINT64_C(0xfedcba9876543210);
+            }
             if (c->xmm[x].q[0] != low || c->xmm[x].q[1] != high) {
                 bad = 1; n += snprintf(out + n, sizeof out - (size_t)n, "xmm%d %#llx:%#llx; ", x, (unsigned long long)c->xmm[x].q[1], (unsigned long long)c->xmm[x].q[0]);
             }

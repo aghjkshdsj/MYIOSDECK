@@ -34,6 +34,7 @@
 #include "gpta_pin_eareuse.h"
 #include "gpta_pin_movtest.h"
 #include "gpta_pin_afcj.h"
+#include "gpta_pin_loadpair.h"
 #include "gpta_pin_shiftxor.h"
 
 static Uop *architectural_uop(FxiCpu *c, Uop *u, Uop *original);
@@ -465,6 +466,8 @@ static void rmap_init(void) {
     RMAP(t_xf0); RMAP(t_xf1); RMAP(t_xf2); RMAP(t_xf3);
     RMAP(t_xload_ps); RMAP(t_xload_pd); RMAP(t_xload_ss); RMAP(t_xload_sd);
     RMAP(t_xloadi_ps); RMAP(t_xloadi_pd); RMAP(t_xloadi_ss); RMAP(t_xloadi_sd);
+    RMAP(t_lp_first0); RMAP(t_lp_first1); RMAP(t_lp_first2); RMAP(t_lp_first3);
+    RMAP(t_lp_next0); RMAP(t_lp_next1); RMAP(t_lp_next2); RMAP(t_lp_next3);
     RMAP(t_csh_shl); RMAP(t_csh_shr); RMAP(t_csh_sar); RMAP(t_csh_rol); RMAP(t_csh_ror);
     RMAP(t_xlz); RMAP(t_xsz);
     RMAP(t_am_add); RMAP(t_am_sub); RMAP(t_am_and); RMAP(t_am_or); RMAP(t_am_xor);
@@ -1275,6 +1278,38 @@ static int lower_arith_fcj(Out *o, const Uop *u) {
     return 1;
 }
 
+static int lower_direct_load_pair(Out *o, const Uop *u, uint32_t left) {
+    if (left < 2) return 0;
+    const Uop *v = u+1;
+    const Desc *a = find(u->fn), *b = find(v->fn);
+    if (!a || !b || a->fam != FAM_X || b->fam != FAM_X || !a->b || !b->b ||
+        strcmp(gpta_xops[a->a].name,"movx") || strcmp(gpta_xops[b->a].name,"movx") ||
+        !ea_ok(u) || !ea_ok(v) || u->dst >= 16 || v->dst >= 16 ||
+        u->base != v->base || u->index != v->index || u->scale != v->scale) return 0;
+    // Keep an existing load/arithmetic fusion on the second load available.
+    if (left >= 3) {
+        const Desc *c = find(u[2].fn);
+        if (c && c->fam == FAM_X && !c->b && u[2].dst == v->dst) {
+            int k = xmem_index(gpta_xops[c->a].name);
+            if (k >= 0 && k < 6) return 0;
+        }
+    }
+    static const PFn (*const first[4])[9][17][17] = {
+        t_lp_first0,t_lp_first1,t_lp_first2,t_lp_first3 };
+    static const PFn (*const next[4])[17][17] = {
+        t_lp_next0,t_lp_next1,t_lp_next2,t_lp_next3 };
+    static const PFn (*const next_replica[4])[17][17] = {
+        gpta_t_lp_next0_r1,gpta_t_lp_next1_r1,gpta_t_lp_next2_r1,gpta_t_lp_next3_r1 };
+    PFn f = first[u->scale][xcls(u->dst)][xcls(v->dst)][u->base][u->index];
+    PFn n = next[u->scale][xcls(v->dst)][u->base][u->index];
+    Uop *x = put_uop(o,u,f);
+    x->fdir |= GPTA_DIRECT_LOAD_PAIR;
+    x->imm = (uint64_t)(uintptr_t)f; x->aux = (uint64_t)(uintptr_t)n;
+    x->ulink2 = (Uop *)(uintptr_t)next_replica[u->scale][xcls(v->dst)][u->base][u->index];
+    put_uop(o,v,n);   // a real second instruction boundary, with its own RIP
+    return 1;
+}
+
 static void lower_block(Out *o, const Block *b) {
     for (uint32_t i = 0; i < b->n; i++) {
         int start = o->n, np = o->np;
@@ -1291,6 +1326,9 @@ static void lower_block(Out *o, const Block *b) {
             lower_arith_fcj(o,&b->u[i+1]);
             bound(o,start,np,b->u[i+1].rip,0);
             i += 3; continue;
+        }
+        if (lower_direct_load_pair(o,&b->u[i],b->n-i)) {
+            bound(o,start,np,0,0); i++; continue;
         }
         // EA reuse selection regressed both means in iteration 44. Keep its
         // indexed handlers and stronger fault cases, but use ordinary loads.
@@ -1546,6 +1584,16 @@ Block *gpta_lower(struct Fxi *vm, Block *b) {
             }
         }
     if (g_replicas) replicate(nb->u + prefix, M, copies);
+    // A direct first handler calls its own compiled second-handler variant.
+    // Match the second uop's metadata to that variant after replica selection,
+    // preserving the existing exact-fault/stop identity checks unchanged.
+    for (uint32_t k = prefix; k+1 < n; k++) {
+        Uop *u = &nb->u[k];
+        if (!(u->fdir & GPTA_DIRECT_LOAD_PAIR)) continue;
+        PFn base = (PFn)(uintptr_t)u->imm, next = (PFn)(uintptr_t)u->aux;
+        if (u->p != base) next = (PFn)(uintptr_t)u->ulink2;
+        nb->u[k+1].p = next;
+    }
     for (int i = 0; i < nseg; i++) { free(o[i].out); free(seg[i]); }
     return nb;
 }
@@ -1667,6 +1715,8 @@ static void hidx_build(void) {
 #undef ER_HIDX
 #define XL_HIDX(N) hidx_tab((const PFn *)N, sizeof N / sizeof(PFn));
     GPTA_XLOAD_TABLES(XL_HIDX)
+    LP_FIRST_TABLES(XL_HIDX)
+    LP_NEXT_TABLES(XL_HIDX)
 #undef XL_HIDX
 #define CSH_HIDX(N) hidx_tab((const PFn *)N, sizeof N / sizeof(PFn));
     CSH_HIDX(t_csh_shl) CSH_HIDX(t_csh_shr) CSH_HIDX(t_csh_sar) CSH_HIDX(t_csh_rol) CSH_HIDX(t_csh_ror)

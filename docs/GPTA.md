@@ -398,6 +398,23 @@ corpus diagnostics count consecutive full-width vector loads, including the
 same-base/index/scale subset, with exact raw counts. The engine does not yet
 select a new consecutive-load family.
 
+Independent corpus run
+[38643061498](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38643061498)
+found 4114 consecutive full-vector load pairs with equal base/index/scale,
+2976 of them in loop bodies. The next trial gives their first handler a
+static direct tail branch to a separate, non-inlined second handler. Both
+instructions keep their own uop, RIP and recoverable boundary; each handler
+performs only one guest access. Displacements remain ordinary operands.
+All vector classes, aliases and scales are supported. Existing load/arithmetic
+pairs on the second load retain priority. After replica selection the second
+uop is assigned the exact compiled continuation called by the first, using
+immutable metadata. No recovery identity check or assembly audit is relaxed.
+Differential cases cover every vector destination, aliases, signed indices,
+displacements, equal address registers and flags. Fault sites 61-64 check
+first-load faults and completed first results at second-load faults, including
+an aliased destination; existing site 56 also exercises the second boundary.
+This trial is not measured yet.
+
 The next indexed-load trial extends the existing independent-corpus load +
 arithmetic family to base + index * scale + displacement, retaining every
 architectural scale and ADD/SUB/MUL in packed and scalar single/double forms.
