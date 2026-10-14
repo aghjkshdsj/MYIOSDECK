@@ -1445,6 +1445,41 @@ static void gpta_unary_trace(void) {
     out("gpta_unary_trace",h);
 }
 typedef void (*test_fn)(void);
+#define SX_CASE(OP,SZ,REG,DEST,SRC,COUNT,TAIL) do { \
+    u64 a = val(), b = val(), r, q, fi = flags_in(), f; \
+    __asm__ volatile(PRE "movq %[a], %%rax\n\tmovq %[b], %%rdx\n\t" \
+        OP SZ " %[n], " REG "\n\txor" SZ " " SRC ", " DEST "\n\t" TAIL \
+        "pushfq\n\tpopq %[f]\n\tmovq %%rax, %[r]\n\tmovq %%rdx, %[q]\n\ttestq %%rax, %%rax" \
+        : [r] "=m"(r), [q] "=m"(q), [f] "=&r"(f) \
+        : [a] "r"(a), [b] "r"(b), [fi] "r"(fi), [n] "i"(COUNT) : "rax", "rdx", "cc", "memory"); \
+    h = mix(mix(mix(h,r),q),f & LOGIC); \
+} while (0)
+#define SX_FORMS(OP,COUNT) \
+    SX_CASE(OP,"l","%%eax","%%eax","%%edx",COUNT,""); \
+    SX_CASE(OP,"q","%%rax","%%rax","%%rdx",COUNT,""); \
+    SX_CASE(OP,"l","%%eax","%%edx","%%eax",COUNT,""); \
+    SX_CASE(OP,"q","%%rax","%%rdx","%%rax",COUNT,""); \
+    SX_CASE(OP,"l","%%eax","%%eax","%%eax",COUNT,""); \
+    SX_CASE(OP,"q","%%rax","%%rax","%%rax",COUNT,""); \
+    SX_CASE(OP,"l","%%eax","%%edx","%%eax",COUNT,"xorl %k[f], %k[f]\n\t"); \
+    SX_CASE(OP,"q","%%rax","%%rax","%%rdx",COUNT,"xorl %k[f], %k[f]\n\t")
+#define SX_COUNT(COUNT) SX_FORMS("shl",COUNT); SX_FORMS("shr",COUNT); \
+    SX_FORMS("sar",COUNT); SX_FORMS("rol",COUNT); SX_FORMS("ror",COUNT)
+static void gpta_shift_xor(void) {
+    u64 h = 14695981039346656037ull;
+    for (int i = 0; i < N; i++) {
+        SX_COUNT(0); SX_COUNT(1); SX_COUNT(2); SX_COUNT(3); SX_COUNT(4); SX_COUNT(5); SX_COUNT(6); SX_COUNT(7);
+        SX_COUNT(8); SX_COUNT(9); SX_COUNT(10); SX_COUNT(11); SX_COUNT(12); SX_COUNT(13); SX_COUNT(14); SX_COUNT(15);
+        SX_COUNT(16); SX_COUNT(17); SX_COUNT(18); SX_COUNT(19); SX_COUNT(20); SX_COUNT(21); SX_COUNT(22); SX_COUNT(23);
+        SX_COUNT(24); SX_COUNT(25); SX_COUNT(26); SX_COUNT(27); SX_COUNT(28); SX_COUNT(29); SX_COUNT(30); SX_COUNT(31);
+        SX_COUNT(32); SX_COUNT(33); SX_COUNT(34); SX_COUNT(35); SX_COUNT(36); SX_COUNT(37); SX_COUNT(38); SX_COUNT(39);
+        SX_COUNT(40); SX_COUNT(41); SX_COUNT(42); SX_COUNT(43); SX_COUNT(44); SX_COUNT(45); SX_COUNT(46); SX_COUNT(47);
+        SX_COUNT(48); SX_COUNT(49); SX_COUNT(50); SX_COUNT(51); SX_COUNT(52); SX_COUNT(53); SX_COUNT(54); SX_COUNT(55);
+        SX_COUNT(56); SX_COUNT(57); SX_COUNT(58); SX_COUNT(59); SX_COUNT(60); SX_COUNT(61); SX_COUNT(62); SX_COUNT(63);
+        SX_COUNT(64); SX_COUNT(127); SX_COUNT(255);
+    }
+    out("gpta_shift_xor",h);
+}
 #define AF_CASE(OP,CMP,D,S,C,CC) do { \
     v2 r; u64 score, f; \
     __asm__ volatile("movdqu %[a], %%xmm" #D "\n\t" \
@@ -1642,7 +1677,7 @@ static const test_fn kTests[] = {
     fz_o, fz_no, fz_b, fz_ae, fz_e, fz_ne, fz_be, fz_a, fz_s, fz_ns, fz_p, fz_np, fz_l, fz_ge, fz_le, fz_g,
     fc_o, fc_no, fc_b, fc_ae, fc_e, fc_ne, fc_be, fc_a, fc_s, fc_ns, fc_p, fc_np, fc_l, fc_ge, fc_le, fc_g,
     fz_call, fz_index, fz_xindex, fz_3op, fz_3gap, fz_x3, fz_hoist, gpta_xmem, gpta_result_flags, gpta_xhigh, gpta_cf_flow,
-    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow, gpta_fcj_trace, gpta_jresult_trace, gpta_immstores, gpta_x3high, gpta_step_trace, gpta_shift_counts, gpta_copy_shift_counts, gpta_unary_edges, gpta_alu_memory, gpta_xmm_lane_state, gpta_scalar_mem, gpta_unary_flag_inputs, gpta_xmap_transitions, gpta_cf_only, gpta_unary_trace, gpta_xload_pairs, gpta_ea_pairs, gpta_mov_test_branch, gpta_arith_float_branch,
+    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow, gpta_fcj_trace, gpta_jresult_trace, gpta_immstores, gpta_x3high, gpta_step_trace, gpta_shift_counts, gpta_copy_shift_counts, gpta_unary_edges, gpta_alu_memory, gpta_xmm_lane_state, gpta_scalar_mem, gpta_unary_flag_inputs, gpta_xmap_transitions, gpta_cf_only, gpta_unary_trace, gpta_xload_pairs, gpta_ea_pairs, gpta_mov_test_branch, gpta_arith_float_branch, gpta_shift_xor,
 };
 
 int guest_main(int argc, char **argv) {

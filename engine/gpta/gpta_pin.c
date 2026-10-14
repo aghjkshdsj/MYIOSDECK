@@ -34,6 +34,7 @@
 #include "gpta_pin_eareuse.h"
 #include "gpta_pin_movtest.h"
 #include "gpta_pin_afcj.h"
+#include "gpta_pin_shiftxor.h"
 
 static Uop *architectural_uop(FxiCpu *c, Uop *u, Uop *original);
 static GPTA_CC void p_xentry(GPTA_PARAMS);
@@ -460,6 +461,7 @@ static void rmap_init(void) {
     RMAP(t_mtj);
     RMAP(t_af_addss); RMAP(t_af_subss); RMAP(t_af_mulss); RMAP(t_af_divss);
     RMAP(t_af_addsd); RMAP(t_af_subsd); RMAP(t_af_mulsd); RMAP(t_af_divsd);
+    RMAP(t_sx_shl); RMAP(t_sx_shr); RMAP(t_sx_sar); RMAP(t_sx_rol); RMAP(t_sx_ror);
     RMAP(t_xf0); RMAP(t_xf1); RMAP(t_xf2); RMAP(t_xf3);
     RMAP(t_xload_ps); RMAP(t_xload_pd); RMAP(t_xload_ss); RMAP(t_xload_sd);
     RMAP(t_csh_shl); RMAP(t_csh_shr); RMAP(t_csh_sar); RMAP(t_csh_rol); RMAP(t_csh_ror);
@@ -918,6 +920,20 @@ static int try_fuse(Out *o, const Uop *u, uint32_t left) {
             return 2;
         }
         return 0;
+    }
+    // Immediate shift/rotate + same-width XOR consuming its result, selected
+    // from the independent corpus. Preserve both register results and aliases.
+    if (a->fam == FAM_SHIFT && !a->b && a->c2 >= 2 && u->src != 0xffff && D >= 0 &&
+        b->fam == FAM_ALU && b->a == ALU_XOR && b->b == F_RR && b->c2 == a->c2) {
+        int E = greg(v->dst), R = greg(v->src), role = E == D ? 0 : R == D ? 1 : -1;
+        int k = a->a == SH_SHL || a->a == SH_SAL ? 0 : a->a == SH_SHR ? 1 : a->a == SH_SAR ? 2 :
+            a->a == SH_ROL ? 3 : a->a == SH_ROR ? 4 : -1;
+        if (role >= 0 && k >= 0 && E >= 0 && R >= 0) {
+            static const PFn (*const tables[5])[2][2][16][16] = { t_sx_shl,t_sx_shr,t_sx_sar,t_sx_rol,t_sx_ror };
+            x = put_uop(o,v,tables[k][role][v->flive != 0][a->c2-2][D][role ? E : R]);
+            x->imm = u->imm;
+            return 2;
+        }
     }
     // Register copy + test of its result + jcc: a common independent-corpus
     // family, with all copy/test widths, conditions and register aliases.
@@ -1613,6 +1629,7 @@ static void hidx_build(void) {
     ER_HIDX(t_rf) ER_HIDX(t_rs) ER_HIDX(t_xs)
     ER_HIDX(t_mtj)
     GPTA_AFCJ_TABLES(ER_HIDX)
+    GPTA_SHIFTXOR_TABLES(ER_HIDX)
     GPTA_EAREUSE_XTABLES(ER_HIDX)
 #undef ER_HIDX
 #define XL_HIDX(N) hidx_tab((const PFn *)N, sizeof N / sizeof(PFn));

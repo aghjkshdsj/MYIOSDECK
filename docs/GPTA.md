@@ -313,6 +313,18 @@ followed by register XOR consuming the result, recording both operand roles.
 It still reads only independent system/library/Madeira programs. No new
 shift/XOR handler is selected before corpus evidence is available.
 
+The immediate shift/XOR pair trial is **not measured**. Its two operand roles
+are present in independent corpus run
+[38495163837](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38495163837).
+Same-width register SHL/SHR/SAR/ROL/ROR followed by XOR consuming the result
+now share a handler. Counts remain general and use the architectural mask;
+there is no constant-specific selection. Both surviving register results and
+XOR's live flags remain correct, including self aliases and 32-bit zero
+extension. The first shift's flags are overwritten by XOR. Differential
+coverage checks every effective count plus wraparound encodings, all five
+operations, both widths, both roles, aliases, and live/dead flag paths. All
+static replicas are registered for recovery and the unchanged precision gate.
+
 Windows mode defaults to the identity permutation. CI additionally enables
 the allocation trial with `GPTA_XMAP_WINDOWS=1` and repeats the same native
 exit, native API, fault-site and thread-stop checks. Host-state recovery
