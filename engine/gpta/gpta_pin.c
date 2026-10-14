@@ -1332,12 +1332,9 @@ Block *gpta_lower(struct Fxi *vm, Block *b) {
                 Uop *br = &nb->u[base + o[i].patch[k].at], *st = &nb->u[prefix + copies * M + soff[i] + (o[i].patch[k].stub - m[i])];
                 if (o[i].patch[k].edge) br->ulink2 = st; else br->ulink = st;
             }
-            Uop *t = m[i] > 0 ? &nb->u[base + m[i] - 1] : NULL;
-            unsigned adjacent = 2;
             if (ns) {   // the trace edge: the next block, or back to the start (the next copy's)
-                Uop *to = i + 1 < nseg ? t + 1 : &nb->u[prefix + (c + 1 < copies ? (c + 1) * M : 0)];
+                Uop *t = &nb->u[base + m[i] - 1], *to = i + 1 < nseg ? t + 1 : &nb->u[prefix + (c + 1 < copies ? (c + 1) * M : 0)];
                 if (edge[i]) t->ulink2 = to; else t->ulink = to;
-                if (to == t + 1) adjacent = (unsigned)edge[i];
                 // No link lookup is needed for a statically adjacent trace edge.
                 // Match the original handler so unrelated uop fields cannot opt in.
                 if (to == t + 1 && t->dst < 16 && t->src < 16) {
@@ -1349,20 +1346,20 @@ Block *gpta_lower(struct Fxi *vm, Block *b) {
                         }
                 }
                 if (to == t + 1) {
+                    if (t->dst < 128 && !(t->dst & 7)) {
+                        unsigned D = t->dst >> 3;
+                        for (int inc = 0; inc < 2; inc++)
+                            for (int sz = 0; sz < 2; sz++)
+                                for (int cc = 0; cc < 4; cc++)
+                                    if (t->p == t_fid[inc][sz][cc][D])
+                                        t->p = t_fid_trace[edge[i]][inc][sz][cc][D];
+                    }
+                    // The branch-layout retry in iteration 41 again regressed
+                    // the standard branch workload. Keep arithmetic step
+                    // selection and ordinary/final unary links unchanged.
                     for (int si = 0; si < 4; si++)
                         for (int cc = 0; cc < 6; cc++)
                             if (t->p == t_jresult[si][cc]) t->p = t_jresult_trace[edge[i]][si][cc];
-                }
-            }
-            if (t) {
-                t->p = step_trace_handler(t,adjacent);
-                if (t->dst < 128 && !(t->dst & 7)) {
-                    unsigned D = t->dst >> 3;
-                    for (int inc = 0; inc < 2; inc++)
-                        for (int sz = 0; sz < 2; sz++)
-                            for (int cc = 0; cc < 4; cc++)
-                                if (t->p == t_fid[inc][sz][cc][D])
-                                    t->p = t_fid_trace[adjacent][inc][sz][cc][D];
                 }
             }
         }

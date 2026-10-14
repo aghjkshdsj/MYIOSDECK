@@ -48,6 +48,8 @@ row below. Interrupted or defective trials are recorded separately.
 | f6ce896 | [38488865639](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38488865639) | 27.63% | 31.33% | 8.30% | 13.98% |
 | 19ed75e | [38489068854](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38489068854) | 28.06% | 31.53% | 8.19% | 13.98% |
 | 1f2d829 | [38489428585](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38489428585) | 27.75% | 30.66% | 8.39% | 13.97% |
+| f15a6a0 | [38489988449](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38489988449) | 27.62% | 31.29% | 8.24% | 14.02% |
+| 2a44b68 | [38490572829](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38490572829) | 24.77% | 30.73% | 8.31% | 13.97% |
 
 The third trial (result-width branches and simplified floating comparisons)
 regressed. Its ARM64, x86 and iOS gates passed. That trial is rolled back in
@@ -197,7 +199,8 @@ and host-state indexing include the new forms. Differential coverage checks
 both widths, all four supported conditions, both adjacent edges and final
 exits after replicated copies, including sign transitions and zero extension.
 
-The SSE load/arithmetic pair trial is **not measured**. The independent corpus
+The SSE load/arithmetic pair trial passed every gate, including its new fault
+cases; both suite means remain below 50%. The independent corpus
 counts SSE load followed by an operation on its destination. Base-only loads
 followed by register ADD/SUB/MUL now share a handler for packed single/double
 and scalar single/double forms. Operand registers are static, displacement
@@ -207,7 +210,10 @@ XMM destinations, upper-lane clearing, aliases and preserved flags. New exact
 fault sites 49-52 check nonzero upper lanes for each type, with both Windows
 allocation policies; the unchanged assembly audit checks every new handler.
 
-The branch-layout trial is **not measured**. Existing immediate-compare step
+The branch-layout trial passed every gate, but its standard branch kernel
+regressed sharply. The following rollback restores the preceding handler
+selection; that rollback is **not measured**. The unused variants remain
+compiled and indexed for reproducibility. Existing immediate-compare step
 pairs and unary zero/sign pairs use a handler selected from the layout of
 each actual copy: a proven adjacent edge steps directly, and other copies
 chain through links without runtime adjacency checks. This revisits the
