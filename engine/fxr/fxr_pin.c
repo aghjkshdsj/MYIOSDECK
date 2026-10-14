@@ -47,6 +47,24 @@ PX p_miss_ind(FXR_PARAMS) {
     if (b != fxi_stop) { __typeof__(c->fxr_ibtc[0]) *e = IBTC(T); e->u = b->u; e->rip = T; }
     PGO(b->u);
 }
+// A dropped block's first uop (fxr_invalidate_all: another program starts in the Wine session).
+// Whatever still leads here (a link, an indirect-branch cache entry, a thread that was inside the
+// block) goes on in the block translated again from the code there now.
+static PX p_relookup(FXR_PARAMS) {
+    WIN_SPILL();
+    c->fxr_phase = FXR_PH_LOOKUP;
+    fxr_ibtc_sync(c);   // its entries may lead to other dropped blocks: a lookup each time
+    Block *b = fxi_lookup(c, ((const Block *)(const void *)((const char *)u - offsetof(Block, u)))->rip);
+    PGO(b->u);
+}
+void fxr_drop_block(Block *b) { __atomic_store_n(&b->u[0].p, (PFn)p_relookup, __ATOMIC_RELEASE); }
+void fxr_ibtc_sync(FxiCpu *c) {
+    unsigned gen = __atomic_load_n(&c->vm->fxr_gen, __ATOMIC_ACQUIRE);
+    if (c->fxr_ready && c->fxr_gen == gen) return;
+    for (unsigned i = 0; i <= IBTC_MASK; i++) { c->fxr_ibtc[i].rip = ~0ull; c->fxr_ibtc[i].u = 0; }
+    c->fxr_gen = gen;
+    c->fxr_ready = 1;
+}
 
 // Leaving the chain (exit, error): the CPU state goes back to memory.
 PH p_stop(FXR_PARAMS) { SPILL_R(); SPILL_F(); SPILL_X(); }
@@ -1020,10 +1038,7 @@ void fxr_profile_dump(struct Fxi *vm) {
 #endif
 
 void fxr_enter(FxiCpu *c, Block *b) {
-    if (!c->fxr_ready) {
-        for (unsigned i = 0; i <= IBTC_MASK; i++) { c->fxr_ibtc[i].rip = ~0ull; c->fxr_ibtc[i].u = 0; }
-        c->fxr_ready = 1;
-    }
+    fxr_ibtc_sync(c);
     uint64_t g0 = c->r[0], g1 = c->r[1], g2 = c->r[2], g3 = c->r[3], g4 = c->r[4], g5 = c->r[5], g6 = c->r[6],
              g7 = c->r[7], g8 = c->r[8], g9 = c->r[9], g10 = c->r[10], g11 = c->r[11], g12 = c->r[12], g13 = c->r[13],
              g14 = c->r[14], g15 = c->r[15], T = 0, F0, F1, F2, F3;

@@ -124,6 +124,29 @@ Block *fxi_lookup(FxiCpu *c, uint64_t rip) {
     return b;
 }
 
+// ---- FXR: another program in the running Wine session (fxi_win.c, fxi_win_invalidate_all) ----
+// Every block leaves the table (an empty table replaces it, as a grown one does: readers holding
+// the old one keep valid memory), and each one's first uop becomes a re-lookup (fxr_drop_block).
+// Links and the threads' indirect-branch caches only ever lead to a block's first uop, so
+// whatever still leads to a dropped block translates the code again; a loop trace is one block
+// and goes with it. A thread inside a dropped block finishes it (or, in a trace, goes round to its
+// start). Nothing is freed: another thread may be running a dropped block. The generation tells
+// each thread to empty its indirect-branch cache (fxr_ibtc_sync). Exit blocks (native targets)
+// are dropped too: an ended program's native code may be gone and its addresses reused.
+unsigned fxr_invalidate_all(struct Fxi *vm) {   // FXR
+    pthread_mutex_lock(&g_translate_lock);
+    BlockTable *t = vm->table;
+    unsigned dead = (unsigned)t->count;
+    if (dead) {
+        __atomic_store_n(&vm->table, table_new(t->mask + 1), __ATOMIC_RELEASE);
+        for (uint64_t i = 0; i <= t->mask; i++)
+            if (t->slot[i]) fxr_drop_block(t->slot[i]);
+        __atomic_add_fetch(&vm->fxr_gen, 1, __ATOMIC_RELEASE);
+    }
+    pthread_mutex_unlock(&g_translate_lock);
+    return dead;
+}
+
 // ---- Linux syscalls the guest test programs use ----
 static void capture(struct Fxi *vm, const void *buf, size_t len) {
     fxi_result *o = vm->out;

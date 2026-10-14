@@ -90,6 +90,19 @@ jobs:
           bash engine/fxr/gates.sh "$PWD/guests" "$RUNNER_TEMP/fxr/fxr" fxr "$NAT" "$PE" || rc=1
           bash engine/fxr/gates.sh "$PWD/guests" "$RUNNER_TEMP/fxi/fxi" fxi "$NAT" "$PE" || rc=1
           exit $rc
+      - name: Program after program (FXR and FXI) - every block dropped before the next game
+        run: |
+          # engine/fxr-probe/invalidate_test.c: A, then B at the same addresses after
+          # fxi_win_invalidate_all, 400 times, with another thread looping inside a dropped block.
+          objs=$(ls "$RUNNER_TEMP"/fxr/obj/*.o | grep -v '/fxi_main\.o$')
+          X86=$( [ "$(uname -m)" = x86_64 ] && echo -mcx16 || true )
+          clang-19 -O2 -std=gnu11 $X86 -Iengine/fxr -o "$RUNNER_TEMP/invalidate_fxr" engine/fxr-probe/invalidate_test.c $objs -lm -lpthread
+          clang-19 -O2 -std=gnu11 $X86 -Iengine/fxi -o "$RUNNER_TEMP/invalidate_fxi" engine/fxr-probe/invalidate_test.c \
+            $(ls engine/fxi/fxi_*.c | grep -v '/fxi_main\.c$') -lm -lpthread
+          rc=0
+          timeout 300 "$RUNNER_TEMP/invalidate_fxr" || rc=1
+          timeout 300 "$RUNNER_TEMP/invalidate_fxi" || rc=1
+          exit $rc
       - name: Windows-mode state gate (FXR, ARM64) - the x64 state at a stop and at a fault
         if: runner.arch == 'ARM64'
         run: |

@@ -140,8 +140,10 @@ final class WineController: ObservableObject, @unchecked Sendable {
         var hidPad: String    // the HID gamepad the wineserver makes when it starts ("" for none)
         var fxr: Bool         // FXR as the x64 CPU of a 64-bit game (Settings › Windows games: FXR)
     }
-    /// A 64-bit game ran with FXR in this app run: later 64-bit games take FXI.
-    private(set) var fxrUsedThisRun = false
+    /// The x64 CPU of this app run's 64-bit games (true FXR, false FXI), fixed by the first one:
+    /// the CPU is one global of the Wine session (fxi_win_host.c), and threads an ended game left
+    /// running still use the CPU they were made for. nil before the first 64-bit game.
+    private(set) var fxrThisRun: Bool?
     /// The running session's kind (nil before the first program).
     private(set) var sessionKind: SessionKind?
     /// Windows programs started in this app run.
@@ -192,7 +194,7 @@ final class WineController: ObservableObject, @unchecked Sendable {
                 return "This game's controller mode (\(kind.hidPad.isEmpty ? "not a HID gamepad" : "HID gamepad")) differs from the running Wine session's, which Wine sets up when it starts. Choose the same mode for it, or: \(restart)"
             }
         }
-        // FXR is not a reason to refuse: a 64-bit game after one FXR ran takes FXI (run()).
+        // The x64 CPU is not a reason to refuse: every 64-bit game of a run takes the first one's (run()).
         let freeMB = os_proc_available_memory() >> 20
         if freeMB < Self.minFreeMB {
             return "Only \(freeMB) MB of memory is free: an earlier game's memory stays in use until MYIOSDECK closes. \(restart)"
@@ -316,13 +318,12 @@ final class WineController: ObservableObject, @unchecked Sendable {
         // docs/SESSION_REUSE.md) or needs a restart (nextGameRefusal says which, and why).
         let api = Self.controllerAPI(for: program.id)
         let noJITSession = program.noJIT && !mid_jit_pool_ready()
-        // FXR keeps the x64 code it translated with no way to drop it, and a later game may get
-        // addresses an earlier one's code had: it runs the first 64-bit game of an app run only,
-        // and a later one takes FXI (whose blocks are dropped before it starts) instead of being
-        // refused. 32-bit games never use it (FXI32).
+        // The x64 CPU (Settings › Windows games: FXR). FXI and FXR both drop the blocks of an
+        // earlier game before a later one starts (wine_host.c), so every 64-bit game of a run may
+        // use either; but all of them use the first one's (fxrThisRun). 32-bit games never use it (FXI32).
         let wantFXR = noJITSession && !program.aarch64 && UserDefaults.standard.bool(forKey: "winFXR")
-        let kind = SessionKind(noJIT: noJITSession, aarch64: program.aarch64, hidPad: Self.hidPad(api),
-                               fxr: wantFXR && !fxrUsedThisRun)
+        let useFXR = noJITSession && !program.aarch64 && (fxrThisRun ?? wantFXR)
+        let kind = SessionKind(noJIT: noJITSession, aarch64: program.aarch64, hidPad: Self.hidPad(api), fxr: useFXR)
         if programsThisRun > 0, let why = nextGameRefusal(kind) {
             dlog("[session-reuse] \(program.title) not started: \(why)")
             return refuse(why)
@@ -366,15 +367,16 @@ final class WineController: ObservableObject, @unchecked Sendable {
             } else {
                 unsetenv("WINEDLLOVERRIDES")
             }
-            // Settings › Without JIT › Windows games: FXR (fxi_win_host.c picks the x64 CPU).
-            if kind.fxr {
+            // Settings › Without JIT › Windows games: FXR (fxi_win_host.c picks the x64 CPU). A 32-bit
+            // game keeps the run's x64 CPU too: x64 code may still run in the session.
+            if fxrThisRun ?? kind.fxr {
                 setenv("MYIOSDECK_WIN_CPU", "fxr", 1)
-                dlog("[wine] no-JIT session with FXR as the x64 CPU (experimental)")
+                if !program.aarch64 { dlog("[wine] no-JIT session with FXR as the x64 CPU") }
             } else {
                 unsetenv("MYIOSDECK_WIN_CPU")
-                if wantFXR {
-                    dlog("[session-reuse] \(program.title) runs with FXI: FXR already ran a 64-bit game in this app run and cannot drop that game's code")
-                }
+            }
+            if !program.aarch64, let first = fxrThisRun, first != wantFXR {
+                dlog("[session-reuse] \(program.title) runs with \(first ? "FXR" : "FXI") like the first 64-bit game of this app run (Settings › Windows games: FXR changed since; it applies after MYIOSDECK restarts)")
             }
         } else {
             for k in ["WINE_IOS_NOJIT", "MYIOSDECK_PE_DIR", "MYIOSDECK_PE_DIR_A64", "MYIOSDECK_NOJIT_EMULATOR",
@@ -434,7 +436,7 @@ final class WineController: ObservableObject, @unchecked Sendable {
                 self.state = ok ? .running(program.title) : .failed(msg)
                 if ok {
                     if self.programsThisRun == 0 { self.sessionKind = kind }
-                    if kind.fxr { self.fxrUsedThisRun = true }
+                    if kind.noJIT && !kind.aarch64 && self.fxrThisRun == nil { self.fxrThisRun = kind.fxr }
                     self.programsThisRun += 1
                     self.sessionKept = keep
                 } else {
