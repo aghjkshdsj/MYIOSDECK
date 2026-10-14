@@ -552,6 +552,14 @@ It preserves upper lanes and existing fault ordering; copy/arithmetic pair
 handlers retain their existing code because their different destination can
 already avoid that extra full-vector copy. Speed is not measured yet.
 
+The precision audit now streams one handler at a time instead of retaining
+the whole disassembly. Its control-flow analysis and exclusions are unchanged.
+Every symbol entry is checked, including duplicate local names from replica
+translation units (the old name-keyed dictionary retained only the last).
+Regression fixtures check unsafe writes and stores, safe restored state,
+branch merging and duplicate-name coverage. This is an audit-only change;
+engine execution and benchmark measurement are unchanged.
+
 Profile standard workloads with perf stat and perf record. Choose any new
 instruction-pair families from the independent corpus in engine/gpta/corpus.sh.
 Never replace a recognized guest loop with a host loop.

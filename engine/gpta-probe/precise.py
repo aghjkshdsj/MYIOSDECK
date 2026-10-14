@@ -40,17 +40,21 @@ def split_ops(s):
 
 NODEST = re.compile(r'^(b|bl|br|blr|ret|cbz|cbnz|tbz|tbnz|cmp|cmn|tst|fcmp|fcmpe|ccmp|ccmn|fccmp|fccmpe|prfm|nop|b\..*|st.*|dmb|dsb|isb)$')
 
-def parse(text):
-    funcs, cur = collections.OrderedDict(), None
-    for line in text.splitlines():
+def iter_funcs(lines):
+    """Stream every symbol entry, including duplicate local handler names."""
+    cur, insns = None, []
+    for line in lines:
         m = re.match(r'^([0-9a-f]+) <(.+)>:$', line)
-        if m: cur = m[2]; funcs[cur] = []; continue
+        if m:
+            if cur is not None: yield cur, insns
+            cur, insns = m[2], []
+            continue
         m = re.match(r'^\s+([0-9a-f]+):\s+(\S+)\s*(.*)$', line)
-        if m and cur:
+        if m and cur is not None:
             ops = re.sub(r'\s*//.*$', '', m[3]).strip()
             ops = re.sub(r'\s*<[^>]*>$', '', ops)
-            funcs[cur].append((int(m[1], 16), m[2], ops))
-    return funcs
+            insns.append((int(m[1], 16), m[2], ops))
+    if cur is not None: yield cur, insns
 
 def analyse(insns):
     """Returns (violations: list of (addr, mnemonic, why)), guest accesses count."""
@@ -168,11 +172,12 @@ WIN_EXCLUDED = ('p_amr_', 'p_alea_', 'p_ami_', 'p_axz_', 'p_pop2_', 'p_push2_', 
 NAT_EXCLUDED = ('p_nat_csenter', 'p_nat_csleave')
 
 def main():
-    funcs = parse(open(sys.argv[1], errors='replace').read())
     total = with_guest = bad = 0
     fam = collections.Counter(); famall = collections.Counter(); examples = {}
-    gate = []
-    for name, insns in funcs.items():
+    gate = 0
+    # Each handler's control-flow analysis is unchanged. Retain only the
+    # current handler and short diagnostic examples, not the whole image.
+    for name, insns in iter_funcs(open(sys.argv[1], errors='replace')):
         total += 1
         v, g = analyse(insns)
         if g: with_guest += 1
@@ -181,21 +186,21 @@ def main():
         if v:
             bad += 1
             fam[f] += 1
-            examples.setdefault(f, (name, v[0]))
-            if not name.startswith(WIN_EXCLUDED + NAT_EXCLUDED): gate.append(name)
+            examples.setdefault(f, (name, v[0], insns[0][0], insns[:40]))
+            if not name.startswith(WIN_EXCLUDED + NAT_EXCLUDED): gate += 1
     print('precise: %d pinned handlers, %d touch guest memory, %d may fault after a side effect, '
-          '%d of them used in Windows mode' % (total, with_guest, bad, len(gate)))
+          '%d of them used in Windows mode' % (total, with_guest, bad, gate))
     for f, n in fam.most_common(60):
-        name, (a, mn, why) = examples[f]
-        print('  %6d / %-6d %-28s e.g. %s at +%#x (%s) after %s%s' % (n, famall[f], f, name, a - funcs[name][0][0], mn, why,
+        name, (a, mn, why), start, _ = examples[f]
+        print('  %6d / %-6d %-28s e.g. %s at +%#x (%s) after %s%s' % (n, famall[f], f, name, a - start, mn, why,
               '' if name.startswith(WIN_EXCLUDED) else '   <- used in Windows mode'))
     shown = 0
     for f, n in fam.most_common():   # the code of a few examples used in Windows mode
-        name, (a, mn, why) = examples[f]
+        name, (a, mn, why), _, example = examples[f]
         if name.startswith(WIN_EXCLUDED) or shown >= 10: continue
         shown += 1
         print('-- %s (violation at %#x)' % (name, a))
-        for ia, imn, iops in funcs[name][:40]:
+        for ia, imn, iops in example:
             print('   %s %-8s %s%s' % ('>' if ia == a else ' ', imn, iops, ''))
     sys.exit(1 if gate else 0)
 
