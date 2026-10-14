@@ -2,6 +2,7 @@
 // GPTA: pinned SSE handlers (XMM0-7 in host vector registers). See gpta_pin.c.
 
 #include "gpta_pin.h"
+#include "gpta_scalar_fp.h"
 
 // ---- two-operand ops: D = op(D, S) ----
 #define XO_addps(D, S) ((GptaV)((VF)(D) + (VF)(S)))
@@ -18,17 +19,17 @@
 #define XO_minpd(D, S) XSEL((VD)(D) < (VD)(S), D, S)
 #define XO_maxpd(D, S) XSEL((VD)(D) > (VD)(S), D, S)
 #define XO_sqrtpd(D, S) xsqrtpd(S)
-#define XO_addss(D, S) xlo_f(D, LF0(D) + LF0(S))
-#define XO_subss(D, S) xlo_f(D, LF0(D) - LF0(S))
-#define XO_mulss(D, S) xlo_f(D, LF0(D) * LF0(S))
-#define XO_divss(D, S) xlo_f(D, LF0(D) / LF0(S))
+#define XO_addss(D, S) gpta_scalar_addss(D,S)
+#define XO_subss(D, S) gpta_scalar_subss(D,S)
+#define XO_mulss(D, S) gpta_scalar_mulss(D,S)
+#define XO_divss(D, S) gpta_scalar_divss(D,S)
 #define XO_minss(D, S) xlo_f(D, LF0(D) < LF0(S) ? LF0(D) : LF0(S))
 #define XO_maxss(D, S) xlo_f(D, LF0(D) > LF0(S) ? LF0(D) : LF0(S))
 #define XO_sqrtss(D, S) xlo_f(D, __builtin_sqrtf(LF0(S)))
-#define XO_addsd(D, S) xlo_d(D, LD0(D) + LD0(S))
-#define XO_subsd(D, S) xlo_d(D, LD0(D) - LD0(S))
-#define XO_mulsd(D, S) xlo_d(D, LD0(D) * LD0(S))
-#define XO_divsd(D, S) xlo_d(D, LD0(D) / LD0(S))
+#define XO_addsd(D, S) gpta_scalar_addsd(D,S)
+#define XO_subsd(D, S) gpta_scalar_subsd(D,S)
+#define XO_mulsd(D, S) gpta_scalar_mulsd(D,S)
+#define XO_divsd(D, S) gpta_scalar_divsd(D,S)
 #define XO_minsd(D, S) xlo_d(D, LD0(D) < LD0(S) ? LD0(D) : LD0(S))
 #define XO_maxsd(D, S) xlo_d(D, LD0(D) > LD0(S) ? LD0(D) : LD0(S))
 #define XO_sqrtsd(D, S) xlo_d(D, __builtin_sqrt(LD0(S)))

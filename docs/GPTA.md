@@ -543,6 +543,15 @@ comparison orders retain their semantics and exit flag stubs. Differential
 trace tests now exercise SUB/MUL/DIV as well as ADD through both vector banks
 and beyond the replica cycle. Speed is not measured yet.
 
+A following isolated trial uses the existing scalar ARM arithmetic helpers
+for ordinary SSE ADD/SUB/MUL/DIV handlers too. The standard profile and
+assembly in run 38649178056 show ordinary MULSD widened to a vector multiply,
+followed by upper-lane restoration and a full-vector copy. The helper emits
+scalar arithmetic and inserts only the low result into the old destination.
+It preserves upper lanes and existing fault ordering; copy/arithmetic pair
+handlers retain their existing code because their different destination can
+already avoid that extra full-vector copy. Speed is not measured yet.
+
 Profile standard workloads with perf stat and perf record. Choose any new
 instruction-pair families from the independent corpus in engine/gpta/corpus.sh.
 Never replace a recognized guest loop with a host loop.
