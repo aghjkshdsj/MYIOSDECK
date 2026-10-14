@@ -107,6 +107,15 @@ mode == 2 && /^ *[0-9a-f]+:\t/ {
                 famc[kf]++; if (inloop) lfamc[kf]++ }
         }
         # single-instruction forms worth a specialised handler
+        if (pmn ~ /^(shl|shr|sar|rol|ror)$/ && prev ~ / r(32|64),i$/ &&
+            shape ~ /^xor r(32|64),r(32|64)$/ && pd != "" &&
+            ((prev ~ /r32,i$/ && shape == "xor r32,r32") ||
+             (prev ~ /r64,i$/ && shape == "xor r64,r64"))) {
+            if (reg64(d) == pd) { ks = "shift/rotate immediate ; xor consumes destination";
+                famc[ks]++; if (inloop) lfamc[ks]++ }
+            if (reg64(s) == pd) { ks = "shift/rotate immediate ; xor consumes source";
+                famc[ks]++; if (inloop) lfamc[ks]++ }
+        }
         if (mn ~ /^(add|sub|mul|div|min|max|and|andn|or|xor)(ps|pd|ss|sd)$|^p(add|sub|and|or|xor|cmp)/ && shape ~ /,m$/) { famc["  SSE op with a memory operand"]++; if (inloop) lfamc["  SSE op with a memory operand"]++ }
         if (ops ~ /\[[a-z0-9]+\+[a-z0-9]+\*[1248]/) { famc["  operand with base + index"]++; if (inloop) lfamc["  operand with base + index"]++
             # split: displacement or not, scale 1 or more (objdump writes [base+index*1+disp])

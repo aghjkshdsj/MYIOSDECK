@@ -56,6 +56,7 @@ row below. Interrupted or defective trials are recorded separately.
 | e723470 | [38492613538](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38492613538) | 28.29% | 31.11% | 8.20% | 14.00% |
 | 2120516 | [38492982469](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38492982469) | 27.49% | 31.40% | 8.12% | 13.98% |
 | b782565 | [38493209646](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38493209646) | 27.53% | 30.87% | 8.30% | 13.98% |
+| 45ee02a | [38493782478](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38493782478) | 28.08% | 29.78% | 8.49% | 14.00% |
 
 The third trial (result-width branches and simplified floating comparisons)
 regressed. Its ARM64, x86 and iOS gates passed. That trial is rolled back in
@@ -303,6 +304,14 @@ arguments are passed, and a forwarding replica macro expanded table aliases
 before token pasting. The isolated repair accepts the empty condition
 argument and names replica tables directly. No timing ran on the failed
 commit; its speed is not measured and its gates did not pass.
+
+45ee02a changes only corpus diagnostics, leaving the interpreter identical to
+b782565. Its manually dispatched full gate/measurement run passed every gate;
+the fresh timings are recorded above without selecting between either run.
+The next diagnostics extension counts same-width immediate shifts/rotates
+followed by register XOR consuming the result, recording both operand roles.
+It still reads only independent system/library/Madeira programs. No new
+shift/XOR handler is selected before corpus evidence is available.
 
 Windows mode defaults to the identity permutation. CI additionally enables
 the allocation trial with `GPTA_XMAP_WINDOWS=1` and repeats the same native
