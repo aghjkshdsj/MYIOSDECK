@@ -31,6 +31,7 @@
 #include "gpta_pin_unary_trace.h"
 #include "gpta_pin_xload.h"
 #include "gpta_pin_step_noadj.h"
+#include "gpta_pin_eareuse.h"
 
 static Uop *architectural_uop(FxiCpu *c, Uop *u, Uop *original);
 static GPTA_CC void p_xentry(GPTA_PARAMS);
@@ -394,6 +395,8 @@ static void rmap_init(void) {
     RMAP(t_cf_rr); RMAP(t_cf_ri);
     RMAP(t_fid_trace);
     RMAP(t_sii_noadj); RMAP(t_sri_noadj);
+    RMAP(t_rf); RMAP(t_rs); RMAP(t_xs);
+    RMAP(t_xf0); RMAP(t_xf1); RMAP(t_xf2); RMAP(t_xf3);
     RMAP(t_xload_ps); RMAP(t_xload_pd); RMAP(t_xload_ss); RMAP(t_xload_sd);
     RMAP(t_csh_shl); RMAP(t_csh_shr); RMAP(t_csh_sar); RMAP(t_csh_rol); RMAP(t_csh_ror);
     RMAP(t_xlz); RMAP(t_xsz);
@@ -1111,9 +1114,42 @@ static void specialize_unary_carry(Out *o, const Block *b, uint32_t at) {
     if (source >= 0) o->out[o->n - 1].p = t_uknown[source / 4][source % 4][d->c2 - 2][d->a][D];
 }
 
+// Corpus-supported consecutive load family. Keep both dispatches and guest
+// instruction boundaries, but compute an unchanged base/index EA once.
+// Kinds 0..2 are GPR 32/64/zero-extended byte, 3..5 vector 128/32/64.
+static int reusable_load(const Uop *u) {
+    const Desc *d = find(u->fn);
+    if (!d || !ea_ok(u)) return -1;
+    if (d->fam == FAM_MOV && d->a == F_RM && d->b >= 2 && greg(u->dst) >= 0) return d->b - 2;
+    if (d->fam == FAM_EXT && !d->a && d->b && !d->c2 && d->d >= 2 && greg(u->dst) >= 0) return 2;
+    if (u->dst >= 16) return -1;
+    if (d->fam == FAM_X && d->b && !strcmp(gpta_xops[d->a].name,"movx")) return 3;
+    if (d->fam == FAM_XS && d->a == XS_MOVSS_RM) return 4;
+    if (d->fam == FAM_XS && d->a == XS_MOVSD_RM) return 5;
+    return -1;
+}
+static int lower_ea_pair(Out *o, const Uop *a, const Uop *b) {
+    int ak = reusable_load(a), bk = reusable_load(b);
+    if (ak < 0 || bk < 0 || a->base != b->base || a->index != b->index || a->scale != b->scale) return 0;
+    int D = greg(a->dst), E = greg(b->dst);
+    if (ak < 3 && ((unsigned)D == a->base || (unsigned)D == a->index)) return 0;
+    static const PFn (*const first[4])[9][17][17] = { t_xf0,t_xf1,t_xf2,t_xf3 };
+    PFn f = ak < 3 ? t_rf[ak][a->base][a->index][D] : first[a->scale][ak-3][xcls(a->dst)][a->base][a->index];
+    uint64_t delta = (uint64_t)b->disp - (uint64_t)a->disp;
+    PFn s = bk < 3 ? t_rs[bk][delta == 0][E] : t_xs[bk-3][delta == 0][xcls(b->dst)];
+    put_uop(o,a,f);
+    put_uop(o,b,s)->imm = delta;   // load immediates are unused; keep canonical EA metadata
+    return 1;
+}
+
 static void lower_block(Out *o, const Block *b) {
     for (uint32_t i = 0; i < b->n; i++) {
         int start = o->n, np = o->np;
+        if (i + 1 < b->n && lower_ea_pair(o,&b->u[i],&b->u[i+1])) {
+            bound(o,start,np,0,0);   // each load retains its own RIP and boundary
+            i++;
+            continue;
+        }
         if (i + 2 < b->n && can_hoist(&b->u[i], &b->u[i + 1], &b->u[i + 2])) {
             // [a][x][c] runs as x, then a + c: x starts where a did; between x and the pair is no
             // x64 instruction boundary
@@ -1476,6 +1512,10 @@ static void hidx_build(void) {
     hidx_tab((const PFn *)t_fid_trace, sizeof t_fid_trace / sizeof(PFn));
     hidx_tab((const PFn *)t_sii_noadj, sizeof t_sii_noadj / sizeof(PFn));
     hidx_tab((const PFn *)t_sri_noadj, sizeof t_sri_noadj / sizeof(PFn));
+#define ER_HIDX(N) hidx_tab((const PFn *)N, sizeof N / sizeof(PFn));
+    ER_HIDX(t_rf) ER_HIDX(t_rs) ER_HIDX(t_xs)
+    GPTA_EAREUSE_XTABLES(ER_HIDX)
+#undef ER_HIDX
 #define XL_HIDX(N) hidx_tab((const PFn *)N, sizeof N / sizeof(PFn));
     GPTA_XLOAD_TABLES(XL_HIDX)
 #undef XL_HIDX

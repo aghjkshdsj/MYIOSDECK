@@ -225,17 +225,22 @@ static void on_fault(int sig, siginfo_t *si, void *ctx) {
         for (int r = 0; r < 15; r++) {
             if (r == RSP && !stack) continue;
             uint64_t w = r == RSP ? 0x1008 : want[r];
+            if (g_site == 55 && r == RAX) w = UINT64_C(0x1234567889abcdef);
             if (c->r[r] != w) { bad = 1; n += snprintf(out + n, sizeof out - (size_t)n, "r%d %#llx want %#llx; ", r, (unsigned long long)c->r[r], (unsigned long long)w); }
         }
         static const int xsrc[16] = { RAX, RCX, RDX, RSI, RDI, R8, R9, R10,
                                      R11, R12, R13, R14, RAX, RCX, RDX, RSI };
         int dup_xmm = g_site == 37 ? 8 : g_site == 38 ? 15 : g_site == 39 ? 14 : g_site == 40 ? 13 :
                       g_site == 45 ? 9 : g_site == 46 ? 12 : g_site == 49 ? 0 :
-                      g_site == 50 ? 13 : g_site == 51 ? 7 : g_site == 52 ? 15 : -1;
-        for (int x = 0; x < 16; x++)
-            if (c->xmm[x].q[0] != want[xsrc[x]] || c->xmm[x].q[1] != (x == dup_xmm ? want[xsrc[x]] : 0)) {
+                      g_site == 50 ? 13 : g_site == 51 ? 7 : g_site == 52 ? 15 :
+                      g_site == 54 ? 0 : g_site == 56 ? 14 : -1;
+        for (int x = 0; x < 16; x++) {
+            uint64_t low = want[xsrc[x]], high = x == dup_xmm ? low : 0;
+            if (g_site == 56 && x == 0) { low = UINT64_C(0x1234567889abcdef); high = UINT64_C(0xfedcba9876543210); }
+            if (c->xmm[x].q[0] != low || c->xmm[x].q[1] != high) {
                 bad = 1; n += snprintf(out + n, sizeof out - (size_t)n, "xmm%d %#llx:%#llx; ", x, (unsigned long long)c->xmm[x].q[1], (unsigned long long)c->xmm[x].q[0]);
             }
+        }
         // The flags: exact unless the faulting instruction writes them itself (cmp/test/add with
         // memory: sites 5, 6, 9), where the earlier compare's flags are dead and never computed
         // (GPTA's and FXI's dead-flag elimination); re-running the instruction recomputes them.

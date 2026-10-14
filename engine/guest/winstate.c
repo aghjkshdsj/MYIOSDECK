@@ -128,6 +128,15 @@ FAULT(f_xload_pair_ps, DUP_XMM("xmm0"), "movups (%%rbx), %%xmm0\n\taddps %%xmm7,
 FAULT(f_xload_pair_pd, DUP_XMM("xmm13"), "movupd 16(%%rbx), %%xmm13\n\tmulpd %%xmm13, %%xmm13") // 50
 FAULT(f_xload_pair_ss, DUP_XMM("xmm7"), "movss -16(%%rbx), %%xmm7\n\tsubss %%xmm0, %%xmm7") // 51
 FAULT(f_xload_pair_sd, DUP_XMM("xmm15"), "movsd (%%rbx), %%xmm15\n\taddsd %%xmm8, %%xmm15") // 52
+FAULT(f_ea_first_gpr, "", "movq (%%rbx), %%rcx\n\tmovq 8(%%rbx), %%rax") // 53
+FAULT(f_ea_first_xmm, DUP_XMM("xmm0"), "movups (%%rbx), %%xmm0\n\tmovsd 16(%%rbx), %%xmm14") // 54
+// The first access succeeds; the second must recover its own RIP and the
+// first load's completed destination. Both decoded operands have zero base
+// and index (RIP-relative addresses are resolved by the decoder).
+FAULT(f_ea_second_gpr, "", "lea 2f(%%rip), %%r15\n\tmovq 3f(%%rip), %%rax\n\t"
+    "2: movq 0x10, %%rcx\n\tjmp 4f\n\t3: .quad 0x1234567889abcdef\n\t4:") // 55
+FAULT(f_ea_second_xmm, DUP_XMM("xmm14"), "lea 2f(%%rip), %%r15\n\tmovups 3f(%%rip), %%xmm0\n\t"
+    "2: movups 0x10, %%xmm14\n\tjmp 4f\n\t3: .quad 0x1234567889abcdef, 0xfedcba9876543210\n\t4:") // 56
 static void (*const k_faults[])(void) = { f_load, f_store, f_xload, f_push, f_call, f_cmpj, f_ltj, f_pop, f_ret,
                                           f_rmw, f_callm, f_xstore, f_xarith_index, f_xarith_base,
                                           f_xload2, f_xload4, f_xload8, f_xstore2, f_xstore4, f_xstore8,
@@ -137,7 +146,8 @@ static void (*const k_faults[])(void) = { f_load, f_store, f_xload, f_push, f_ca
                                           f_xhigh_load, f_xhigh_scalar, f_xhigh_arith, f_xhigh_store,
                                           f_stiz8, f_stiz16, f_stiz32, f_stiz64,
                                           f_xscalar_load32, f_xscalar_load64, f_xscalar_store32, f_xscalar_store64,
-                                          f_xload_pair_ps, f_xload_pair_pd, f_xload_pair_ss, f_xload_pair_sd };
+                                          f_xload_pair_ps, f_xload_pair_pd, f_xload_pair_ss, f_xload_pair_sd,
+                                          f_ea_first_gpr, f_ea_first_xmm, f_ea_second_gpr, f_ea_second_xmm };
 
 int guest_main(int argc, char **argv) {
     if (argc >= 3 && g_streq(argv[1], "loop")) { loop(g_atou(argv[2])); g_puts("loop done\n"); return 0; }

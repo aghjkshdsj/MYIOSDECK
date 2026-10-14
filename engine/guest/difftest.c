@@ -1445,6 +1445,52 @@ static void gpta_unary_trace(void) {
     out("gpta_unary_trace",h);
 }
 typedef void (*test_fn)(void);
+#define EA_PAIR_CASE(OP1,DST1,OP2,DST2,DISP1,DISP2,SCALE) do { \
+    u64 a, b, fi = flags_in(), f; v2 x, y; \
+    __asm__ volatile(PRE "movdqu %[seed], %%xmm0\n\tmovdqu %[seed], %%xmm14\n\t" \
+        "movq $0x1011, %%rax\n\tmovq $0x2011, %%rdx\n\t" \
+        OP1 " " DISP1 "(%[p],%[k]," #SCALE "), " DST1 "\n\t" \
+        OP2 " " DISP2 "(%[p],%[k]," #SCALE "), " DST2 "\n\t" \
+        "movq %%rax, %[a]\n\tmovq %%rdx, %[b]\n\t" \
+        "movdqu %%xmm0, %[x]\n\tmovdqu %%xmm14, %[y]" POST \
+        : [a] "=m"(a), [b] "=m"(b), [x] "=m"(x), [y] "=m"(y), [f] "=&r"(f) \
+        : [p] "r"(&data[8]), [k] "r"((u64)3), [seed] "m"(seed), [fi] "r"(fi) \
+        : "rax", "rdx", "xmm0", "xmm14", "cc", "memory"); \
+    h = mix(vmix(vmix(mix(mix(h,a),b),x),y),f & ARITH); \
+} while (0)
+#define EA_PAIR_ADDRS(OP1,D1,OP2,D2) \
+    EA_PAIR_CASE(OP1,D1,OP2,D2,"0","0",1); \
+    EA_PAIR_CASE(OP1,D1,OP2,D2,"13","-7",2); \
+    EA_PAIR_CASE(OP1,D1,OP2,D2,"0","16",4); \
+    EA_PAIR_CASE(OP1,D1,OP2,D2,"-9","11",8)
+static void gpta_ea_pairs(void) {
+    u64 data[64], h = 14695981039346656037ull;
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j < 64; j++) data[j] = val();
+        v2 seed = vrand();
+        EA_PAIR_ADDRS("movq","%%rax","movq","%%rdx");
+        EA_PAIR_ADDRS("movl","%%eax","movl","%%edx");
+        EA_PAIR_ADDRS("movzbl","%%eax","movzbl","%%edx");
+        EA_PAIR_ADDRS("movq","%%rax","movl","%%eax");
+        EA_PAIR_ADDRS("movups","%%xmm0","movups","%%xmm14");
+        EA_PAIR_ADDRS("movss","%%xmm0","movsd","%%xmm14");
+        EA_PAIR_ADDRS("movsd","%%xmm14","movss","%%xmm14");
+        EA_PAIR_ADDRS("movq","%%rax","movups","%%xmm14");
+        EA_PAIR_ADDRS("movss","%%xmm0","movzbl","%%edx");
+        // The first destination changes the base or index: reuse must reject
+        // these cases and calculate the second address from updated GPRs.
+        data[8] = (u64)(unsigned long)&data[32];
+        data[9] = 3;
+        u64 a, b;
+        __asm__ volatile("movq %[p], %%rbx\n\tmovq (%%rbx), %%rbx\n\t"
+            "movq 8(%%rbx), %%rax\n\tmovq %%rax, %[a]\n\t"
+            "movq $1, %%rdx\n\tmovq (%[p],%%rdx,8), %%rdx\n\t"
+            "movq 8(%[p],%%rdx,8), %%rax\n\tmovq %%rax, %[b]"
+            : [a] "=m"(a), [b] "=m"(b) : [p] "r"(&data[8]) : "rax", "rbx", "rdx", "memory");
+        h = mix(mix(h,a),b);
+    }
+    out("gpta_ea_pairs",h);
+}
 // Load/arithmetic pairs preserve scalar zeroed upper lanes, source aliases,
 // all architectural XMM operands, and the incoming arithmetic flags.
 #define XL_CASE(OP,LOAD,D,S,ADDR,P) do { \
@@ -1513,7 +1559,7 @@ static const test_fn kTests[] = {
     fz_o, fz_no, fz_b, fz_ae, fz_e, fz_ne, fz_be, fz_a, fz_s, fz_ns, fz_p, fz_np, fz_l, fz_ge, fz_le, fz_g,
     fc_o, fc_no, fc_b, fc_ae, fc_e, fc_ne, fc_be, fc_a, fc_s, fc_ns, fc_p, fc_np, fc_l, fc_ge, fc_le, fc_g,
     fz_call, fz_index, fz_xindex, fz_3op, fz_3gap, fz_x3, fz_hoist, gpta_xmem, gpta_result_flags, gpta_xhigh, gpta_cf_flow,
-    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow, gpta_fcj_trace, gpta_jresult_trace, gpta_immstores, gpta_x3high, gpta_step_trace, gpta_shift_counts, gpta_copy_shift_counts, gpta_unary_edges, gpta_alu_memory, gpta_xmm_lane_state, gpta_scalar_mem, gpta_unary_flag_inputs, gpta_xmap_transitions, gpta_cf_only, gpta_unary_trace, gpta_xload_pairs,
+    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow, gpta_fcj_trace, gpta_jresult_trace, gpta_immstores, gpta_x3high, gpta_step_trace, gpta_shift_counts, gpta_copy_shift_counts, gpta_unary_edges, gpta_alu_memory, gpta_xmm_lane_state, gpta_scalar_mem, gpta_unary_flag_inputs, gpta_xmap_transitions, gpta_cf_only, gpta_unary_trace, gpta_xload_pairs, gpta_ea_pairs,
 };
 
 int guest_main(int argc, char **argv) {

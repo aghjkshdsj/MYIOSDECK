@@ -50,6 +50,7 @@ row below. Interrupted or defective trials are recorded separately.
 | 1f2d829 | [38489428585](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38489428585) | 27.75% | 30.66% | 8.39% | 13.97% |
 | f15a6a0 | [38489988449](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38489988449) | 27.62% | 31.29% | 8.24% | 14.02% |
 | 2a44b68 | [38490572829](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38490572829) | 24.77% | 30.73% | 8.31% | 13.97% |
+| 8930ebc | [38491164550](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38491164550) | 24.71% | 30.47% | 8.16% | 13.99% |
 
 The third trial (result-width branches and simplified floating comparisons)
 regressed. Its ARM64, x86 and iOS gates passed. That trial is rolled back in
@@ -223,13 +224,30 @@ still uses each copy's actual handler. The existing complete condition,
 width, alias and wraparound cases now also compare final exit flags against
 native execution. All guest instructions and branches remain interpreted.
 
-The loop-only allocation trial is **not measured**. Vector blocks outside a
+The loop-only allocation trial passed every gate but regressed both means
+relative to its predecessor. Its run still contains the branch-layout trial;
+the next iteration measures that selection's rollback independently.
+Vector blocks outside a
 known cached or newly identified ELF loop region use the common identity map.
 Nonidentity allocation is reserved for a region where its map can be reused
 across iterations. This is a uniform CFG policy, using the same operand counts
 and existing bounded backedge scan; no program identity or data participates.
 The preceding transition/nested-loop/fallback tests cover both layouts.
 Windows allocation and all recovery gates retain their preceding behavior.
+
+The effective-address reuse trial is **not measured**. Consecutive GPR/vector
+loads with the same base/index/scale compute that address once in T. Each load
+still has its own dispatch, original RIP and instruction boundary; canonical
+address metadata remains intact. A first GPR destination that changes the
+base or index prevents reuse. Kinds cover 32/64-bit GPR loads, zero-extended
+bytes, and full/scalar vector loads, including mixed pairs and aliases. The
+independent corpus contains consecutive GPR loads and scalar SSE loads.
+Differential cases cover address scales, displacement differences, zero
+differences, aliases and rejected base/index changes. New fault sites 53-56
+check first-load faults and second-load faults after a completed GPR/vector
+update, including the second instruction's exact RIP, with both Windows
+allocation modes. Handler replicas and the unchanged recovery audit include
+every new handler.
 
 Windows mode defaults to the identity permutation. CI additionally enables
 the allocation trial with `GPTA_XMAP_WINDOWS=1` and repeats the same native
