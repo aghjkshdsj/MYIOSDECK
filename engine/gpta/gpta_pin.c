@@ -29,6 +29,7 @@
 #include "gpta_pin_copyshift.h"
 #include "gpta_pin_cfonly.h"
 #include "gpta_pin_unary_trace.h"
+#include "gpta_pin_xload.h"
 
 static Uop *architectural_uop(FxiCpu *c, Uop *u, Uop *original);
 static GPTA_CC void p_xentry(GPTA_PARAMS);
@@ -391,6 +392,7 @@ static void rmap_init(void) {
     RMAP(t_shconst);
     RMAP(t_cf_rr); RMAP(t_cf_ri);
     RMAP(t_fid_trace);
+    RMAP(t_xload_ps); RMAP(t_xload_pd); RMAP(t_xload_ss); RMAP(t_xload_sd);
     RMAP(t_csh_shl); RMAP(t_csh_shr); RMAP(t_csh_sar); RMAP(t_csh_rol); RMAP(t_csh_ror);
     RMAP(t_xlz); RMAP(t_xsz);
     RMAP(t_am_add); RMAP(t_am_sub); RMAP(t_am_and); RMAP(t_am_or); RMAP(t_am_xor);
@@ -866,6 +868,22 @@ static int try_fuse(Out *o, const Uop *u, uint32_t left) {
         x->fimm = (int32_t)u->disp;
         if (fd) edge_stubs(o, fd, t_fs_subi[a->b][D]);
         return 2;
+    }
+    // SSE load D,[base+disp] ; arithmetic D,S. This corpus-selected pair
+    // has one guest access, before all effects. It retains the load's metadata.
+    if (simple_mem(u) && u->dst < 16 && b->fam == FAM_X && !b->b &&
+        v->dst == u->dst && v->src < 16) {
+        int k = xmem_index(gpta_xops[b->a].name);
+        int width = a->fam == FAM_X && a->b && !strcmp(gpta_xops[a->a].name,"movx") ? 16 :
+            a->fam == FAM_XS && a->a == XS_MOVSS_RM ? 4 :
+            a->fam == FAM_XS && a->a == XS_MOVSD_RM ? 8 : 0;
+        if (k >= 0 && width == (k < 6 ? 16 : k < 9 ? 4 : 8)) {
+            static const PFn (*const tables[4])[16][16][17] = {
+                t_xload_ps,t_xload_pd,t_xload_ss,t_xload_sd };
+            x = put_uop(o,u,tables[k/3][k%3][u->dst][v->src][u->base]);
+            x->src = v->src;
+            return 2;
+        }
     }
     // movaps/movups/movdqa D, S ; op D, X -> D = S op X (X == D reads the copy, S)
     if (a->fam == FAM_X && !a->b && b->fam == FAM_X && !b->b && v->dst == u->dst && !strcmp(gpta_xops[a->a].name, "movx")) {
@@ -1446,6 +1464,9 @@ static void hidx_build(void) {
     hidx_tab((const PFn *)t_cf_rr, sizeof t_cf_rr / sizeof(PFn));
     hidx_tab((const PFn *)t_cf_ri, sizeof t_cf_ri / sizeof(PFn));
     hidx_tab((const PFn *)t_fid_trace, sizeof t_fid_trace / sizeof(PFn));
+#define XL_HIDX(N) hidx_tab((const PFn *)N, sizeof N / sizeof(PFn));
+    GPTA_XLOAD_TABLES(XL_HIDX)
+#undef XL_HIDX
 #define CSH_HIDX(N) hidx_tab((const PFn *)N, sizeof N / sizeof(PFn));
     CSH_HIDX(t_csh_shl) CSH_HIDX(t_csh_shr) CSH_HIDX(t_csh_sar) CSH_HIDX(t_csh_rol) CSH_HIDX(t_csh_ror)
 #undef CSH_HIDX

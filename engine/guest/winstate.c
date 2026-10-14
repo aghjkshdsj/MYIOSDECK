@@ -124,6 +124,10 @@ FAULT(f_xscalar_load32, DUP_XMM("xmm9"), "movss (%%rbx,%%rsi,4), %%xmm9")   // 4
 FAULT(f_xscalar_load64, DUP_XMM("xmm12"), "movsd (%%rbx,%%rsi,8), %%xmm12") // 46
 FAULT(f_xscalar_store32, "", "movss %%xmm10, (%%rbx,%%rsi,2)")              // 47
 FAULT(f_xscalar_store64, "", "movsd %%xmm11, (%%rbx,%%rsi)")                // 48
+FAULT(f_xload_pair_ps, DUP_XMM("xmm0"), "movups (%%rbx), %%xmm0\n\taddps %%xmm7, %%xmm0") // 49
+FAULT(f_xload_pair_pd, DUP_XMM("xmm13"), "movupd 16(%%rbx), %%xmm13\n\tmulpd %%xmm13, %%xmm13") // 50
+FAULT(f_xload_pair_ss, DUP_XMM("xmm7"), "movss -16(%%rbx), %%xmm7\n\tsubss %%xmm0, %%xmm7") // 51
+FAULT(f_xload_pair_sd, DUP_XMM("xmm15"), "movsd (%%rbx), %%xmm15\n\taddsd %%xmm8, %%xmm15") // 52
 static void (*const k_faults[])(void) = { f_load, f_store, f_xload, f_push, f_call, f_cmpj, f_ltj, f_pop, f_ret,
                                           f_rmw, f_callm, f_xstore, f_xarith_index, f_xarith_base,
                                           f_xload2, f_xload4, f_xload8, f_xstore2, f_xstore4, f_xstore8,
@@ -132,7 +136,8 @@ static void (*const k_faults[])(void) = { f_load, f_store, f_xload, f_push, f_ca
                                           f_am_add, f_am_sub, f_am_and, f_am_or, f_am_xor, f_am_base, f_am_index,
                                           f_xhigh_load, f_xhigh_scalar, f_xhigh_arith, f_xhigh_store,
                                           f_stiz8, f_stiz16, f_stiz32, f_stiz64,
-                                          f_xscalar_load32, f_xscalar_load64, f_xscalar_store32, f_xscalar_store64 };
+                                          f_xscalar_load32, f_xscalar_load64, f_xscalar_store32, f_xscalar_store64,
+                                          f_xload_pair_ps, f_xload_pair_pd, f_xload_pair_ss, f_xload_pair_sd };
 
 int guest_main(int argc, char **argv) {
     if (argc >= 3 && g_streq(argv[1], "loop")) { loop(g_atou(argv[2])); g_puts("loop done\n"); return 0; }

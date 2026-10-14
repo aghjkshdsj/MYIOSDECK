@@ -46,6 +46,7 @@ row below. Interrupted or defective trials are recorded separately.
 | 11de320 | [38458064927](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38458064927) | 26.28% | 26.94% | 8.40% | 13.98% |
 | 9a102a0 | [38488394754](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38488394754) | 27.01% | 31.16% | 8.27% | 13.96% |
 | f6ce896 | [38488865639](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38488865639) | 27.63% | 31.33% | 8.30% | 13.98% |
+| 19ed75e | [38489068854](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38489068854) | 28.06% | 31.53% | 8.19% | 13.98% |
 
 The third trial (result-width branches and simplified floating comparisons)
 regressed. Its ARM64, x86 and iOS gates passed. That trial is rolled back in
@@ -176,7 +177,8 @@ and GPTA_WINLOWER retain full flag bookkeeping. Differential cases cover both
 widths, register aliases, immediate forms, narrow unary consumers and direct
 block boundaries.
 
-The loop-region allocation trial is **not measured**. Newly decoded vector
+The loop-region allocation trial passed every gate; both means remain below
+50%. Newly decoded vector
 blocks inside a cached ELF loop region inherit its immutable map instead of
 choosing a different map for each block. The entry adapter stores the region
 boundaries in otherwise unused metadata, with the same lifetime as its block.
@@ -192,6 +194,16 @@ stubs; every unary instruction and branch still executes. Handler replicas
 and host-state indexing include the new forms. Differential coverage checks
 both widths, all four supported conditions, both adjacent edges and final
 exits after replicated copies, including sign transitions and zero extension.
+
+The SSE load/arithmetic pair trial is **not measured**. The independent corpus
+counts SSE load followed by an operation on its destination. Base-only loads
+followed by register ADD/SUB/MUL now share a handler for packed single/double
+and scalar single/double forms. Operand registers are static, displacement
+remains general, and aliases read the newly loaded value. The one guest access
+precedes every visible side effect. New differential cases cover all sixteen
+XMM destinations, upper-lane clearing, aliases and preserved flags. New exact
+fault sites 49-52 check nonzero upper lanes for each type, with both Windows
+allocation policies; the unchanged assembly audit checks every new handler.
 
 Windows mode defaults to the identity permutation. CI additionally enables
 the allocation trial with `GPTA_XMAP_WINDOWS=1` and repeats the same native
