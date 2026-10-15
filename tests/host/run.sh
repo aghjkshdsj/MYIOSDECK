@@ -14,3 +14,6 @@ swiftc -O -o "$OUT/steam-cloud-tests" "$ROOT/App/Sources/Steam/SteamCloudCore.sw
 # Madeira Dock: Steam's UDP/TCP server list for Valve's client, and the config.vdf edit.
 swiftc -O -o "$OUT/steam-cm-tests" "$ROOT/App/Sources/Steam/SteamCMList.swift" "$HERE/steam_cm/main.swift"
 "$OUT/steam-cm-tests" | tee "$OUT/steam-cm-tests.txt"
+# The on-screen controller (stick, D-pad, merging with a physical pad, layouts) and Game settings.
+swiftc -O -o "$OUT/touch-pad-tests" "$ROOT/App/Sources/Engine/TouchPadCore.swift" "$ROOT/App/Sources/Engine/GameSettingsCore.swift" "$HERE/touch_pad/main.swift"
+"$OUT/touch-pad-tests" | tee "$OUT/touch-pad-tests.txt"

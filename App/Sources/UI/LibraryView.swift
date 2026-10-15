@@ -1,604 +1,222 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import SwiftUI
+import UniformTypeIdentifiers
 
-/// The game library. Until the Wine and Steam stages land, it holds the
-/// built-in x86-64 programs and shows exactly what each stage still needs.
+/// The whole library: owned and installed Steam games and the added DRM-free games, as cover art.
+/// A game opens its page (install, play, settings, Steam Cloud, uninstall).
 struct LibraryView: View {
-    @EnvironmentObject private var engine: EngineController
-    @EnvironmentObject private var settings: Settings
+    @ObservedObject private var ui = UIState.shared
+    @ObservedObject private var steam = SteamLibrary.shared
+    @ObservedObject private var custom = CustomGames.shared
+    @ObservedObject private var recent = RecentlyPlayed.shared
+    @ObservedObject private var favorites = Favorites.shared
+    @ObservedObject private var signIn = SteamSignInModel.shared
     @EnvironmentObject private var wine: WineController
-    @EnvironmentObject private var jit: JITController
-    @State private var noJITAction: (() -> Void)?
-    @ObservedObject private var session = GameSession.shared
-    @State private var showSteamSignIn = false
-    @ObservedObject private var steam = SteamSignInModel.shared
-    @ObservedObject private var steamLibrary = SteamLibrary.shared
+    @Environment(\.isLandscape) private var landscape
+    @State private var filter = Filter.all
+    @State private var query = ""
+    @State private var showImporter = false
+    @State private var showSignIn = false
 
-    private struct Stage: Identifiable {
-        let id: Int
-        let title: String
-        let detail: String
-        let done: Bool
+    enum Filter: String, CaseIterable, Identifiable {
+        case all = "All", installed = "Installed", favorites = "Favorites", steam = "Steam", mine = "My games"
+        var id: String { rawValue }
     }
 
-    private let stages = [
-        Stage(id: 1, title: "JIT + FEX x86-64 translation", detail: "StikDebug JIT pool, FEXCore tuned to the A17 Pro, benchmarks, plus a no-JIT interpreter. Verified on iPhone 15 Pro Max / iOS 27.", done: true),
-        Stage(id: 2, title: "Wine ARM64EC (Windows)", detail: "Wine running natively on ARM64 in-process, wineserver as a thread, FEX as xtajit64.dll for x86-64 code. Verified on device (build 20).", done: true),
-        Stage(id: 3, title: "Direct3D 9/10/11/12 on Metal", detail: "DXMT for D3D9-11 and Madeira's D3D12 converter. D3D11 and D3D12 cubes render at 60 fps on device (builds 21-22).", done: true),
-        Stage(id: 4, title: "Steam", detail: "Steam sign-in (QR or password + Steam Guard), owned library, depot downloads, cloud saves, launch through Valve's Windows client.", done: false),
-        Stage(id: 5, title: "Deck input", detail: "Bluetooth controllers as XInput, touch controls, keyboard and mouse.", done: false),
-    ]
+    private var shown: [LibraryGame] {
+        var list = GameCatalog.all(steam: steam, custom: custom)
+        let installed = Set(GameCatalog.installed(steam: steam, custom: custom).map(\.id))
+        switch filter {
+        case .all: break
+        case .installed: list = list.filter { installed.contains($0.id) }
+        case .favorites: list = list.filter { favorites.contains($0.id) }
+        case .steam: list = list.filter { $0.source == .steam }
+        case .mine: list = list.filter { $0.source != .steam }
+        }
+        let q = query.trimmingCharacters(in: .whitespaces)
+        if !q.isEmpty { list = list.filter { $0.name.localizedCaseInsensitiveContains(q) } }
+        // Played first (latest first), then installed, then by name.
+        let byName = list.sorted { a, b in
+            let ia = installed.contains(a.id), ib = installed.contains(b.id)
+            return ia != ib ? ia : a.name.localizedStandardCompare(b.name) == .orderedAscending
+        }
+        return recent.sorted(byName) { $0.id }
+    }
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 14) {
-                DeckCard(title: "Installed (built-in x86-64 programs)", icon: "square.grid.2x2.fill") {
-                    programRow(name: "x86-64 Hello", detail: "Prints the CPU the guest sees (CPUID) and times a loop") {
-                        gated(jit: { engine.runHello(mode: .jit) }, noJIT: { engine.runHello(mode: settings.linuxNoJITMode) })
-                    }
-                    Divider().overlay(Deck.panelHi)
-                    programRow(name: "CPU benchmark suite", detail: "Native vs FEX vs no-JIT, five kernels (also on Performance)") {
-                        let preset = settings.fexPreset.title
-                        gated(jit: { engine.runBenchmarks(fex: true, interpreter: settings.benchInterpreter, presetName: preset) },
-                              noJIT: { engine.runBenchmarks(fex: false, interpreter: true, presetName: preset) })
+            VStack(alignment: .leading, spacing: 14) {
+                controls
+                steamStatus
+                customStatus
+                let games = shown
+                if games.isEmpty {
+                    emptyText.padding(.top, 20)
+                } else {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: landscape ? 118 : 104), spacing: 14)], spacing: 16) {
+                        ForEach(games) { game in tile(game) }
                     }
                 }
-                windowsCard
-                steamCard
-                if wine.linked {
-                    CustomGamesCard(prefix: wine.prefixURL, playBlocker: steamPlayBlocker, onPlay: { playCustom($0) })
-                        .alert("JIT is off", isPresented: customNoJITPresented, presenting: customNoJITGame) { game in
-                            Button("Play without JIT (experimental)") { playCustom(game, noJIT: true) }
-                            Button("Enable JIT") {
-                                jit.enableWithStikDebug(poolMB: settings.jitPoolMB) {
-                                    engine.start(settings: settings)
-                                    DispatchQueue.main.async { playCustom(game) }   // the game starts once JIT is ready
-                                }
-                            }
-                            Button("Cancel", role: .cancel) {}
-                        } message: { _ in
-                            Text("Without JIT the game's x86 code runs in MYIOSDECK's interpreter (FXI), about 10× slower than native. 32-bit games run through WoW64 (experimental, and slower still: their Windows libraries are interpreted too). With JIT (StikDebug) everything runs through FEX at full speed.")
+            }
+            .padding(.horizontal, landscape ? 10 : 20)
+            .padding(.bottom, 24)
+        }
+        .scrollIndicators(.hidden)
+        .refreshable { await refreshAll() }
+        .fileImporter(isPresented: $showImporter, allowedContentTypes: [.folder]) { result in
+            if case .success(let url) = result { custom.importFolder(url, prefix: wine.prefixURL) }
+        }
+        .sheet(isPresented: $showSignIn) { SteamSignInView() }
+        .onAppear {
+            steam.refreshInstalled()   // Valve's client (Madeira Dock) may have installed one meanwhile
+            custom.refresh(prefix: wine.prefixURL)
+        }
+    }
+
+    @MainActor private func refreshAll() async {
+        custom.refresh(prefix: wine.prefixURL)
+        await steam.refresh()
+    }
+
+    private var controls: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(Glass.secondary)
+                    TextField("Search your games", text: $query)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    if !query.isEmpty {
+                        Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(Glass.secondary) }
+                            .buttonStyle(.plain).accessibilityLabel("Clear search")
+                    }
+                }
+                .padding(.horizontal, 16).frame(height: 44)
+                .glassCapsule()
+                Menu {
+                    Button { showImporter = true } label: { Label("Add a game folder…", systemImage: "folder.badge.plus") }
+                    Button { custom.refresh(prefix: wine.prefixURL) } label: { Label("Look for new game folders", systemImage: "arrow.clockwise") }
+                    if steam.signedIn {
+                        Button { Task { await steam.refresh() } } label: { Label("Refresh Steam library", systemImage: "arrow.triangle.2.circlepath") }
+                    }
+                } label: {
+                    Image(systemName: "plus").font(.system(size: 18, weight: .semibold))
+                        .frame(width: 44, height: 44).glassCircle()
+                }
+                .accessibilityLabel("Add or refresh games")
+            }
+            ScrollView(.horizontal) {
+                HStack(spacing: 8) {
+                    ForEach(Filter.allCases) { f in
+                        Button { withGlassAnimation { filter = f } } label: {
+                            Text(f.rawValue).font(.subheadline.weight(filter == f ? .semibold : .regular))
+                                .padding(.horizontal, 14).frame(height: 34)
+                                .glassCapsule(highlighted: filter == f)
                         }
-                }
-                if let customError {
-                    StatusRow(label: "Could not start the game", detail: customError, level: .bad)
-                }
-                DeckCard(title: "Road to Steam games", icon: "map.fill") {
-                    ForEach(stages) { s in
-                        StatusRow(label: "Stage \(s.id): \(s.title)", detail: s.detail, level: s.done ? .good : .idle)
+                        .buttonStyle(.plain)
+                        .accessibilityAddTraits(filter == f ? .isSelected : [])
                     }
                 }
+                .padding(.vertical, 2)
+            }
+            .scrollIndicators(.hidden)
+        }
+    }
+
+    @ViewBuilder private var steamStatus: some View {
+        if signIn.accountName == nil {
+            HStack(spacing: 14) {
+                Image(systemName: "cloud.fill").font(.title2).foregroundStyle(Glass.primary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Sign in to Steam").font(.headline)
+                    Text("Your Steam library: install and play your Windows games. The sign-in token stays in this device's Keychain; the password is never stored.")
+                        .font(.footnote).foregroundStyle(Glass.secondary)
+                }
+                Spacer(minLength: 8)
+                Button("Sign in") { showSignIn = true }.buttonStyle(PrimaryButtonStyle(compact: true))
             }
             .padding(16)
-            .frame(maxWidth: 820)
-            .frame(maxWidth: .infinity)
-        }
-        .jitGate(pending: $noJITAction)
-        .alert("You are running this without JIT", isPresented: noJITGamePresented) {
-            Button("Enable JIT") {
-                let launch = noJITGame
-                noJITGame = nil
-                jit.enableWithStikDebug(poolMB: settings.jitPoolMB) {
-                    engine.start(settings: settings)
-                    DispatchQueue.main.async { launch?() }   // the game starts once JIT is ready
+            .glassPanel()
+        } else if steam.refreshing || steam.error != nil {
+            HStack(spacing: 10) {
+                if steam.refreshing { ProgressView(); Text("Loading your Steam library…").foregroundStyle(Glass.secondary) }
+                if let error = steam.error {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Glass.warn)
+                    Text("Could not load the library: \(error)").font(.footnote).foregroundStyle(Glass.secondary)
+                    Spacer()
+                    Button("Retry") { Task { await steam.refresh() } }.buttonStyle(GlassButtonStyle(compact: true))
                 }
             }
-            Button("Cancel", role: .cancel) { noJITGame = nil }
-        } message: {
-            Text("This test program uses the JIT path (Wine code copied into JIT memory, x64 code through FEX). The entries marked \"no JIT\" and Steam games can run without JIT. Enable JIT and the program starts right after.")
+            .padding(14)
+            .glassPanel()
         }
-        .fullScreenCover(isPresented: $session.shown) { gameSurface }
-        .onChange(of: wine.state) { _, state in
-            // The session ended (the game's own Quit, a crash, or a start that failed): close the
-            // surface and its menus and go back to the library, where the status shows (and a
-            // crash report after it). Left up, it was a black screen until Hide game. A launcher
-            // that starts its game and exits is not an end: 32-bit sessions wait for the game.
-            switch state {
-            case .finished, .failed:
-                dlog("[ui] session ended: game view closed")
-                showGameMenu = false; showControllerMenu = false; showTouchMenu = false
-                session.shown = false
-                session.title = ""
-                GameHostView.shared.setStatus(nil)   // Quit game's "Closing…"
-                quitStuck = false
-                quitPending = false
-                quitAttempt += 1
-            default: break
+    }
+
+    @ViewBuilder private var customStatus: some View {
+        if let copying = custom.copying {
+            HStack(spacing: 10) {
+                if copying.hasPrefix("Copying") { ProgressView() }
+                Text(copying).font(.subheadline).foregroundStyle(Glass.secondary)
             }
+            .padding(14).glassPanel()
+        }
+        ForEach(custom.unusable.keys.sorted(), id: \.self) { folder in
+            StatusRow(label: folder, detail: custom.unusable[folder] ?? "", level: .warn)
+                .padding(14).glassPanel()
         }
     }
 
-    /// Full-screen surface for a Windows program's Direct3D window, edge to edge.
-    /// The menu button is drawn by GameHostView (the Metal host is above every
-    /// SwiftUI view); while the menu is open the host is hidden so it shows.
-    private var gameSurface: some View {
-        GameSurfaceView()
-            .ignoresSafeArea()
-            .background(Color.black)
-            .statusBarHidden()
-            .persistentSystemOverlays(.hidden)
-            .onAppear {
-                GameHostView.onMenu = {
-                    dlog("[ui] game menu opening (surface shown \(session.shown), menu already open \(showGameMenu))")
-                    // The menu is opened when something is wrong (a game that hangs while starting
-                    // or quitting, build 162): where every thread of the 32-bit programs is, each time.
-                    if wine.sessionKept, case .running = wine.state { mid_wow_thread_report("game menu opened") }
-                    GameHostView.shared.isHidden = true
-                    showGameMenu = true
-                }
-            }
-            .confirmationDialog(session.title, isPresented: $showGameMenu, titleVisibility: .visible) {
-                Button("Resume") {}
-                Button("Controller: \(Self.controllerNames[WineController.controllerAPI(for: wine.sessionProgramID)] ?? "XInput")…") {
-                    openingSubmenu = true
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { showControllerMenu = true }
-                }
-                Button("Touch mouse: \(Self.touchNames[GameInput.shared.touchMode] ?? "Off")…") {
-                    openingSubmenu = true
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { showTouchMenu = true }
-                }
-                Button("Hide game (keeps running)") { session.shown = false }
-                if wine.sessionKept {
-                    Button("Quit game") { requestQuit() }
-                    if quitStuck {
-                        Button("Force quit", role: .destructive) { forceQuit() }
-                    }
-                }
-                Button("Quit game and close MYIOSDECK", role: .destructive) { CrashReporter.shared.quitApp() }
-            } message: {
-                if wine.sessionKept && quitStuck {
-                    Text("\(session.title) has not closed. Force quit ends it at once (unsaved progress is lost) and MYIOSDECK stays open for the next game.")
-                } else if wine.sessionKept {
-                    Text("Quit game asks the game to close, as its window's close button does: confirm in the game if it asks. A game still running 10 s later is force quit (unsaved progress is lost). MYIOSDECK stays open for the next game. Quit game and close MYIOSDECK stops it at once.")
-                } else {
-                    Text("A Windows game can only be stopped by closing MYIOSDECK; unsaved progress is lost.")
-                }
-            }
-            .confirmationDialog("Controller", isPresented: $showControllerMenu, titleVisibility: .visible) {
-                ForEach(Self.controllerOrder, id: \.self) { api in
-                    let current = api == WineController.controllerAPI(for: wine.sessionProgramID)
-                    let later = WineController.sessionStartAPIs.contains(api) && api != wine.sessionAPI
-                    Button((current ? "✓ " : "") + (Self.controllerNames[api] ?? api) + (later ? " (next launch)" : "")) {
-                        wine.switchController(to: api)
-                    }
-                }
-            } message: {
-                Text("XInput and Keyboard and mouse switch at once. DirectInput and HID modes need the game to start with them, so they apply at the next launch. The choice is remembered for this game only; Settings › Controller is the default for the others.")
-            }
-            .confirmationDialog("Touch mouse", isPresented: $showTouchMenu, titleVisibility: .visible) {
-                ForEach(GameInput.TouchMode.allCases, id: \.self) { mode in
-                    Button((mode == GameInput.shared.touchMode ? "✓ " : "") + (Self.touchNames[mode] ?? mode.rawValue)) {
-                        GameInput.shared.setTouchMode(mode)
-                    }
-                }
-            } message: {
-                Text("Off: touching the game does nothing, so holding the phone never clicks. A three-finger tap opens this menu in every mode. The choice is remembered for this game.")
-            }
-            .onChange(of: showGameMenu) { _, open in
-                dlog("[ui] game menu \(open ? "shown" : "closed")")
-                if !open, session.shown, !openingSubmenu { GameHostView.shared.isHidden = false }
-            }
-            .onChange(of: showControllerMenu) { _, open in
-                if open { openingSubmenu = false }
-                if !open, session.shown { GameHostView.shared.isHidden = false }
-            }
-            .onChange(of: showTouchMenu) { _, open in
-                if open { openingSubmenu = false }
-                if !open, session.shown { GameHostView.shared.isHidden = false }
-            }
-    }
-
-    @State private var showGameMenu = false
-    @State private var showControllerMenu = false
-    @State private var showTouchMenu = false
-    @State private var openingSubmenu = false   // the game menu closes before a submenu opens
-    @State private var quitStuck = false        // Quit game did not end the game: Force quit is offered
-    @State private var quitAttempt = 0          // the latest Quit game / Force quit (its watchdog's)
-    @State private var quitPending = false      // Quit game was asked and the game still runs
-
-    /// Quit game with session reuse: asks the game to close with Alt+F4 through its normal input,
-    /// as Madeira's Quit game does (Library.swift requestQuit), so it can save and run its own exit
-    /// dialog. Its view stays up until the session ends; the Wine session stays for the next game.
-    private func requestQuit() {
-        dlog("[ui] quit requested: Alt+F4 to \(session.title)")
-        mid_post_key(0x12, 1); mid_post_key(0x73, 1)   // VK_MENU, VK_F4
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { mid_post_key(0x73, 0); mid_post_key(0x12, 0) }
-        GameHostView.shared.setStatus("Closing \(session.title)… confirm in the game if it asks")
-        let title = session.title
-        // Quit game again while the first is pending: the game is not closing. Say where its
-        // threads are now (build 161: the second press came before the first one's report, and
-        // the log was taken before either), and end it.
-        if quitPending {
-            dlog("[ui] Quit game again: \(title) is still running")
-            mid_wow_thread_report("Quit game again: \(title) still runs")
-            forceQuit()
-            return
-        }
-        // Still running 6 s later (a game can hang on its way out, or wait in a dialog): say where
-        // its threads are in the log, and force quit it 4 s after that unless it ends meanwhile.
-        quitPending = true
-        quitAttempt += 1
-        let attempt = quitAttempt
-        DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
-            guard attempt == quitAttempt, session.title == title, case .running = wine.state, !quitStuck else { return }
-            dlog("[ui] \(title) is still running 6 s after Quit game")
-            mid_wow_thread_report("\(title) still runs 6 s after Quit game")
-            quitStuck = true
-            GameHostView.shared.setStatus("\(title) has not closed: force quitting it in 4 s.")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
-                guard attempt == quitAttempt, session.title == title, case .running = wine.state else { return }
-                dlog("[ui] \(title) is still running 10 s after Quit game: force quit")
-                forceQuit()
-            }
+    private var emptyText: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(filter == .favorites ? "No favorites yet" : query.isEmpty ? "No games here yet" : "Nothing matches \"\(query)\"")
+                .font(.title3.weight(.semibold))
+            Text(filter == .favorites
+                 ? "Turn on Add to Favorites on a game's page."
+                 : "Put an installed game's folder (GOG, itch.io, or copied from a PC) into Files › On My iPhone › MYIOSDECK › Games, or add one with +. Wine sees it as C:\\Games. 64-bit games run with or without JIT; 32-bit games without JIT are experimental.")
+                .font(.footnote).foregroundStyle(Glass.secondary)
         }
     }
 
-    /// Force quit (kept sessions): the Wine server ends the game's processes as TerminateProcess
-    /// does; the session stays for the next game (docs/SESSION_REUSE.md).
-    private func forceQuit() {
-        dlog("[ui] force quit requested for \(session.title)")
-        quitAttempt += 1
-        guard wine.forceQuit() else { quitStuck = false; return }
-        GameHostView.shared.setStatus("Ending \(session.title)…")
-        let attempt = quitAttempt, title = session.title
-        DispatchQueue.main.asyncAfter(deadline: .now() + 8) {
-            guard attempt == quitAttempt, session.title == title, case .running = wine.state else { return }
-            dlog("[ui] \(title) is still running 8 s after Force quit")
-            mid_wow_thread_report("\(title) still runs 8 s after Force quit")
-            GameHostView.shared.setStatus("\(title) could not be ended. Quit game and close MYIOSDECK stops it.")
-        }
-    }
-
-    private static let controllerOrder = ["xinput", "dinput", "hid", "dualsense", "keyboard"]
-    private static let controllerNames = [
-        "xinput": "Xbox (XInput)", "dinput": "XInput + DirectInput", "hid": "HID gamepad",
-        "dualsense": "DualSense (PS5)", "keyboard": "Keyboard and mouse",
-    ]
-    private static let touchNames: [GameInput.TouchMode: String] = [
-        .off: "Off", .trackpad: "Trackpad with cursor", .direct: "Tap where you click",
-    ]
-
-    /// Stage 4: Steam account (SwiftSteam, from Madeira). The owned library and
-    /// downloads build on this sign-in.
-    private var steamCard: some View {
-        DeckCard(title: "Steam", icon: "gamecontroller.fill") {
-            if let name = steam.accountName {
-                HStack {
-                    StatusRow(label: "Signed in as \(name)", detail: "Tap a game to install or play it.", level: .good)
-                    Button("Sign out") { steam.signOut() }
-                        .buttonStyle(DeckButtonStyle())
-                        .frame(width: 110)
-                }
-                Divider().overlay(Deck.panelHi)
-                SteamInstalledList(library: steamLibrary, blocker: steamDeleteBlocker)
-                SteamGamesGrid(library: steamLibrary, playBlocker: steamPlayBlocker, onPlay: { chooseSteamLaunch($0) })
-                if let dockProgress {
-                    HStack { ProgressView(); Text(dockProgress).font(.subheadline).foregroundStyle(Deck.dim) }
-                }
-                if let cloudSyncing {
-                    HStack { ProgressView(); Text("Syncing Steam Cloud saves of \(cloudSyncing)…").font(.subheadline).foregroundStyle(Deck.dim) }
-                }
-                if let playError {
-                    StatusRow(label: "Could not start the game", detail: playError, level: .bad)
-                }
-                if let failure = wine.dockFailure {
-                    StatusRow(label: "Steam (Madeira Dock) did not start the game", detail: failure, level: .bad)
-                }
-            } else {
-                Text("Sign in with your Steam account name and password (Steam Guard supported) or a QR code from the Steam app. The sign-in token stays in this device's Keychain; the password is never stored.")
-                    .font(.subheadline).foregroundStyle(Deck.dim)
-                Button("Sign in to Steam") { showSteamSignIn = true }
-                    .buttonStyle(DeckButtonStyle())
-                SteamInstalledList(library: steamLibrary, blocker: steamDeleteBlocker)
-            }
-        }
-        .sheet(isPresented: $showSteamSignIn) { SteamSignInView() }
-        .alert(cloudHold.map { Self.holdTitle($0.hold) } ?? "", isPresented: cloudHoldPresented, presenting: cloudHold) { h in
-            switch h.hold {
-            case .conflicts: Button("Choose…") { cloudPage = h.game }
-            case .failed: Button("Try again") { playSteam(h.game, noJIT: h.noJIT, viaDock: h.viaDock) }
-            }
-            Button("Play without syncing") { playSteam(h.game, noJIT: h.noJIT, viaDock: h.viaDock, skipCloud: true) }
-            Button("Cancel", role: .cancel) {}
-        } message: { h in
-            Text(Self.holdMessage(h.hold))
-        }
-        .sheet(item: $cloudPage) { game in SteamCloudPage(appID: game.id, name: game.name) }
-        .onAppear {
-            steamLibrary.start()
-            steamLibrary.refreshInstalled()   // Valve's client (Madeira Dock) may have installed one meanwhile
-        }
-        .confirmationDialog(steamChoiceGame.map { "Start \($0.name)" } ?? "", isPresented: steamChoicePresented,
-                            titleVisibility: .visible, presenting: steamChoiceGame) { game in
-            Button("With Steam") { playSteam(game, viaDock: true) }
-            Button("Without Steam") { playSteam(game, viaDock: false) }
-            Button("Cancel", role: .cancel) {}
-        } message: { _ in
-            Text("With Steam: Valve's Steam client signs in and starts the game, for games that need Steam running (without JIT the sign-in takes several minutes). Without Steam: the game starts on its own, faster. Settings › Steam can make either the default.")
-        }
-        .alert("JIT is off", isPresented: steamNoJITPresented, presenting: steamNoJITGame) { game in
-            Button("Play without JIT (experimental)") { playSteam(game, noJIT: true, viaDock: steamPendingDock) }
-            Button("Enable JIT") {
-                let viaDock = steamPendingDock
-                jit.enableWithStikDebug(poolMB: settings.jitPoolMB) {
-                    engine.start(settings: settings)
-                    DispatchQueue.main.async { playSteam(game, viaDock: viaDock) }   // the game starts once JIT is ready
-                }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: { _ in
-            Text("Without JIT, Wine loads from signed app files and the game's x64 code runs in MYIOSDECK's interpreter (FXI), about 10× slower than native. Small 64-bit Direct3D 11/12 games may run; 32-bit games are experimental. If it stops, send myiosdeck-log.txt from the Logs tab.")
-        }
-    }
-
-    /// A Steam game waiting for the JIT / no-JIT choice.
-    @State private var steamNoJITGame: OwnedSteamGame?
-    private var steamNoJITPresented: Binding<Bool> {
-        Binding(get: { steamNoJITGame != nil }, set: { if !$0 { steamNoJITGame = nil } })
-    }
-
-    @State private var playError: String?
-    /// A Windows launch waiting for JIT (the no-JIT alert).
-    @State private var noJITGame: (() -> Void)?
-    private var noJITGamePresented: Binding<Bool> {
-        Binding(get: { noJITGame != nil }, set: { if !$0 { noJITGame = nil } })
-    }
-
-    /// Runs a Windows launch now, or asks to enable JIT first.
-    private func withJIT(_ launch: @escaping () -> Void) {
-        if jit.isReady { launch() } else { noJITGame = launch }
-    }
-
-    private var steamPlayBlocker: String? {
-        if !wine.linked { return "This build does not include Wine." }
-        switch wine.state {
-        case .booting, .running:
-            return "\(session.title.isEmpty ? "A game" : session.title) is still running: Return to it at the top of the screen."
-        default:
-            // After a game: another can start in the same Wine session (session reuse), or not.
-            return wine.programsThisRun > 0 ? wine.nextGameRefusal() : nil
-        }
-    }
-
-    /// Installed Steam games cannot be deleted while a Windows game runs (it may be one of them).
-    private var steamDeleteBlocker: String? {
-        switch wine.state {
-        case .booting, .running: return "Quit the running game to delete an installed one."
-        default: return nil
-        }
-    }
-
-    /// A Steam game waiting for the with / without Steam choice.
-    @State private var steamChoiceGame: OwnedSteamGame?
-    private var steamChoicePresented: Binding<Bool> {
-        Binding(get: { steamChoiceGame != nil }, set: { if !$0 { steamChoiceGame = nil } })
-    }
-    /// The with / without Steam choice of the game waiting in the JIT alert.
-    @State private var steamPendingDock = false
-
-    /// An added game waiting for the JIT / no-JIT choice, and why the last start failed.
-    @State private var customNoJITGame: CustomGame?
-    private var customNoJITPresented: Binding<Bool> {
-        Binding(get: { customNoJITGame != nil }, set: { if !$0 { customNoJITGame = nil } })
-    }
-    @State private var customError: String?
-
-    /// Starts an added DRM-free game (CustomGames) on the game surface. Without JIT it asks
-    /// first: play without JIT (FXI, 64-bit only) or enable JIT.
-    private func playCustom(_ game: CustomGame, noJIT: Bool = false) {
-        customError = nil
-        guard jit.isReady || noJIT else { customNoJITGame = game; return }
-        wine.runCustomGame(game)
-        if case .failed(let why) = wine.state { customError = why; return }
-        guard case .booting = wine.state else { return }
-        RecentlyPlayed.shared.note(RecentlyPlayed.custom(game.id))
-        Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(600))   // let the alert finish closing
-            session.title = game.name
-            session.shown = true
-        }
-    }
-
-    /// Play: with Steam (Madeira Dock) or without, as Settings › Steam says, or asked each time.
-    private func chooseSteamLaunch(_ game: OwnedSteamGame) {
-        guard MadeiraDock.bundled else { playSteam(game, viaDock: false); return }
-        switch settings.steamLaunchMode {
-        case "dock": playSteam(game, viaDock: true)
-        case "direct": playSteam(game, viaDock: false)
-        default:
-            // Let the game sheet close before the dialog is presented.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { steamChoiceGame = game }
-        }
-    }
-
-    /// Stage 4d: start of an installed Steam game on the game surface, through Valve's Steam
-    /// client (viaDock) or directly. Without JIT it asks first: play without JIT (FXI) or enable JIT.
-    /// Its Steam Cloud saves sync first (SteamCloudSync); a sync that fails or leaves saves to
-    /// choose holds the start (`skipCloud`: the user chose to play without it).
-    private func playSteam(_ game: OwnedSteamGame, noJIT: Bool = false, viaDock: Bool, skipCloud: Bool = false) {
-        playError = nil
-        guard jit.isReady || noJIT else {
-            steamPendingDock = viaDock
-            // Let the game sheet (or the choice dialog) close before the alert is presented.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { steamNoJITGame = game }
-            return
-        }
-        Task { @MainActor in
-            if !skipCloud, SteamCloudSync.enabled {
-                cloudSyncing = game.name
-                let hold = await SteamCloudSync.shared.beforePlay(game.id)
-                cloudSyncing = nil
-                if let hold {
-                    try? await Task.sleep(for: .milliseconds(600))   // let the game sheet finish closing
-                    cloudHold = CloudHold(game: game, noJIT: noJIT, viaDock: viaDock, hold: hold)
-                    return
-                }
-            }
-            do {
-                let plan = try await steamLibrary.launchPlan(game.id)
-                let dock = MadeiraDock.bundled && viaDock
-                if dock {
-                    try await startThroughDock(game, plan: plan)
-                } else {
-                    wine.runSteamGame(appID: game.id, title: game.name, plan: plan)
-                }
-                if case .failed(let why) = wine.state { playError = why; return }
-                guard case .booting = wine.state else { return }
-                SteamCloudSync.shared.gameStarting(game.id, synced: !skipCloud, dock: dock)
-                RecentlyPlayed.shared.note(RecentlyPlayed.steam(game.id))
-                // Let the game sheet finish closing before the surface is presented.
-                try? await Task.sleep(for: .milliseconds(600))
-                session.title = game.name
-                session.shown = true
-            } catch {
-                playError = error.localizedDescription
-            }
-        }
-    }
-
-    /// Progress of the one-time download of Valve's client components (Madeira Dock).
-    @State private var dockProgress: String?
-
-    /// Madeira Dock: Valve's own Steam client starts the game (MadeiraDock.swift). The first
-    /// time, Valve's client components come from Valve's update servers (pinned sizes and
-    /// SHA-256, about 72 MB); then the one-use sign-in transfer is written, MYIOSDECK's own
-    /// Steam connection logs off (Dock becomes this account's client) and the host starts.
-    @MainActor private func startThroughDock(_ game: OwnedSteamGame, plan: SteamLaunchPlan) async throws {
-        if !MadeiraDock.clientInstalled {
-            dockProgress = "Downloading Steam components from Valve…"
-            defer { dockProgress = nil }
-            try await SteamRuntimeInstaller.shared.prepare(prefix: wine.prefixURL) { text in
-                await MainActor.run { dockProgress = text }
-            }
-            dlog("[dock-setup] Valve's client components installed")
-        }
-        guard let dockGame = MadeiraDock.games(drive: MadeiraDock.drive).first(where: { $0.id == game.id }) else {
-            throw DockError.message("Steam's install record for this game was not found. Reinstall the game from the Steam library.")
-        }
-        try MadeiraDock.validate(dockGame, drive: MadeiraDock.drive)
-        guard let sign = SteamSignIn.credentialsForDock() else {
-            throw DockError.message("Your Steam sign-in has expired. Sign in to Steam again.")
-        }
-        // Steam's UDP/TCP servers into Valve's client's cache: without JIT it cannot fetch them itself.
-        await DockCMCache.prepare(drive: MadeiraDock.drive)
-        // Steam Cloud makes no request while Valve's client holds the account (until the game ends).
-        SteamCloudSync.shared.holdForDock()
-        await steamLibrary.endSessionForDock()
-        do {
-            try MadeiraDock.writeHandoff(account: sign.accountName, token: sign.refreshToken, appID: game.id)
-        } catch {
-            SteamCloudSync.shared.releaseDock()
-            throw error
-        }
-        wine.runDockGame(dockGame, launchOption: plan.launchIndex, title: game.name)
-        if case .booting = wine.state { return }
-        MadeiraDock.cleanup()
-        SteamCloudSync.shared.releaseDock()
-    }
-
-    /// A Steam game whose start waits for the user: its Steam Cloud saves could not be synced, or
-    /// some need a choice.
-    struct CloudHold: Identifiable {
-        let game: OwnedSteamGame
-        let noJIT: Bool
-        let viaDock: Bool
-        let hold: SteamCloudHold
-        var id: Int { game.id }
-    }
-    @State private var cloudHold: CloudHold?
-    /// The game whose saves sync before it starts (shown in the Steam card).
-    @State private var cloudSyncing: String?
-    /// The game whose Steam Cloud page is open from the hold alert.
-    @State private var cloudPage: OwnedSteamGame?
-    private var cloudHoldPresented: Binding<Bool> {
-        Binding(get: { cloudHold != nil }, set: { if !$0 { cloudHold = nil } })
-    }
-
-    static func holdTitle(_ hold: SteamCloudHold) -> String {
-        switch hold {
-        case .failed: return "Steam Cloud saves were not synced"
-        case .conflicts(let n): return n == 1 ? "A save needs your choice" : "\(n) saves need your choice"
-        }
-    }
-
-    static func holdMessage(_ hold: SteamCloudHold) -> String {
-        let anyway = "Play without syncing starts the game with this iPhone's saves; what it changes is not uploaded over cloud saves that changed meanwhile (those wait for your choice at the next sync)."
-        switch hold {
-        case .failed(let why):
-            return "\(why)\n\n\(anyway)"
-        case .conflicts:
-            return "This iPhone and Steam Cloud have different versions, and both changed since the last sync (or there was no sync yet). Choose which to keep on the game's Steam Cloud page; the other version is kept in save-backups.\n\n\(anyway)"
-        }
-    }
-
-    private var windowsCard: some View {
-        DeckCard(title: "Windows programs (Wine + Direct3D)", icon: "macwindow") {
-            if !wine.linked {
-                Text("Wine is being built for iOS in CI (Stage 2). Once it links, Windows x64 programs run here through Wine ARM64EC + FEX.")
-                    .font(.subheadline).foregroundStyle(Deck.dim)
-            } else {
-                ForEach(WineController.programs) { p in
-                    HStack(spacing: 12) {
-                        RoundedRectangle(cornerRadius: 8).fill(Deck.accent.opacity(0.25)).frame(width: 52, height: 52)
-                            .overlay(Image(systemName: "macwindow").foregroundStyle(Deck.accent))
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(p.title).font(.body.weight(.semibold))
-                            Text(p.detail).font(.caption).foregroundStyle(Deck.dim)
+    private func tile(_ game: LibraryGame) -> some View {
+        Button { ui.open(.game(game.id)) } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                ArtworkView(source: game.artwork, kind: .portrait, name: game.name, compactPlaceholder: true)
+                    .aspectRatio(2 / 3, contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Glass.border, lineWidth: 1))
+                    .overlay(alignment: .bottomLeading) { badge(game) }
+                    .overlay(alignment: .topTrailing) {
+                        if favorites.contains(game.id) {
+                            Image(systemName: "star.fill").font(.caption).foregroundStyle(.yellow).padding(7)
                         }
-                        Spacer()
-                        Button("Play") {
-                            let launch = {
-                                wine.run(p)
-                                if p.graphics, case .booting = wine.state {
-                                    session.title = p.title
-                                    session.shown = true
-                                }
-                            }
-                            if p.noJIT { launch() } else { withJIT(launch) }
-                        }
-                            .buttonStyle(DeckButtonStyle())
-                            .frame(width: 90)
                     }
-                }
-                if !session.title.isEmpty, !session.shown, wine.isPlaying {
-                    Button("Show \(session.title)") { session.shown = true }
-                        .buttonStyle(DeckButtonStyle())
-                }
-                switch wine.state {
-                case .idle:
-                    Text(jit.isReady ? "Output appears in the Logs tab ([stdio] lines)." : "JIT is off: the \"no JIT\" entries run as they are; the others offer to enable JIT.")
-                        .font(.caption).foregroundStyle(Deck.dim)
-                case .booting(let t): HStack { ProgressView(); Text("Starting Wine for \(t)…").foregroundStyle(Deck.dim) }
-                case .running(let t): StatusRow(label: "Running \(t)", detail: "Watch the Logs tab for its output.", level: .good)
-                case .finished(let t, let how):
-                    StatusRow(label: "\(t) finished",
-                              detail: "\(how). Its output is in the Logs tab. " + (wine.nextGameRefusal() == nil
-                                  ? "Another program can start now, in the same Wine session."
-                                  : "Restart MYIOSDECK to run another Windows program."),
-                              level: how.contains("error") ? .warn : .good)
-                case .failed(let why): StatusRow(label: "Wine failed", detail: why, level: .bad)
-                }
+                Text(game.name).font(.caption).lineLimit(2).foregroundStyle(Glass.text.opacity(0.9))
             }
         }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel([game.name, badgeText(game)].compactMap { $0 }.joined(separator: ", "))
+        .accessibilityAddTraits(.isButton)
     }
 
-    private func gated(jit: @escaping () -> Void, noJIT: @escaping () -> Void) {
-        if engine.state == .ready { jit() } else { noJITAction = noJIT }
-    }
-
-    private func programRow(name: String, detail: String, action: @escaping () -> Void) -> some View {
-        HStack(spacing: 12) {
-            RoundedRectangle(cornerRadius: 8).fill(Deck.accent.opacity(0.25)).frame(width: 52, height: 52)
-                .overlay(Image(systemName: "cpu").foregroundStyle(Deck.accent))
-            VStack(alignment: .leading, spacing: 2) {
-                Text(name).font(.body.weight(.semibold))
-                Text(detail).font(.caption).foregroundStyle(Deck.dim)
+    private func badgeText(_ game: LibraryGame) -> String? {
+        if let id = game.steamID {
+            switch steam.downloads[id] {
+            case .queued: return "Waiting"
+            case .active(let p): return p.phase == .downloading ? "\(Int(p.fraction * 100))%" : "Preparing"
+            case .failed: return "Failed"
+            case nil: return GameCatalog.isInstalled(game, steam: steam) ? "Installed" : nil
             }
-            Spacer()
-            Button("Play", action: action)
-                .buttonStyle(DeckButtonStyle())
-                .frame(width: 90)
-                .disabled(engine.busy != nil)
+        }
+        return game.source == .gog ? "GOG" : nil
+    }
+
+    @ViewBuilder private func badge(_ game: LibraryGame) -> some View {
+        if let text = badgeText(game) {
+            Text(text).font(.caption2.weight(.bold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 7).padding(.vertical, 3)
+                .background(text == "Failed" ? Glass.bad : Glass.primary, in: Capsule())
+                .padding(6)
         }
     }
 }

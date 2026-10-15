@@ -1,16 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import SwiftUI
 
+/// The colours of the older views (Steam Cloud, Performance, sign-in, crash reports), mapped onto
+/// the Glass theme (GlassTheme.swift) so they follow the app's light or dark Theme.
 enum Deck {
-    static let bg = Color(red: 0.055, green: 0.078, blue: 0.106)        // #0E141B
-    static let panel = Color(red: 0.090, green: 0.122, blue: 0.161)     // #171F29
-    static let panelHi = Color(red: 0.125, green: 0.165, blue: 0.212)   // #202A36
-    static let accent = Color(red: 0.102, green: 0.624, blue: 1.0)      // #1A9FFF
-    static let good = Color(red: 0.349, green: 0.749, blue: 0.251)      // #59BF40
-    static let warn = Color(red: 0.957, green: 0.671, blue: 0.180)
-    static let bad = Color(red: 0.902, green: 0.298, blue: 0.267)
-    static let text = Color(white: 0.92)
-    static let dim = Color(white: 0.58)
+    static let bg = Glass.base
+    static let panel = Glass.solidPanel
+    static let panelHi = Glass.dynamic(dark: UIColor(white: 1, alpha: 0.12), light: UIColor(white: 0, alpha: 0.07))
+    static let accent = Glass.primary
+    static let good = Glass.good
+    static let warn = Glass.warn
+    static let bad = Glass.bad
+    static let text = Glass.text
+    static let dim = Glass.secondary
 }
 
 struct DeckCard<Content: View>: View {
@@ -30,7 +32,7 @@ struct DeckCard<Content: View>: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Deck.panel, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .glassPanel(cornerRadius: 18)
     }
 }
 
@@ -49,6 +51,7 @@ struct StatusRow: View {
             }
             Spacer(minLength: 0)
         }
+        .accessibilityElement(children: .combine)
     }
 
     private var symbol: String {
@@ -70,17 +73,14 @@ struct StatusRow: View {
     }
 }
 
+/// The older views' buttons, drawn as the Glass primary (blue) or glass capsule buttons.
 struct DeckButtonStyle: ButtonStyle {
     var prominent = true
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.body.weight(.bold))
-            .lineLimit(1).minimumScaleFactor(0.6)
-            .padding(.horizontal, 12).padding(.vertical, 12)
-            .frame(maxWidth: .infinity)
-            .foregroundStyle(prominent ? Color.white : Deck.text)
-            .background(prominent ? Deck.accent : Deck.panelHi, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .opacity(configuration.isPressed ? 0.75 : 1)
-            .scaleEffect(configuration.isPressed ? 0.98 : 1)
+    @ViewBuilder func makeBody(configuration: Configuration) -> some View {
+        if prominent {
+            PrimaryButtonBody(configuration: configuration, fullWidth: true, compact: true)
+        } else {
+            GlassButtonBody(configuration: configuration, fullWidth: true, compact: true)
+        }
     }
 }

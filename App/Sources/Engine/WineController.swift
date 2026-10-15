@@ -104,6 +104,13 @@ final class WineController: ObservableObject, @unchecked Sendable {
 
     /// The program this session started (its controller choice is remembered per program).
     private(set) var sessionProgramID = ""
+    /// The library game this session started ("steam.<App ID>" / "custom.<UUID>"; "" for a test
+    /// program): its controller and touch choices, and its Game settings, are kept under it.
+    private(set) var sessionGameKey = ""
+    /// The next start's game settings (GameSettingsStore.prepareLaunch), used once by run().
+    var pendingOverrides: LaunchOverrides?
+    /// The running (or last) game's settings, nil for a test program.
+    @Published private(set) var sessionOverrides: LaunchOverrides?
 
     /// Modes whose device exists only if the session started with it: the HID gamepads, and
     /// the DirectInput joystick (MADEIRA_DINPUT_PAD, read at session start).
@@ -111,10 +118,14 @@ final class WineController: ObservableObject, @unchecked Sendable {
 
     /// The controller API a program starts with: its own last choice (games differ: a
     /// GameMaker game wants XInput, Steins;Gate DirectInput), else Settings › Controller.
-    static func controllerAPI(for programID: String) -> String {
-        UserDefaults.standard.string(forKey: "controllerAPI.\(programID)")
+    static func controllerAPI(for programID: String, gameKey: String? = nil) -> String {
+        if let gameKey, !gameKey.isEmpty, let own = UserDefaults.standard.string(forKey: "controllerAPI.\(gameKey)") { return own }
+        return UserDefaults.standard.string(forKey: "controllerAPI.\(programID)")
             ?? UserDefaults.standard.string(forKey: "controllerAPI") ?? "xinput"
     }
+
+    /// The running session's controller API as the game menu shows it.
+    var currentControllerAPI: String { Self.controllerAPI(for: sessionProgramID, gameKey: sessionGameKey) }
 
     /// In-game switch (the game menu). Saved as this program's own choice for its next launch
     /// (Settings › Controller stays the default of every other game: Steins;Gate's DirectInput
@@ -122,7 +133,8 @@ final class WineController: ObservableObject, @unchecked Sendable {
     /// not started with. Returns whether it took effect now.
     @discardableResult
     func switchController(to api: String) -> Bool {
-        if sessionProgramID.isEmpty { UserDefaults.standard.set(api, forKey: "controllerAPI") }
+        if !sessionGameKey.isEmpty { UserDefaults.standard.set(api, forKey: "controllerAPI.\(sessionGameKey)") }
+        else if sessionProgramID.isEmpty { UserDefaults.standard.set(api, forKey: "controllerAPI") }
         else { UserDefaults.standard.set(api, forKey: "controllerAPI.\(sessionProgramID)") }
         let needsStart = Self.sessionStartAPIs.contains(api) && api != sessionAPI
         dlog("[xinput] in-game switch to \(api)\(needsStart ? " (applies at next launch)" : "")")
@@ -317,6 +329,8 @@ final class WineController: ObservableObject, @unchecked Sendable {
     func run(_ program: Program, args: String = "") {
         let launch = nextLaunch
         nextLaunch = .program
+        let overrides = pendingOverrides
+        pendingOverrides = nil
         // Per-launch variables (runSteamGame) must not outlive a launch that never boots.
         func refuse(_ why: String) {
             for k in ["MADEIRA_STEAM_APPID", "MADEIRA_STEAM_APPPATH", "MADEIRA_WORKDIR"] { unsetenv(k) }
@@ -334,12 +348,12 @@ final class WineController: ObservableObject, @unchecked Sendable {
         // Madeira's wineserver cannot start twice in one process (init_registry aborts on
         // "\Registry"), so a later game either joins the running session (session reuse,
         // docs/SESSION_REUSE.md) or needs a restart (nextGameRefusal says which, and why).
-        let api = Self.controllerAPI(for: program.id)
+        let api = Self.controllerAPI(for: program.id, gameKey: overrides?.gameKey)
         let noJITSession = program.noJIT && !mid_jit_pool_ready()
         // The x64 CPU (Settings › Windows games: FXR). FXI and FXR both drop the blocks of an
         // earlier game before a later one starts (wine_host.c), so every 64-bit game of a run may
         // use either; but all of them use the first one's (fxrThisRun). 32-bit games never use it (FXI32).
-        let wantFXR = noJITSession && !program.aarch64 && UserDefaults.standard.bool(forKey: "winFXR")
+        let wantFXR = noJITSession && !program.aarch64 && (overrides?.fxr ?? UserDefaults.standard.bool(forKey: "winFXR"))
         let useFXR = noJITSession && !program.aarch64 && (fxrThisRun ?? wantFXR)
         let kind = SessionKind(noJIT: noJITSession, aarch64: program.aarch64, hidPad: Self.hidPad(api), fxr: useFXR)
         if programsThisRun > 0, let why = nextGameRefusal(kind) {
@@ -380,7 +394,8 @@ final class WineController: ObservableObject, @unchecked Sendable {
             dlog("[wine] no-JIT session: DLLs from \(Self.peWineDir)\(program.aarch64 ? " (aarch64: \(Self.peWineA64Dir))" : "")")
             // Settings › Without JIT › game audio off: no audio endpoints, so the game's audio
             // engine (decoding and mixing in the interpreter) does not run.
-            if UserDefaults.standard.bool(forKey: "noJITMuteAudio") {
+            // Game settings › Audio overrides it per game.
+            if !(overrides?.audio ?? !UserDefaults.standard.bool(forKey: "noJITMuteAudio")) {
                 setenv("WINEDLLOVERRIDES", "mmdevapi=d", 1)
                 dlog("[wine] no-JIT session without audio (mmdevapi disabled)")
             } else {
@@ -419,8 +434,20 @@ final class WineController: ObservableObject, @unchecked Sendable {
         // environment before the wineserver starts: the HID device and the
         // DirectInput joystick are created at session start.
         sessionProgramID = program.id
-        let touchProgram = program.id
-        Task { @MainActor in GameInput.shared.load(for: touchProgram) }   // its touch mode: off unless chosen
+        sessionGameKey = overrides?.gameKey ?? ""
+        sessionOverrides = overrides
+        let touchProgram = program.id, touchGame = overrides?.gameKey
+        Task { @MainActor in GameInput.shared.load(for: touchProgram, gameKey: touchGame) }   // its touch mode: off unless chosen
+        // Game settings › Frame rate: DXMT paces a Direct3D 10/11 game's presents to it.
+        if let line = overrides?.dxmtConfig {
+            setenv("DXMT_CONFIG", line, 1)
+            dlog("[game-settings] DXMT_CONFIG=\(line)")
+        } else {
+            unsetenv("DXMT_CONFIG")
+        }
+        // Game settings › Show performance overlay: Metal's HUD on the game's layer.
+        let hud = overrides?.performanceHUD ?? false
+        Task { @MainActor in GameHostView.shared.setPerformanceHUD(hud) }
         unsetenv("MADEIRA_DINPUT_PAD"); unsetenv("MADEIRA_HIDPAD"); unsetenv("MADEIRA_HIDPAD_NAME")
         // DirectInput view of the pad; its trace (Madeira's joystick_ios.c, rate-limited: what the
         // game reads once it has acquired the pad) shows in the log whether it ever does.
@@ -440,7 +467,11 @@ final class WineController: ObservableObject, @unchecked Sendable {
             // The virtual monitor takes the phone's landscape shape, so a game that
             // runs at the desktop resolution fills the screen (win32u reads these
             // once per session; the default 1024x768 is letterboxed).
-            let (w, h) = Self.monitorSize()
+            let (w, h) = Self.monitorSize(height: overrides?.resolution ?? UserDefaults.standard.integer(forKey: "monitorHeight"))
+            if programsThisRun > 0, let first = Self.firstMonitorHeight, h != first {
+                dlog("[display] \(program.title) asks for a \(h)-line monitor; Wine keeps the session's first (\(first) lines) until MYIOSDECK restarts")
+            }
+            if programsThisRun == 0 { Self.firstMonitorHeight = h }
             setenv("MADEIRA_SCREEN_W", String(w), 1)
             setenv("MADEIRA_SCREEN_H", String(h), 1)
             dlog("[display] virtual monitor \(w)x\(h) for \(program.title)")
@@ -466,13 +497,17 @@ final class WineController: ObservableObject, @unchecked Sendable {
         }
     }
 
-    /// 720 lines high, as wide as the screen's landscape aspect (a multiple of 8):
-    /// 1560x720 on an iPhone 15 Pro Max. Light enough for the GPU at 60 fps.
-    static func monitorSize() -> (Int, Int) {
+    /// The first game's monitor height: win32u reads the size once per Wine session.
+    private static var firstMonitorHeight: Int?
+
+    /// `height` lines high (720 by default, light enough for the GPU at 60 fps; Settings ›
+    /// Performance and Game settings › Display change it), as wide as the screen's landscape
+    /// aspect (a multiple of 8): 1560x720 on an iPhone 15 Pro Max.
+    static func monitorSize(height: Int = 720) -> (Int, Int) {
         let b = UIScreen.main.nativeBounds
         let long = max(b.width, b.height), short = min(b.width, b.height)
-        guard short > 0 else { return (1280, 720) }
-        let h = 720
+        let h = LaunchOverrides.validResolution(height)
+        guard short > 0 else { return (h * 16 / 9 / 8 * 8, h) }
         let w = Int((CGFloat(h) * long / short / 8).rounded()) * 8
         return (w, h)
     }

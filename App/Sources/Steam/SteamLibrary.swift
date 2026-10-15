@@ -9,6 +9,8 @@ struct OwnedSteamGame: Codable, Identifiable, Hashable, Sendable {
     var installDir: String
     var buildID: Int
     var libraryCapsule: String?
+    /// The wide hero image (the Glass backdrop); nil in caches from before it was kept.
+    var libraryHero: String?
     var headerImage: String?
     var parentID: Int?
     /// Steam's launch configuration (config.launch); nil in caches from before 4d.
@@ -22,6 +24,7 @@ struct OwnedSteamGame: Codable, Identifiable, Hashable, Sendable {
         installDir = info.installDir
         buildID = Int(info.buildID)
         libraryCapsule = info.libraryCapsule
+        libraryHero = info.libraryHero
         headerImage = info.headerImage
         parentID = info.parentID.map(Int.init)
         launches = info.launches
@@ -179,6 +182,19 @@ final class SteamLibrary: ObservableObject {
         dlog("[steam-depot] queued app=\(appID)")
         pump()
     }
+
+    /// About how much an install downloads and takes on disk, from Steam's product info (the
+    /// game page's Install card), or nil when Steam does not say or cannot be asked.
+    func installSizes(_ appID: Int) async -> (download: UInt64, disk: UInt64)? {
+        guard account != nil, let info = try? await fetcher.fetchInstallInfo(appID: UInt32(appID)) else { return nil }
+        let disk = info.installDepots().reduce(UInt64(0)) { t, d in t &+ (d.publicSizeBytes > 0 ? d.publicSizeBytes : d.maxSize) }
+        let download = info.downloadSize(for: "windows")
+        guard download > 0 || disk > 0 else { return nil }
+        return (download, max(disk, download))
+    }
+
+    /// Signed in to Steam (owned games can be installed).
+    var signedIn: Bool { account != nil }
 
     func cancel(_ appID: Int) {
         queue.removeAll { $0 == appID }

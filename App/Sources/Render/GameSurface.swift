@@ -101,6 +101,13 @@ final class GameHostView: UIView, UIKeyInput {
     }
     private static var clearQueue: MTLCommandQueue?
 
+    /// Metal's performance HUD on the game's layer (Game settings › Show performance overlay):
+    /// frame rate, frame time and GPU time, drawn by Metal itself over the game.
+    func setPerformanceHUD(_ on: Bool) {
+        metalLayer.developerHUDProperties = on ? ["mode": "default", "logging": "default"] : nil
+        dlog("[display] performance overlay \(on ? "on" : "off")")
+    }
+
     /// A line of progress over the game (Madeira Dock while Valve's client signs in and starts
     /// the game, which takes minutes without JIT and shows no window); nil hides it.
     private let statusLabel = UILabel()
@@ -128,6 +135,10 @@ final class GameHostView: UIView, UIKeyInput {
             if isHidden { mid_game_overlay_show(0, nil) }
             else if let w = window { mid_game_overlay_show(1, Unmanaged.passUnretained(w).toOpaque()) }
             placeCursor()
+            // The on-screen controller shows and hides with the game view, above it and above
+            // the launcher windows just raised.
+            let hidden = isHidden
+            MainActor.assumeIsolated { TouchPadOverlay.shared.hostVisibility(hidden: hidden) }
         }
     }
 
@@ -223,6 +234,7 @@ final class GameSurfacePlaceholder: UIView {
         applyLayout()
         // A launcher's or dialog's GDI windows (Winios's overlay) go above the game view.
         mid_game_overlay_show(1, Unmanaged.passUnretained(w).toOpaque())
+        TouchPadOverlay.shared.hostVisibility(hidden: false)   // the on-screen controller above those
         GameInput.shared.surfaceShown()   // trackpad mode: the cursor appears
     }
 

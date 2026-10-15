@@ -12,6 +12,8 @@ final class GameSession: ObservableObject {
     @Published var title = ""
     /// The view is on screen (LibraryView's full-screen cover).
     @Published var shown = false
+    /// The library game it is ("steam.<App ID>" / "custom.<UUID>"; "" for a test program).
+    @Published var gameID = ""
 }
 
 extension WineController {

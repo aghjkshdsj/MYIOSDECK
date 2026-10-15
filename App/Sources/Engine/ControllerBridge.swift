@@ -27,6 +27,24 @@ final class ControllerBridge: @unchecked Sendable {
     private var heldKeys = Set<Int32>()      // keyboard mode: VKs currently down
     private var heldMouse: UInt16 = 0        // keyboard mode: 1 left, 2 right
 
+    /// The on-screen controller (TouchPadOverlay): player 1, with a physical controller in that
+    /// slot too if one is connected (PadState.merged). Connected while it is shown.
+    private var touchConnected = false
+    private var touchState = PadState()
+
+    func setTouchPad(connected: Bool, _ state: PadState) {
+        queue.async { [self] in
+            let changed = connected != touchConnected
+            touchConnected = connected
+            touchState = connected ? state : PadState()
+            if changed {
+                dlog("[xinput] on-screen controller \(connected ? "connected" : "disconnected") as player 1")
+                updateTimer()
+            }
+            sample()
+        }
+    }
+
     /// Called before a Wine session starts; the mode holds for that session.
     func setMode(_ m: Mode) {
         queue.async { [self] in
@@ -141,7 +159,7 @@ final class ControllerBridge: @unchecked Sendable {
     }
 
     private func updateTimer() {
-        let needed = active && pads.contains(where: { $0 != nil })
+        let needed = active && (touchConnected || pads.contains(where: { $0 != nil }))
         if !needed { timer?.cancel(); timer = nil; return }
         guard timer == nil else { return }
         let t = DispatchSource.makeTimerSource(queue: queue)
@@ -180,7 +198,18 @@ final class ControllerBridge: @unchecked Sendable {
                     keyboard(b, lt, rt, lx, ly, rx, ry)
                 }
             }
-            guard let pad = pads[i] else { publish(0, 0, 0, 0, 0, 0, 0, 0); continue }
+            let touch = i == 0 && touchConnected
+            guard let pad = pads[i] else {
+                if touch, active {
+                    let t = touchState
+                    if t.buttons != 0, lastButtons[i] == 0 { mid_wow_trace_calls(3) }
+                    lastButtons[i] = t.buttons
+                    publish(1, t.buttons, t.lt, t.rt, t.lx, t.ly, t.rx, t.ry)
+                } else {
+                    publish(touch ? 1 : 0, 0, 0, 0, 0, 0, 0, 0)
+                }
+                continue
+            }
             guard active else { publish(1, 0, 0, 0, 0, 0, 0, 0); continue }
             let map: [(GCControllerButtonInput?, UInt16)] = [
                 (pad.dpad.up, 0x0001), (pad.dpad.down, 0x0002), (pad.dpad.left, 0x0004), (pad.dpad.right, 0x0008),
@@ -191,6 +220,12 @@ final class ControllerBridge: @unchecked Sendable {
             ]
             var buttons: UInt16 = 0
             for (b, mask) in map where b?.isPressed == true { buttons |= mask }
+            var physical = PadState(buttons: buttons,
+                                    lt: Self.trigger(pad.leftTrigger.value), rt: Self.trigger(pad.rightTrigger.value),
+                                    lx: Self.axis(pad.leftThumbstick.xAxis.value), ly: Self.axis(pad.leftThumbstick.yAxis.value),
+                                    rx: Self.axis(pad.rightThumbstick.xAxis.value), ry: Self.axis(pad.rightThumbstick.yAxis.value))
+            if touch { physical = physical.merged(with: touchState) }
+            buttons = physical.buttons
             // A new press: a 32-bit program's calls for the next 3 s go to the log (GameInput.traceInput),
             // so what its XInput / DirectInput code does with the pad can be read there.
             if buttons != 0, lastButtons[i] == 0 { mid_wow_trace_calls(3) }
@@ -199,10 +234,7 @@ final class ControllerBridge: @unchecked Sendable {
                 firstPress[i] = true
                 dlog("[xinput] slot=\(i) first press buttons=0x\(String(buttons, radix: 16)) published to \(hid ? "HID gamepad" : route == .keyboard ? "keyboard" : "XInput")")
             }
-            publish(1, buttons,
-                    Self.trigger(pad.leftTrigger.value), Self.trigger(pad.rightTrigger.value),
-                    Self.axis(pad.leftThumbstick.xAxis.value), Self.axis(pad.leftThumbstick.yAxis.value),
-                    Self.axis(pad.rightThumbstick.xAxis.value), Self.axis(pad.rightThumbstick.yAxis.value))
+            publish(1, buttons, physical.lt, physical.rt, physical.lx, physical.ly, physical.rx, physical.ry)
         }
     }
 }

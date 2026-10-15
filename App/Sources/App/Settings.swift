@@ -59,12 +59,27 @@ final class Settings: ObservableObject {
     /// DirectInput joystick) or "hid" (player 1 as a HID gamepad). Read at launch.
     @Published var controllerAPI: String { didSet { d.set(controllerAPI, forKey: "controllerAPI") } }
 
-    init() {
+    /// Games: the Metal performance HUD over the game (frame rate, GPU time). Per game in Game settings.
+    @Published var gameHUD: Bool { didSet { d.set(gameHUD, forKey: "gameHUD") } }
+    /// Games: the virtual monitor's height (540, 720, 900, 1080). Read when Wine starts.
+    @Published var monitorHeight: Int { didSet { d.set(monitorHeight, forKey: "monitorHeight") } }
+    /// The on-screen controller: "auto" (while no controller is connected), "always" or "off".
+    @Published var touchPadMode: String { didSet { d.set(touchPadMode, forKey: "touchPadMode") } }
+    /// A light tap felt when an on-screen button is pressed.
+    @Published var touchPadHaptics: Bool { didSet { d.set(touchPadHaptics, forKey: "touchPadHaptics") } }
+
+    /// The defaults of every setting (also read by GameDefaults without a Settings object).
+    static func registerDefaults(_ d: UserDefaults) {
         // Wine copies every loaded DLL's code into the pool: give it room by default.
         d.register(defaults: ["jitPoolMB": mid_wine_linked() ? 1024 : 512, "fexPreset": FEXPreset.fast.rawValue, "multiblock": true,
                               "maxInst": 5000, "showHUD": true, "frameCap": 120, "verboseFEXLog": false,
                               "benchInterpreter": true, "useFXR": false, "noJITMuteAudio": false, "winFXR": true, "sessionReuse": false,
-                              "steamLaunchMode": "ask", "steamCloud": true, "controllerAPI": "xinput"])
+                              "steamLaunchMode": "ask", "steamCloud": true, "controllerAPI": "xinput",
+                              "gameHUD": false, "monitorHeight": 720, "touchPadMode": "auto", "touchPadHaptics": true])
+    }
+
+    init() {
+        Self.registerDefaults(d)
         jitPoolMB = d.integer(forKey: "jitPoolMB")
         fexPreset = FEXPreset(rawValue: d.integer(forKey: "fexPreset")) ?? .fast
         multiblock = d.bool(forKey: "multiblock")
@@ -80,5 +95,9 @@ final class Settings: ObservableObject {
         steamLaunchMode = d.string(forKey: "steamLaunchMode") ?? "ask"
         steamCloud = d.bool(forKey: "steamCloud")
         controllerAPI = d.string(forKey: "controllerAPI") ?? "xinput"
+        gameHUD = d.bool(forKey: "gameHUD")
+        monitorHeight = d.integer(forKey: "monitorHeight")
+        touchPadMode = d.string(forKey: "touchPadMode") ?? "auto"
+        touchPadHaptics = d.bool(forKey: "touchPadHaptics")
     }
 }

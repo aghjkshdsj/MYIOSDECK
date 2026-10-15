@@ -5,7 +5,7 @@ import Foundation
 /// folder under Documents/Games and the program in it that starts the game. Files shows
 /// Documents as On My iPhone › MYIOSDECK, so a folder dropped into its Games folder appears
 /// here without a copy; Wine sees the folder as C:\Games (a link in the prefix's drive_c).
-struct CustomGame: Codable, Identifiable, Equatable {
+struct CustomGame: Codable, Identifiable, Hashable {
     var id = UUID()
     var name: String
     var folder: String       // folder name under Documents/Games
@@ -173,6 +173,25 @@ struct GameProgram: Identifiable, Hashable {
         let base = root.appendingPathComponent(folder, isDirectory: true)
         let names = (try? FileManager.default.contentsOfDirectory(atPath: base.path)) ?? []
         return names.contains { $0.lowercased().hasPrefix("setup_") && $0.lowercased().hasSuffix(".exe") }
+    }
+
+
+    /// A GOG game (its folder holds GOG's goggame-<id>.info), for its badge.
+    nonisolated static func isGOG(_ folder: String) -> Bool {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent(folder).path)) ?? []
+        return names.contains { $0.lowercased().hasPrefix("goggame-") && $0.lowercased().hasSuffix(".info") }
+    }
+
+    /// Bytes the folder takes on disk (Storage).
+    nonisolated static func sizeOnDisk(_ folder: String) -> Int64 {
+        let base = root.appendingPathComponent(folder, isDirectory: true)
+        guard let walker = FileManager.default.enumerator(at: base, includingPropertiesForKeys: [.totalFileAllocatedSizeKey, .isRegularFileKey]) else { return 0 }
+        var total: Int64 = 0
+        for case let url as URL in walker {
+            let v = try? url.resourceValues(forKeys: [.totalFileAllocatedSizeKey, .isRegularFileKey])
+            if v?.isRegularFile == true { total += Int64(v?.totalFileAllocatedSize ?? 0) }
+        }
+        return total
     }
 
     /// IMAGE_FILE_HEADER.Machine (0 when not a PE file).

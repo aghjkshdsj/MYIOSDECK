@@ -28,7 +28,6 @@ struct MYIOSDECKApp: App {
                 .environmentObject(device)
                 .environmentObject(wine)
                 .environmentObject(logs)
-                .preferredColorScheme(.dark)
                 .onOpenURL { url in dlog("[app] opened by \(url.absoluteString)") }
                 .sheet(item: $crashes.report) { CrashReportSheet(report: $0) }
                 .onChange(of: phase) { _, newPhase in

@@ -139,10 +139,19 @@ final class GameInput {
     private var programID = ""
     private var cursorPlaced = false
 
-    /// A session starts (WineController): its program's own touch mode, off unless chosen.
-    func load(for programID: String) {
-        self.programID = programID
-        apply(TouchMode(rawValue: UserDefaults.standard.string(forKey: "touchMode.\(programID)") ?? "") ?? .off)
+    /// A session starts (WineController): its game's own touch mode (kept under the library game,
+    /// or under the program for test programs and choices made before games had keys), off unless chosen.
+    func load(for programID: String, gameKey: String? = nil) {
+        let key = (gameKey?.isEmpty == false) ? gameKey! : programID
+        self.programID = key
+        apply(Self.touchMode(gameKey: key, programID: programID))
+    }
+
+    /// A game's touch mode as stored (Game settings shows and changes it).
+    static func touchMode(gameKey: String, programID: String? = nil) -> TouchMode {
+        let d = UserDefaults.standard
+        let raw = d.string(forKey: "touchMode.\(gameKey)") ?? programID.flatMap { d.string(forKey: "touchMode.\($0)") } ?? ""
+        return TouchMode(rawValue: raw) ?? .off
     }
 
     /// The game menu's choice, remembered for this game.
