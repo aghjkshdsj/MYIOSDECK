@@ -21,6 +21,7 @@ struct SettingsView: View {
                     .scrollIndicators(.hidden)
                 }
                 .frame(width: 240)
+                .padSection("sidebar")
                 VStack(alignment: .leading, spacing: 12) {
                     Text(section.rawValue).font(.title.weight(.bold))
                     if section.scrolls {
@@ -35,6 +36,7 @@ struct SettingsView: View {
                     }
                 }
                 .id(section)
+                .padSection("panel")
             }
             .padding(.horizontal, 10)
             .padding(.top, 6)

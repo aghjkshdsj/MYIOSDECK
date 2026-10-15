@@ -26,11 +26,27 @@ enum PadKey: Hashable, CaseIterable {
     }
 }
 
+/// An item focus can move to: its frame, the section it belongs to (a sidebar, a panel, the top
+/// bar: "" for the page itself) and whether it is its section's current item (a sidebar's selected
+/// section, the screen's main button).
+struct FocusCandidate {
+    var id: String
+    var frame: CGRect
+    var section = ""
+    var preferred = false
+}
+
 enum FocusMath {
-    /// The item a direction moves to from `from`: the nearest one lying that way, preferring the
-    /// ones in line with it (overlapping across the direction), nil when there is none.
-    static func next(from: CGRect, direction: PadDirection, candidates: [(id: String, frame: CGRect)]) -> String? {
-        var best: (id: String, score: Double)?
+    /// The item a direction moves to from `from` (in `section`), nil when there is none:
+    /// 1. items in line with it (overlapping across the direction), the nearest;
+    /// 2. else items of its own section that way (a grid's shorter last row);
+    /// 3. else, going up or down, the top bar from the page or the page from the top bar; going left
+    ///    or right, another section's current item (from a settings panel to the sidebar's selected section).
+    /// Entering another section lands on that section's current item when it lies that way.
+    /// Never a jump to another section's item out of line (the end of a panel stays put).
+    static func next(from: CGRect, section: String = "", direction: PadDirection, candidates: [FocusCandidate]) -> String? {
+        struct Scored { let c: FocusCandidate; let score: Double; let inline: Bool }
+        var all: [Scored] = []
         for c in candidates {
             let f = c.frame
             guard f != from else { continue }
@@ -57,13 +73,29 @@ enum FocusMath {
             let gap = max(0, max(along.0, along.2) - min(along.1, along.3))
             // Centre offset across the direction breaks ties between overlapping items.
             let centre = abs((along.0 + along.1) / 2 - (along.2 + along.3) / 2)
-            let score = primary + gap * 4 + (gap == 0 ? centre * 0.05 : centre * 0.5)
-            if best == nil || score < best!.score { best = (c.id, score) }
+            all.append(Scored(c: c, score: primary + gap * 4 + (gap == 0 ? centre * 0.05 : centre * 0.5), inline: gap == 0))
         }
-        return best?.id
+        func best(_ list: [Scored]) -> FocusCandidate? { list.min { $0.score < $1.score }?.c }
+        let horizontal = direction == .left || direction == .right
+        var pick = best(all.filter { $0.inline })
+            ?? best(all.filter { $0.c.section == section })
+            ?? (horizontal ? nil : best(all.filter { $0.c.section == "header" || section == "header" }))
+        if let p = pick, p.section != section,
+           let current = best(all.filter { $0.c.section == p.section && $0.c.preferred }) {
+            pick = current
+        }
+        if pick == nil, horizontal {
+            pick = best(all.filter { $0.c.section != section && $0.c.preferred })
+        }
+        return pick?.id
     }
 
-    /// Where focus starts in a scope: the preferred item, else the top-most (then left-most).
+    /// The same without sections (every item in one).
+    static func next(from: CGRect, direction: PadDirection, candidates: [(id: String, frame: CGRect)]) -> String? {
+        next(from: from, direction: direction, candidates: candidates.map { FocusCandidate(id: $0.id, frame: $0.frame) })
+    }
+
+    /// Where focus starts in a scope: the top-most preferred item, else the top-most (then left-most).
     static func first(_ candidates: [(id: String, frame: CGRect, preferred: Bool)]) -> String? {
         let preferred = candidates.filter { $0.preferred }
         return (preferred.isEmpty ? candidates : preferred).min { a, b in
@@ -72,36 +104,37 @@ enum FocusMath {
     }
 }
 
-/// The stick as directions, with hysteresis so a stick resting near the threshold does not flicker.
+/// The stick as directions: the dominant axis only when it clearly dominates (a push between the
+/// two, around 40° to 50°, is no direction), the held axis kept until the other one clearly takes
+/// over, and hysteresis so a stick resting near the threshold does not flicker.
 struct StickDirections {
     private(set) var held: PadDirection?
     static let on = 0.55, off = 0.35
+    /// The dominant axis must be this many times the other to count (about 39° from the axis).
+    static let dominance = 1.25
+    /// A held direction gives way to the other axis only past this ratio.
+    static let switchRatio = 1.6
 
     /// x right, y up, -1...1.
     mutating func update(x: Double, y: Double) -> PadDirection? {
         let ax = abs(x), ay = abs(y)
+        func dir(horizontal: Bool) -> PadDirection { horizontal ? (x > 0 ? .right : .left) : (y > 0 ? .up : .down) }
         if let h = held {
-            let still: Bool
-            switch h {
-            case .left: still = x < -Self.off
-            case .right: still = x > Self.off
-            case .up: still = y > Self.off
-            case .down: still = y < -Self.off
-            }
-            if still && max(ax, ay) < Self.on { return h }   // held, nothing stronger elsewhere
-        }
-        if max(ax, ay) < Self.on {
-            held = held.flatMap { h in
-                switch h {
-                case .left: return x < -Self.off ? h : nil
-                case .right: return x > Self.off ? h : nil
-                case .up: return y > Self.off ? h : nil
-                case .down: return y < -Self.off ? h : nil
+            let horizontal = h == .left || h == .right
+            let along = horizontal ? x : y, across = horizontal ? ay : ax
+            let sameSide = (h == .right || h == .up) ? along > Self.off : along < -Self.off
+            if sameSide {
+                // Still pushed that way: keep it unless the other axis clearly takes over.
+                if across >= Self.on, across > abs(along) * Self.switchRatio {
+                    held = dir(horizontal: !horizontal)
                 }
+                return held
             }
-            return held
+            held = nil
         }
-        held = ax >= ay ? (x > 0 ? .right : .left) : (y > 0 ? .up : .down)
+        guard max(ax, ay) >= Self.on else { return nil }
+        if ax >= ay * Self.dominance { held = dir(horizontal: true) }
+        else if ay >= ax * Self.dominance { held = dir(horizontal: false) }
         return held
     }
 }
@@ -151,5 +184,18 @@ struct MenuChord {
         guard !fired, now - since! >= hold else { return false }
         fired = true
         return true
+    }
+}
+
+/// LB / RB: the top bar's destinations in their order on screen (the three tabs, then Search,
+/// Settings and the Controllers panel); LB goes the exact reverse way.
+enum TopDestination: CaseIterable {
+    case home, library, downloads, search, settings, controllers
+
+    func next(_ step: Int) -> TopDestination {
+        let all = Self.allCases
+        let i = all.firstIndex(of: self) ?? 0
+        let n = all.count
+        return all[((i + step) % n + n) % n]
     }
 }

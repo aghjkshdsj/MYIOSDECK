@@ -29,27 +29,23 @@ final class PadFocus: ObservableObject {
 
     private struct Item {
         var scope: String
+        var section: String
         var frame: CGRect
         let actions: Actions
-        var seq: Int
     }
     private var items: [String: Item] = [:]
-    private var seq = 0
 
     /// Open scopes, the last on top, each with what B does there.
     private var scopes: [(name: String, token: UUID, back: (() -> Void)?)] = []
     var topScope: String { scopes.last?.name ?? "root" }
 
-    /// Scroll views that can bring an item into view (ScrollViewReader proxies).
-    private var scrollers: [UUID: (String) -> Void] = [:]
     /// The Menu button's action on the current screen (Home: the game's "…"), the last set wins.
     private var menuHandlers: [(token: UUID, run: () -> Void)] = []
 
     // MARK: registration (PadFocusModifier)
 
-    func register(_ id: String, scope: String, frame: CGRect, actions: Actions) {
-        if items[id] == nil { seq += 1 }
-        items[id] = Item(scope: scope, frame: frame, actions: actions, seq: items[id]?.seq ?? seq)
+    func register(_ id: String, scope: String, section: String, frame: CGRect, actions: Actions) {
+        items[id] = Item(scope: scope, section: section, frame: frame, actions: actions)
     }
 
     func unregister(_ id: String, actions: Actions) {
@@ -78,9 +74,6 @@ final class PadFocus: ObservableObject {
         }
     }
 
-    func addScroller(_ token: UUID, _ scroll: @escaping (String) -> Void) { scrollers[token] = scroll }
-    func removeScroller(_ token: UUID) { scrollers[token] = nil }
-
     func setMenuHandler(_ token: UUID, _ run: @escaping () -> Void) {
         menuHandlers.removeAll { $0.token == token }
         menuHandlers.append((token, run))
@@ -89,12 +82,12 @@ final class PadFocus: ObservableObject {
 
     // MARK: focus
 
-    /// The items that can take focus: the top scope's, on screen across, and within a screen
-    /// height of it up and down (lists scroll to them). Items of pages pushed under the current one
-    /// are off to the side, so they are left out.
+    /// The items that can take focus: the top scope's, on screen across, and within two screen
+    /// heights up and down (lists scroll to them). Items of pages pushed under the current one are
+    /// off to the side, so they are left out.
     private var candidates: [(id: String, item: Item)] {
         let screen = UIScreen.main.bounds
-        let reach = screen.insetBy(dx: 0, dy: -screen.height)
+        let reach = screen.insetBy(dx: 0, dy: -2 * screen.height)
         return items.filter { $0.value.scope == topScope && $0.value.frame.width > 0 && reach.intersects($0.value.frame)
                 && $0.value.frame.maxX > screen.minX + 2 && $0.value.frame.minX < screen.maxX - 2 }
             .map { (id: $0.key, item: $0.value) }
@@ -111,7 +104,7 @@ final class PadFocus: ObservableObject {
     func focus(_ id: String) {
         guard focusedID != id else { return }
         focusedID = id
-        for s in scrollers.values { s(id) }
+        if let f = items[id]?.frame { ScrollIntoView.reveal(f) }
         items[id]?.actions.onFocus?()
     }
 
@@ -122,10 +115,14 @@ final class PadFocus: ObservableObject {
             UISelectionFeedbackGenerator().selectionChanged()
             return
         }
-        let list = candidates.filter { $0.id != id }
-        if let next = FocusMath.next(from: current.frame, direction: d, candidates: list.map { (id: $0.id, frame: $0.item.frame) }) {
+        let list = candidates.filter { $0.id != id }.map {
+            FocusCandidate(id: $0.id, frame: $0.item.frame, section: $0.item.section, preferred: $0.item.actions.preferred)
+        }
+        if let next = FocusMath.next(from: current.frame, section: current.section, direction: d, candidates: list) {
             focus(next)
             UISelectionFeedbackGenerator().selectionChanged()
+        } else {
+            ScrollIntoView.reveal(current.frame)   // at an edge: at least show all of the focused item
         }
     }
 
@@ -140,7 +137,10 @@ final class PadFocus: ObservableObject {
         let wasVisible = ringVisible
         if !ringVisible { withGlassAnimation { ringVisible = true } }
         if let d = key.direction {
-            if !wasVisible, focusedID != nil, items[focusedID!]?.scope == topScope { return }   // first press shows where focus is
+            if !wasVisible, let id = focusedID, items[id]?.scope == topScope {   // first press shows where focus is
+                if let f = items[id]?.frame { ScrollIntoView.reveal(f) }
+                return
+            }
             move(d)
             return
         }
@@ -155,7 +155,7 @@ final class PadFocus: ObservableObject {
         case .y:
             if topScope == "root" { UIState.shared.showSearch = true }
         case .lb, .rb:
-            if topScope == "root", UIState.shared.path.isEmpty { cycleTab(key == .rb ? 1 : -1) }
+            cycle(key == .rb ? 1 : -1)
         case .menu:
             if topScope == "root" {
                 if let h = menuHandlers.last { h.run() } else { UIState.shared.show(.settings) }
@@ -174,25 +174,92 @@ final class PadFocus: ObservableObject {
         else if ui.tab != .home { ui.show(.home) }
     }
 
-    private func cycleTab(_ step: Int) {
-        let order: [UIState.Tab] = [.home, .library, .downloads, .settings]
+    /// LB / RB: the top bar's destinations in their order on screen (TopDestination), from the app
+    /// itself or from the Search and Controllers panels; LB is the exact reverse of RB.
+    private func cycle(_ step: Int) {
         let ui = UIState.shared
-        let i = order.firstIndex(of: ui.tab) ?? 0
-        ui.show(order[(i + step + order.count) % order.count])
+        let current: TopDestination
+        switch topScope {
+        case "search": current = .search
+        case "controllers": current = .controllers
+        case "root":
+            switch ui.tab {
+            case .home: current = .home
+            case .library: current = .library
+            case .downloads: current = .downloads
+            case .settings: current = .settings
+            }
+        default: return   // a dialog, the editor, a game's sheet: LB/RB do nothing there
+        }
+        let next = current.next(step)
+        let sheetUp = ui.showSearch || ui.showControllers
+        ui.showSearch = false
+        ui.showControllers = false
         focusedID = nil
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.ensureFocus() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + (sheetUp ? 0.45 : 0)) { [weak self] in
+            switch next {
+            case .home: ui.show(.home)
+            case .library: ui.show(.library)
+            case .downloads: ui.show(.downloads)
+            case .settings: ui.show(.settings)
+            case .search: ui.showSearch = true
+            case .controllers: ui.showControllers = true
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { self?.ensureFocus() }
+        }
     }
 
     func isFocused(_ id: String) -> Bool { ringVisible && focusedID == id }
 }
 
+/// Brings an item into view by scrolling the UIKit scroll views that hold it (a page, a sidebar, a
+/// row of cards), innermost first. Works from its frame alone, so it needs nothing from SwiftUI's
+/// scroll views (ScrollViewReader did not scroll them reliably, build 193).
+@MainActor
+enum ScrollIntoView {
+    static func reveal(_ frame: CGRect) {
+        guard frame.width > 0, frame.height > 0 else { return }
+        // A dialog's own window while one shows, else the app's.
+        let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
+        guard let window = (Dialogs.shared.showing ? Dialogs.shared.overlayWindow : nil)
+                ?? windows.first(where: { $0.isKeyWindow }) ?? windows.first else { return }
+        let centre = CGPoint(x: frame.midX, y: frame.midY)
+        var chain: [UIScrollView] = []
+        func visit(_ v: UIView) {
+            if v.isHidden || v.alpha < 0.01 { return }
+            if let s = v as? UIScrollView, s.isScrollEnabled {
+                let onScreen = s.convert(s.bounds, to: nil)
+                let vertical = s.contentSize.height > s.bounds.height + 1
+                let horizontal = s.contentSize.width > s.bounds.width + 1
+                let inContent = CGRect(origin: .zero, size: s.contentSize).insetBy(dx: -1, dy: -1).contains(s.convert(centre, from: nil))
+                // It scrolls the way the item is out of view, and the item lies across it.
+                let across = (vertical && centre.x >= onScreen.minX && centre.x <= onScreen.maxX)
+                    || (horizontal && centre.y >= onScreen.minY && centre.y <= onScreen.maxY)
+                if (vertical || horizontal), inContent, across { chain.append(s) }
+            }
+            for sub in v.subviews { visit(sub) }
+        }
+        visit(window)
+        for s in chain.reversed() {
+            let r = s.convert(frame, from: nil).insetBy(dx: -14, dy: -18)
+            s.scrollRectToVisible(r, animated: Appearance.shared.animations)
+        }
+    }
+}
+
 // MARK: - scope and item modifiers
 
 struct PadScopeKey: EnvironmentKey { static let defaultValue = "root" }
+struct PadSectionKey: EnvironmentKey { static let defaultValue = "" }
 extension EnvironmentValues {
     var padScope: String {
         get { self[PadScopeKey.self] }
         set { self[PadScopeKey.self] = newValue }
+    }
+    /// The part of the screen an item belongs to (FocusMath: a sidebar, a panel, the top bar).
+    var padSection: String {
+        get { self[PadSectionKey.self] }
+        set { self[PadSectionKey.self] = newValue }
     }
 }
 
@@ -220,6 +287,7 @@ private struct PadFocusModifier: ViewModifier {
     let secondary: (() -> Void)?
     let onFocus: (() -> Void)?
     @Environment(\.padScope) private var scope
+    @Environment(\.padSection) private var section
     @ObservedObject private var focus = PadFocus.shared
     @State private var actions = PadFocus.Actions()
     @State private var frame = CGRect.zero
@@ -251,7 +319,7 @@ private struct PadFocusModifier: ViewModifier {
             .zIndex(on ? 1 : 0)
             .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { f in
                 frame = f
-                PadFocus.shared.register(id, scope: scope, frame: f, actions: actions)
+                PadFocus.shared.register(id, scope: scope, section: section, frame: f, actions: actions)
             }
             .background {
                 // The first frame, in case the geometry callback only reports changes.
@@ -260,12 +328,12 @@ private struct PadFocusModifier: ViewModifier {
                         let f = g.frame(in: .global)
                         if frame == .zero, f.width > 0 {
                             frame = f
-                            PadFocus.shared.register(id, scope: scope, frame: f, actions: actions)
+                            PadFocus.shared.register(id, scope: scope, section: section, frame: f, actions: actions)
                         }
                     }
                 }
             }
-            .onAppear { if frame != .zero { PadFocus.shared.register(id, scope: scope, frame: frame, actions: actions) } }
+            .onAppear { if frame != .zero { PadFocus.shared.register(id, scope: scope, section: section, frame: frame, actions: actions) } }
             .onDisappear { PadFocus.shared.unregister(id, actions: actions) }
             .id(id)
     }
@@ -323,26 +391,21 @@ extension View {
         modifier(PadScopeModifier(name: name, back: back))
     }
 
+    /// The part of the screen its items belong to (a sidebar, a panel, the top bar).
+    func padSection(_ name: String) -> some View { environment(\.padSection, name) }
+
     /// What the Menu button does while this view shows.
     func padMenu(_ run: @escaping () -> Void) -> some View { modifier(PadMenuModifier(run: run)) }
 }
 
-/// A ScrollView that scrolls the focused item into view.
+/// A ScrollView for focusable content (PadFocus scrolls the focused item into view with UIKit:
+/// ScrollIntoView).
 struct PadScrollView<Content: View>: View {
     var axes: Axis.Set = .vertical
     @ViewBuilder var content: Content
-    @State private var token = UUID()
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView(axes) { content }
-                .onAppear {
-                    PadFocus.shared.addScroller(token) { id in
-                        withAnimation(Appearance.shared.animation(.easeOut(duration: 0.2))) { proxy.scrollTo(id) }
-                    }
-                }
-                .onDisappear { PadFocus.shared.removeScroller(token) }
-        }
+        ScrollView(axes) { content }
     }
 }
 

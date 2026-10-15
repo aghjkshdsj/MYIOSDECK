@@ -126,5 +126,86 @@ check(!chord.step(view: false, menu: true, now: 1.6), "released")
 check(!chord.step(view: true, menu: true, now: 1.7), "a new hold starts over")
 check(chord.step(view: true, menu: true, now: 2.4), "and fires again")
 
+// MARK: - Build 193 reports (Backbone Pro, landscape 932 x 430)
+
+// 1. Home: the last recent card partly off the right edge; Left goes to the card before it.
+let home: [FocusCandidate] = [
+    FocusCandidate(id: "pill", frame: r(300, 10, 400, 44), section: "header"),
+    FocusCandidate(id: "search", frame: r(770, 10, 44, 44), section: "header"),
+    FocusCandidate(id: "play", frame: r(75, 186, 155, 56), preferred: true),
+    FocusCandidate(id: "more", frame: r(245, 188, 52, 52)),
+    FocusCandidate(id: "viewLibrary", frame: r(820, 262, 105, 24)),
+    FocusCandidate(id: "dokimon", frame: r(76, 317, 214, 96)),
+    FocusCandidate(id: "second", frame: r(306, 317, 214, 96)),
+    FocusCandidate(id: "operator", frame: r(536, 317, 214, 96)),
+    FocusCandidate(id: "deponia", frame: r(766, 317, 214, 96)),
+]
+func hm(_ from: String, _ d: PadDirection) -> String? {
+    let c = home.first { $0.id == from }!
+    return FocusMath.next(from: c.frame, section: c.section, direction: d, candidates: home)
+}
+check(hm("deponia", .left) == "operator", "Left from the card at the right edge: \(hm("deponia", .left) ?? "nil")")
+check(hm("operator", .right) == "deponia", "Right to the card at the right edge")
+check(hm("deponia", .up) == "viewLibrary", "Up from the last card to View library")
+check(hm("pill", .down) == "play", "from the top bar down: the screen's main button: \(hm("pill", .down) ?? "nil")")
+check(hm("play", .up) == "pill", "Play up to the top bar")
+
+// 2. LB / RB: the top bar's destinations in order, LB the exact reverse.
+check(TopDestination.home.next(1) == .library && TopDestination.library.next(1) == .downloads, "RB through the tabs")
+check(TopDestination.downloads.next(1) == .search, "RB from Downloads: Search")
+check(TopDestination.search.next(1) == .settings && TopDestination.settings.next(1) == .controllers, "then Settings, then Controllers")
+check(TopDestination.controllers.next(1) == .home, "and round to Home")
+for d in TopDestination.allCases { check(d.next(1).next(-1) == d && d.next(-1).next(1) == d, "LB undoes RB at \(d)") }
+check(TopDestination.home.next(-1) == .controllers, "LB from Home: Controllers")
+
+// 3/4/5. Settings in landscape: a sidebar and a panel. The panel goes on below the screen (Storage).
+let sidebarNames = ["appearance", "performance", "controls", "steam", "storage", "logs", "about"]
+var settingsUI: [FocusCandidate] = [FocusCandidate(id: "pill", frame: r(300, 10, 400, 44), section: "header"),
+                                    FocusCandidate(id: "gear", frame: r(828, 10, 44, 44), section: "header")]
+for (i, n) in sidebarNames.enumerated() {
+    settingsUI.append(FocusCandidate(id: "side.\(n)", frame: r(75, Double(118 + i * 60), 255, 52), section: "sidebar",
+                                     preferred: n == "storage"))
+}
+settingsUI.append(FocusCandidate(id: "sort", frame: r(778, 247, 147, 42), section: "panel"))
+for i in 0..<5 { settingsUI.append(FocusCandidate(id: "game\(i)", frame: r(358, Double(310 + i * 90), 567, 80), section: "panel")) }
+settingsUI.append(FocusCandidate(id: "clear", frame: r(838, 790, 90, 40), section: "panel"))
+func st(_ from: String, _ d: PadDirection, _ list: [FocusCandidate] = settingsUI) -> String? {
+    let c = list.first { $0.id == from }!
+    return FocusMath.next(from: c.frame, section: c.section, direction: d, candidates: list)
+}
+check(st("sort", .down) == "game0", "Storage: the sort menu down to the first game")
+var at = "game0", seen = ["game0"]
+while let n = st(at, .down) { seen.append(n); at = n; if seen.count > 20 { break } }
+check(seen == ["game0", "game1", "game2", "game3", "game4", "clear"], "Down goes through every game to Clear, below the fold too: \(seen)")
+check(st("clear", .down) == nil, "the end of the panel stays put (no jump to the sidebar)")
+check(st("game1", .left) == "side.storage", "Left from the panel: the sidebar's current section, not the item in line: \(st("game1", .left) ?? "nil")")
+check(st("game4", .left) == "side.storage", "Left from far below the sidebar: still its current section")
+check(st("side.storage", .right) == "game0" || st("side.storage", .right) == "game1", "Right from the sidebar into the panel, in line: \(st("side.storage", .right) ?? "nil")")
+check(st("game0", .up) == "sort", "Up the panel to the sort menu")
+check(st("side.about", .down) == nil, "the end of the sidebar stays put")
+// Appearance: a short panel; Down from its last row must not reach Logs below-left.
+let appearance: [FocusCandidate] = [
+    FocusCandidate(id: "side.appearance", frame: r(75, 118, 255, 52), section: "sidebar", preferred: true),
+    FocusCandidate(id: "side.logs", frame: r(75, 418, 255, 52), section: "sidebar"),
+    FocusCandidate(id: "theme", frame: r(560, 150, 330, 42), section: "panel"),
+    FocusCandidate(id: "glass", frame: r(560, 205, 330, 30), section: "panel"),
+    FocusCandidate(id: "artwork", frame: r(358, 260, 567, 52), section: "panel"),
+    FocusCandidate(id: "reduce", frame: r(358, 360, 567, 52), section: "panel"),
+]
+check(st("reduce", .down, appearance) == nil, "Appearance: Down from the last row stays in the panel: \(st("reduce", .down, appearance) ?? "nil")")
+check(st("artwork", .left, appearance) == "side.appearance", "Left from a panel row: the current section")
+check(st("theme", .up, settingsUI + appearance.filter { $0.section == "panel" }) == "pill" || st("theme", .up, settingsUI + appearance.filter { $0.section == "panel" }) == "gear",
+      "Up from the panel's top row to the top bar")
+
+// 5. The stick: a push mostly left with some up is Left, never Up; a 45° push is nothing.
+var s5 = StickDirections()
+check(s5.update(x: -0.8, y: 0.5) == .left, "mostly left with some up: Left")
+check(s5.update(x: -0.7, y: 0.6) == .left, "held left while the push drifts up: still Left")
+check(s5.update(x: -0.5, y: 0.75) == .left, "drifting further up without clearly taking over: still Left")
+check(s5.update(x: -0.2, y: 0.9) == .up, "clearly up now: Up")
+var s6 = StickDirections()
+check(s6.update(x: -0.65, y: 0.6) == nil, "a 45-degree push from rest: no direction")
+check(s6.update(x: -0.9, y: 0.4) == .left, "then mostly left: Left")
+
 print("pad-nav tests: \(checks - failures)/\(checks) passed")
 exit(failures == 0 ? 0 : 1)

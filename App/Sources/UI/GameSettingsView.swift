@@ -45,11 +45,13 @@ struct GameSettingsView: View {
                         Text("Changes apply next time you play.").font(.footnote).foregroundStyle(Glass.secondary)
                     }
                     .frame(width: 230)
+                    .padSection("sidebar")
                     Rectangle().fill(Glass.separator).frame(width: 1)
                     VStack(alignment: .leading, spacing: 10) {
                         PadScrollView { panel.padding(.bottom, 8) }.scrollIndicators(.hidden)
                         HStack { Spacer(); saveButton }
                     }
+                    .padSection("panel")
                 }
                 .padding(.bottom, 8)
             } else {

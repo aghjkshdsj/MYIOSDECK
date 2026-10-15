@@ -13,10 +13,6 @@ struct MYIOSDECKApp: App {
     @Environment(\.scenePhase) private var phase
 
     init() {
-        // Game settings › Show performance overlay: Metal's HUD at the bottom centre, where the
-        // on-screen controller's default layout has nothing (top right it covered RT and R). Read
-        // by Metal when the HUD starts, so it is set before any Metal work.
-        setenv("MTL_HUD_ALIGNMENT", "bottomcenter", 0)
         let info = Bundle.main.infoDictionary
         dlog("MYIOSDECK \(info?["CFBundleShortVersionString"] ?? "?") (\(info?["CFBundleVersion"] ?? "?")) " +
              "fex=\(String(cString: mid_engine_version())) pid=\(getpid()) " +

@@ -70,9 +70,14 @@ iOS gives SwiftUI no controller-driven focus on iPhone, so the app has its own
   report their frames; the D-pad or left stick moves a white ring with a blue glow to the nearest item
   that way (`FocusMath.next`), repeating while held (0.38 s, then every 85 ms).
 - A activates, B goes back (closes a sheet or dialog, pops a page, else returns to Home), LB / RB
-  switch tabs (Home, Library, Downloads, Settings), Y opens Search, X is the focused game's Game
+  go through the top bar in its order: Home, Library, Downloads, Search, Settings, Controllers (LB the
+  reverse), Y opens Search, X is the focused game's Game
   settings, Menu opens the game's "…" on Home, its Game settings on a game page, else Settings.
   Left / right change segmented choices, sliders and pickers instead of moving.
+- Sections (`.padSection`: the top bar, a settings sidebar and its panel): a move takes the item in
+  line first, then one of its own section; Left from a panel lands on the sidebar's current section;
+  the end of a panel stays put. The stick counts only when one axis clearly dominates (no diagonal
+  becomes Up by accident). Focus scrolls the real UIKit scroll views (`ScrollIntoView`).
 - Sheets, dialogs, the editor and the game view are scopes (`.padScope`): only the top one's items
   take focus. `PadScrollView` scrolls the focused item into view.
 - iOS alerts and confirmation dialogs cannot be driven by a controller, so every question is a glass

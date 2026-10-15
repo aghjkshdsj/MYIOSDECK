@@ -72,7 +72,7 @@ struct TabShell: View {
         ZStack {
             ArtworkBackdrop(source: focused, blurred: !(ui.tab == .home && landscape))
             VStack(spacing: landscape ? 6 : 12) {
-                ShellHeader()
+                ShellHeader().padSection("header")
                 ReturnToGameBar().padding(.horizontal, landscape ? 0 : 20)
                 Group {
                     switch ui.tab {
@@ -196,6 +196,7 @@ struct GlassPage<Content: View>: View {
                     Spacer()
                     if let trailing { trailing }
                 }
+                .padSection("header")
                 ReturnToGameBar()
                 if scrolls {
                     PadScrollView {

@@ -32,9 +32,16 @@ final class Dialogs: ObservableObject {
     @Published private(set) var stack: [GlassDialogModel] = []
     var showing: Bool { !stack.isEmpty }
     private var window: UIWindow?
+    /// The dialogs' window (ScrollIntoView scrolls in it while one shows).
+    var overlayWindow: UIWindow? { window }
 
     func show(_ d: GlassDialogModel) {
         stack.append(d)
+        // Its focus scope is kept here, not by the panel's appear / disappear: the window is hidden
+        // as the last dialog closes, and a hidden window's views may never report that they went
+        // (a stale scope then took every move, build 193).
+        let id = d.id
+        PadFocus.shared.pushScope("dialog.\(id)", token: id) { [weak self] in self?.close(id, button: nil) }
         updateWindow()
     }
 
@@ -42,6 +49,7 @@ final class Dialogs: ObservableObject {
     func close(_ id: UUID, button: DialogButton?) {
         guard let d = stack.first(where: { $0.id == id }) else { return }
         stack.removeAll { $0.id == id }
+        PadFocus.shared.popScope(token: id)
         updateWindow()
         if let button {
             button.action()
@@ -54,6 +62,7 @@ final class Dialogs: ObservableObject {
     /// The dialog with this id closes without running anything (its presenter stopped asking).
     func withdraw(_ id: UUID) {
         stack.removeAll { $0.id == id }
+        PadFocus.shared.popScope(token: id)
         updateWindow()
     }
 
@@ -150,7 +159,7 @@ private struct DialogPanel: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .foregroundStyle(Glass.text)
-        .padScope("dialog.\(dialog.id)") { dialogs.close(dialog.id, button: nil) }
+        .environment(\.padScope, "dialog.\(dialog.id)")
         .accessibilityAddTraits(.isModal)
     }
 }
