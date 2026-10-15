@@ -64,7 +64,7 @@ struct SearchView: View {
         }
         .padding(16)
         .foregroundStyle(Glass.text)
-        .background { ArtworkBackdrop(source: .none) }
+        .background { ArtworkBackdrop(source: .blank) }
         .onAppear { focused = true }
         .presentationBackground(.clear)
     }
@@ -120,7 +120,7 @@ struct ControllersSheet: View {
             .padding(20)
         }
         .foregroundStyle(Glass.text)
-        .background { ArtworkBackdrop(source: .none) }
+        .background { ArtworkBackdrop(source: .blank) }
         .presentationDetents([.medium, .large])
         .presentationBackground(.clear)
         .fullScreenCover(isPresented: $editing) { TouchLayoutEditor(gameKey: nil, title: "Default layout") }

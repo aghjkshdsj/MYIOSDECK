@@ -21,7 +21,7 @@ struct TouchLayoutEditor: View {
 
     private var artwork: ArtworkSource {
         guard let key = gameKey ?? UIState.shared.focusedGameID,
-              let g = GameCatalog.find(key, steam: SteamLibrary.shared, custom: CustomGames.shared) else { return .none }
+              let g = GameCatalog.find(key, steam: SteamLibrary.shared, custom: CustomGames.shared) else { return .blank }
         return g.artwork
     }
 

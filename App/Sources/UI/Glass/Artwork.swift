@@ -45,8 +45,8 @@ final class ArtworkStore {
             for url in candidates {
                 let file = Self.cacheDir.appendingPathComponent(Self.fileName(url))
                 if let image = await Self.decode(file: file, maxPixels: maxPixels) { return image }
-                guard let (data, response) = try? await URLSession.shared.data(from: url),
-                      (response as? HTTPURLResponse)?.statusCode == 200, data.count > 0 else {
+                let fetched = try? await URLSession.shared.data(from: url)
+                guard let data = fetched?.0, (fetched?.1 as? HTTPURLResponse)?.statusCode == 200, data.count > 0 else {
                     self?.failed.insert(url)
                     continue
                 }
@@ -159,13 +159,13 @@ final class ArtworkStore {
 enum ArtworkSource: Hashable {
     case steam(Int)
     case custom(CustomGame)
-    case none
+    case blank
 
     func key(_ kind: ArtworkStore.Kind) -> String {
         switch self {
         case .steam(let id): return "steam.\(id).\(kind.rawValue)"
         case .custom(let g): return "icon.\(g.id.uuidString).\(g.exe)"
-        case .none: return ""
+        case .blank: return ""
         }
     }
 }
@@ -195,7 +195,7 @@ final class ArtworkLoader: ObservableObject {
                 img = await store.image(key: source.key(kind), urls: urls, maxPixels: kind == .hero ? 1800 : kind == .wide ? 900 : 700)
             case .custom(let g):
                 img = await store.icon(for: g)
-            case .none:
+            case .blank:
                 img = nil
             }
             guard key == loadedKey else { return }
@@ -302,8 +302,10 @@ struct ArtworkBackdrop: View {
     }
 
     private func reload() {
-        guard case .steam = source else { return }   // added games have an icon, not a scene
-        loader.load(source, kind: .hero, blurRadius: blurred ? look.backdropBlur : nil)
+        // An added game has an icon, not a scene: blurred it tints the page, sharp it would not do.
+        var s = source
+        if case .custom = source, !blurred { s = .blank }
+        loader.load(s, kind: .hero, blurRadius: blurred ? look.backdropBlur : nil)
     }
 
     private var scrim: some View {

@@ -79,7 +79,7 @@ final class Settings: ObservableObject {
     }
 
     init() {
-        Self.registerDefaults(d)
+        Settings.registerDefaults(d)
         jitPoolMB = d.integer(forKey: "jitPoolMB")
         fexPreset = FEXPreset(rawValue: d.integer(forKey: "fexPreset")) ?? .fast
         multiblock = d.bool(forKey: "multiblock")

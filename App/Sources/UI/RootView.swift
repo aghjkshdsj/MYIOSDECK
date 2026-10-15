@@ -63,7 +63,7 @@ struct TabShell: View {
     @Environment(\.isLandscape) private var landscape
 
     private var focused: ArtworkSource {
-        guard let id = ui.focusedGameID, let g = GameCatalog.find(id, steam: steam, custom: custom) else { return .none }
+        guard let id = ui.focusedGameID, let g = GameCatalog.find(id, steam: steam, custom: custom) else { return .blank }
         return g.artwork
     }
 
@@ -143,7 +143,7 @@ struct GlassPage<Content: View>: View {
     enum Back { case capsule(String), titled(String) }
     let back: Back
     var title: String?
-    var artwork: ArtworkSource = .none
+    var artwork: ArtworkSource = .blank
     var scrolls = true
     var trailing: AnyView? = nil
     @ViewBuilder var content: Content
@@ -155,7 +155,7 @@ struct GlassPage<Content: View>: View {
     init(back: String, title: String? = nil, artwork: ArtworkSource? = nil, scrolls: Bool = true, @ViewBuilder content: () -> Content) {
         self.back = .capsule(back)
         self.title = title
-        self.artwork = artwork ?? .none
+        self.artwork = artwork ?? .blank
         self.scrolls = scrolls
         self.content = content()
     }
@@ -172,7 +172,7 @@ struct GlassPage<Content: View>: View {
 
     /// Pages without a game of their own keep the selected game's artwork.
     private var backdrop: ArtworkSource {
-        if case .none = artwork, let id = ui.focusedGameID, let g = GameCatalog.find(id, steam: steam, custom: custom) { return g.artwork }
+        if case .blank = artwork, let id = ui.focusedGameID, let g = GameCatalog.find(id, steam: steam, custom: custom) { return g.artwork }
         return artwork
     }
 

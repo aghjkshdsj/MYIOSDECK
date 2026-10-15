@@ -34,7 +34,7 @@ struct GameSettingsView: View {
     private var game: LibraryGame? { GameCatalog.find(gameID, steam: steam, custom: custom) }
 
     var body: some View {
-        GlassPage(titledBack: game?.name ?? "Game", artwork: game?.artwork ?? .none, scrolls: false,
+        GlassPage(titledBack: game?.name ?? "Game", artwork: game?.artwork ?? .blank, scrolls: false,
                   trailing: AnyView(Button("Reset") { reset() }.buttonStyle(.plain).font(.body).accessibilityHint("Back to the app defaults; Save changes keeps it"))) {
             Text("Game settings").font(.largeTitle.weight(.bold))
             if landscape {
