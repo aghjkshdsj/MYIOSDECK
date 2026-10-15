@@ -129,14 +129,14 @@ struct TouchLayout: Codable, Equatable {
     static func standard(landscape: Bool) -> TouchLayout {
         if landscape {
             return TouchLayout(controls: [
-                PadControlSpec(control: .lb, x: 0.08, y: 0.17),
-                PadControlSpec(control: .rb, x: 0.92, y: 0.17),
-                PadControlSpec(control: .lt, x: 0.22, y: 0.17),
-                PadControlSpec(control: .rt, x: 0.78, y: 0.17),
-                PadControlSpec(control: .view, x: 0.45, y: 0.19),
-                PadControlSpec(control: .menu, x: 0.55, y: 0.19),
-                PadControlSpec(control: .dpad, x: 0.17, y: 0.45),
-                PadControlSpec(control: .leftStick, x: 0.11, y: 0.81),
+                PadControlSpec(control: .lb, x: 0.08, y: 0.23),
+                PadControlSpec(control: .rb, x: 0.92, y: 0.23),
+                PadControlSpec(control: .lt, x: 0.22, y: 0.23),
+                PadControlSpec(control: .rt, x: 0.78, y: 0.23),
+                PadControlSpec(control: .view, x: 0.45, y: 0.23),
+                PadControlSpec(control: .menu, x: 0.55, y: 0.23),
+                PadControlSpec(control: .dpad, x: 0.17, y: 0.47, scale: 0.9),
+                PadControlSpec(control: .leftStick, x: 0.11, y: 0.82, scale: 0.9),
                 PadControlSpec(control: .face, x: 0.88, y: 0.60),
                 PadControlSpec(control: .rightStick, x: 0.70, y: 0.84, hidden: true),
             ])

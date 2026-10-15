@@ -60,6 +60,14 @@ for landscape in [true, false] {
         check(f.minX >= safe.minX - 1 && f.maxX <= safe.maxX + 1 && f.minY >= safe.minY - 1 && f.maxY <= safe.maxY + 1,
               "\(s.control) inside the safe area (\(landscape)): \(f)")
     }
+    // The game view's menu and keyboard buttons (6...96 x 6...50 points, top left) stay reachable:
+    // no control's touch area (14 points larger than drawn) reaches them.
+    if landscape {
+        for s in l.controls where !s.hidden {
+            let touchArea = TouchLayout.frame(s, in: safe).insetBy(dx: -14, dy: -14)
+            check(!touchArea.intersects(CGRect(x: 0, y: 0, width: 100, height: 50)), "\(s.control) clear of the menu buttons: \(touchArea)")
+        }
+    }
     // Visible controls do not overlap.
     let shown = l.controls.filter { !$0.hidden }.map { ($0.control, TouchLayout.frame($0, in: safe)) }
     for i in shown.indices { for j in shown.indices where j > i {
