@@ -153,6 +153,8 @@ jobs:
           python3 engine/gpta-probe/precise_test.py || rc=1
           clang-19 -O2 -ffp-contract=off -o "$RUNNER_TEMP/asm_pload_test" engine/gpta-probe/asm_pload_test.c "$RUNNER_TEMP"/gpta/obj/gpta_pin_apl*.o -lm -lpthread
           "$RUNNER_TEMP/asm_pload_test" || rc=1
+          clang-19 -O2 -ffp-contract=off -o "$RUNNER_TEMP/asm_fload_test" engine/gpta-probe/asm_fload_test.c "$RUNNER_TEMP"/gpta/obj/gpta_pin_afl*.o -lm -lpthread
+          "$RUNNER_TEMP/asm_fload_test" || rc=1
           objdump -d --no-show-raw-insn -j gpta_h "$RUNNER_TEMP/gpta/gpta" > /tmp/gpta_h.txt
           python3 engine/gpta-probe/precise.py /tmp/gpta_h.txt || rc=1
           exit $rc
@@ -221,6 +223,7 @@ jobs:
           echo "preserve_none: $(echo '__attribute__((preserve_none)) void f(void){}' | xcrun -sdk iphoneos clang -arch arm64 -x c -c - -o /dev/null 2>&1 && echo supported || echo NOT supported)"
           bash probe_cc.sh "xcrun -sdk iphoneos clang -arch arm64" || true
           python3 gen_pload_asm.py "$RUNNER_TEMP/gpta-asm"
+          python3 gen_fload_asm.py "$RUNNER_TEMP/gpta-asm"
           find "$RUNNER_TEMP/gpta-asm" -name '*.S' -print0 | xargs -0 -n 1 -P 2 sh -c '"$RUNNER_TEMP/ios-clang-cached" -arch arm64 -O2 -ffp-contract=off -I "$PWD" -miphoneos-version-min=17.0 -c "$1" -o "/tmp/$(basename "$1" .S).o" || exit 255' _
           for f in "$RUNNER_TEMP"/gpta-asm/*.S; do test -s "/tmp/$(basename "$f" .S).o" || exit 1; done
           ls -la /tmp/gpta_pin*.o

@@ -69,6 +69,13 @@ row below. Interrupted or defective trials are recorded separately.
 | 41fc907 | [38643061148](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38643061148) | 28.85% | 31.12% | 8.09% | 14.01% |
 | d09c2e1 | [38645643029](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38645643029) | 29.20% | 31.54% | 8.23% | 14.00% |
 | e456c8a | [38647332654](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38647332654) | 29.52% | 31.10% | 8.44% | 14.01% |
+| 9dc918c | [38649178056](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38649178056) | 29.53% | 30.44% | 8.53% | 13.96% |
+| ea9772b | [38649943519](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38649943519) | 29.03% | 31.05% | 8.45% | 13.97% |
+| c816463 | [38650881386](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38650881386) | 29.77% | 30.31% | 8.36% | 13.94% |
+| a35f8d0 | [38652543659](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38652543659) | 30.42% | 31.09% | 8.29% | 13.98% |
+| 2a75892 | [38652737023](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38652737023) | 30.74% | 31.44% | 8.17% | 13.98% |
+| 38b402d | [38748996922](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38748996922) | 31.24% | 29.83% | 8.12% | 13.96% |
+| 3af903a | [38750048972](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38750048972) | 31.09% | 30.84% | 8.33% | 13.99% |
 
 The third trial (result-width branches and simplified floating comparisons)
 regressed. Its ARM64, x86 and iOS gates passed. That trial is rolled back in
@@ -552,6 +559,14 @@ It preserves upper lanes and existing fault ordering; copy/arithmetic pair
 handlers retain their existing code because their different destination can
 already avoid that extra full-vector copy. Speed is not measured yet.
 
+The ordinary scalar trial is now measured in run 38748996922 and passed all
+gates. Its raw float medians are native 13833684 ns and GPTA 40778272 ns
+(33.92%, truncated). The full suite means are in the table above; both remain
+below 50%. The earlier adjacent-layout change passed all gates but did not
+improve its float timing in run 38652737023. The profile-only scale change in
+a35f8d0 changed no execution handlers; its timing variation is not attributed
+to an optimization.
+
 The precision audit now streams one handler at a time instead of retaining
 the whole disassembly. Its control-flow analysis and exclusions are unchanged.
 Every symbol entry is checked, including duplicate local names from replica
@@ -559,6 +574,9 @@ translation units (the old name-keyed dictionary retained only the last).
 Regression fixtures check unsafe writes and stores, safe restored state,
 branch merging and duplicate-name coverage. This is an audit-only change;
 engine execution and benchmark measurement are unchanged.
+Run 38750048972 passed all gates, including the expanded audit and its
+regression fixtures. Both suite means remain below 50%; timing changes in
+this audit-only revision are not attributed to engine execution changes.
 
 The following ARM trial implements the same packed load/ALU pairs in static
 assembly for pinned vector operands, retaining C handlers for other operands
@@ -576,6 +594,19 @@ Guest differential cases additionally cover distinct low-vector operands.
 All existing exact-fault and assembly-audit gates remain mandatory. The
 replica hash table is enlarged on this configuration to hold the extra static
 entries. This trial is not measured yet; iPhone execution remains untested.
+
+The next static assembly trial applies the same approach to the existing
+corpus-selected floating load/ADD/SUB/MUL pairs (PS/PD/SS/SD). The standard
+SIMD profile in run 38748996922 identifies runtime scale handling in those
+indexed handlers. All four scales, base/index choices, low vector operands
+and replicas are compiled, with existing C handlers retained for other
+operands and hosts. Scalar loads zero upper lanes before arithmetic, so
+these pairs need no upper-lane restoration. A scratch vector receives the
+guest load before the architectural destination changes. An independent
+native scalar C reference checks every table entry, NaNs, signed zeros,
+infinities, aliases and unchanged state; guest differential cases also
+cover distinct low-register pairs. All fault and iOS gates remain required.
+Its speed is not measured yet. No held-out code was inspected.
 
 Profile standard workloads with perf stat and perf record. Choose any new
 instruction-pair families from the independent corpus in engine/gpta/corpus.sh.

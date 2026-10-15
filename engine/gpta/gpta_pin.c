@@ -32,6 +32,7 @@
 #include "gpta_pin_xload.h"
 #include "gpta_pin_pload.h"
 #include "gpta_pin_asm_pload.h"
+#include "gpta_pin_asm_fload.h"
 #include "gpta_pin_step_noadj.h"
 #include "gpta_pin_eareuse.h"
 #include "gpta_pin_movtest.h"
@@ -485,6 +486,10 @@ static void rmap_init(void) {
     RMAP(t_apl_paddb); RMAP(t_apl_paddw); RMAP(t_apl_paddd); RMAP(t_apl_paddq);
     RMAP(t_apl_psubb); RMAP(t_apl_psubw); RMAP(t_apl_psubd); RMAP(t_apl_psubq);
     RMAP(t_apl_pand); RMAP(t_apl_pandn); RMAP(t_apl_por); RMAP(t_apl_pxor);
+    RMAP(t_afl_addps); RMAP(t_afl_subps); RMAP(t_afl_mulps);
+    RMAP(t_afl_addpd); RMAP(t_afl_subpd); RMAP(t_afl_mulpd);
+    RMAP(t_afl_addss); RMAP(t_afl_subss); RMAP(t_afl_mulss);
+    RMAP(t_afl_addsd); RMAP(t_afl_subsd); RMAP(t_afl_mulsd);
 #endif
     RMAP(t_lp_first0); RMAP(t_lp_first1); RMAP(t_lp_first2); RMAP(t_lp_first3);
     RMAP(t_lp_next0); RMAP(t_lp_next1); RMAP(t_lp_next2); RMAP(t_lp_next3);
@@ -1017,6 +1022,17 @@ static int try_fuse(Out *o, const Uop *u, uint32_t left) {
             return 2;
         }
         if (k >= 0 && width == (k < 6 ? 16 : k < 9 ? 4 : 8)) {
+#if GPTA_USE_ASM_PLOAD
+            if (u->dst < 8 && v->src < 8 && u->scale < 4) {
+                static const PFn (*const arm[12])[8][8][17][17] = {
+                    t_afl_addps,t_afl_subps,t_afl_mulps,
+                    t_afl_addpd,t_afl_subpd,t_afl_mulpd,
+                    t_afl_addss,t_afl_subss,t_afl_mulss,
+                    t_afl_addsd,t_afl_subsd,t_afl_mulsd };
+                x = put_uop(o,u,arm[k][u->scale][u->dst][v->src][u->base][u->index]);
+            } else
+#endif
+            {
             static const PFn (*const tables[4])[16][16][17] = {
                 t_xload_ps,t_xload_pd,t_xload_ss,t_xload_sd };
             if (u->index == R_ZERO)
@@ -1025,6 +1041,7 @@ static int try_fuse(Out *o, const Uop *u, uint32_t left) {
                 static const PFn (*const indexed[4])[9][9][17][16] = {
                     t_xloadi_ps,t_xloadi_pd,t_xloadi_ss,t_xloadi_sd };
                 x = put_uop(o,u,indexed[k/3][k%3][xcls(u->dst)][xcls(v->src)][u->base][u->index]);
+            }
             }
             x->src = v->src;
             return 2;
@@ -1790,6 +1807,7 @@ static void hidx_build(void) {
     GPTA_XLOAD_TABLES(XL_HIDX)
     GPTA_PLOAD_TABLES(XL_HIDX)
     GPTA_ASM_PLOAD_TABLES(XL_HIDX)
+    GPTA_ASM_FLOAD_TABLES(XL_HIDX)
     LP_FIRST_TABLES(XL_HIDX)
     LP_NEXT_TABLES(XL_HIDX)
 #undef XL_HIDX

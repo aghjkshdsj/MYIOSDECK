@@ -56,11 +56,7 @@ def alu(op, d, s):
     return f'{mnemonic} v{d}.16b, v16.16b, v{source}.16b'
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('out', type=pathlib.Path)
-    args = parser.parse_args()
-    args.out.mkdir(parents=True, exist_ok=True)
+def host_regs():
     # Use the recovery map as the single register-number source. CI's native
     # differential and exact-fault gates validate the actual compiler ABI.
     source = pathlib.Path(__file__).with_name('gpta_pin.c').read_text()
@@ -70,7 +66,15 @@ def main():
     numbers = [int(value.strip()) for value in match[1].split(',')]
     if len(numbers) != 16 or len(set(numbers)) != 16:
         raise SystemExit('invalid ARM64 host register map')
-    regs = [f'x{number}' for number in numbers] + ['xzr']
+    return [f'x{number}' for number in numbers] + ['xzr']
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('out', type=pathlib.Path)
+    args = parser.parse_args()
+    args.out.mkdir(parents=True, exist_ok=True)
+    regs = host_regs()
     for op, replica in itertools.product(OPS, range(2)):
         suffix = '_r1' if replica else ''
         path = args.out / f'gpta_pin_apl_{op}{suffix}.S'

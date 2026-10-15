@@ -1718,11 +1718,12 @@ static void gpta_ea_pairs(void) {
     XL_DST_CASES(OP,LOAD,10,2); XL_DST_CASES(OP,LOAD,11,3); \
     XL_DST_CASES(OP,LOAD,12,4); XL_DST_CASES(OP,LOAD,13,5); \
     XL_DST_CASES(OP,LOAD,14,6); XL_DST_CASES(OP,LOAD,15,7)
-#define PL_LOW_REGS(OP) \
-    XL_DST_CASES(OP,"movdqu",0,1); XL_DST_CASES(OP,"movdqu",1,2); \
-    XL_DST_CASES(OP,"movdqu",2,3); XL_DST_CASES(OP,"movdqu",3,4); \
-    XL_DST_CASES(OP,"movdqu",4,5); XL_DST_CASES(OP,"movdqu",5,6); \
-    XL_DST_CASES(OP,"movdqu",6,7); XL_DST_CASES(OP,"movdqu",7,0)
+#define XL_LOW_REGS(OP,LOAD) \
+    XL_DST_CASES(OP,LOAD,0,1); XL_DST_CASES(OP,LOAD,1,2); \
+    XL_DST_CASES(OP,LOAD,2,3); XL_DST_CASES(OP,LOAD,3,4); \
+    XL_DST_CASES(OP,LOAD,4,5); XL_DST_CASES(OP,LOAD,5,6); \
+    XL_DST_CASES(OP,LOAD,6,7); XL_DST_CASES(OP,LOAD,7,0)
+#define PL_LOW_REGS(OP) XL_LOW_REGS(OP,"movdqu")
 static void gpta_pload_pairs(void) {
     u64 h = 14695981039346656037ull;
     v2 mem[3];
@@ -1747,9 +1748,13 @@ static void gpta_xload_pairs(void) {
         v2 seed = vrand(), b = vfloat(1); mem[1] = vfloat(1);
         XL_REGS("addps","movups"); XL_REGS("subps","movups"); XL_REGS("mulps","movups");
         XL_REGS("addss","movss"); XL_REGS("subss","movss"); XL_REGS("mulss","movss");
+        XL_LOW_REGS("addps","movups"); XL_LOW_REGS("subps","movups"); XL_LOW_REGS("mulps","movups");
+        XL_LOW_REGS("addss","movss"); XL_LOW_REGS("subss","movss"); XL_LOW_REGS("mulss","movss");
         b = vdouble(1); mem[1] = vdouble(1);
         XL_REGS("addpd","movupd"); XL_REGS("subpd","movupd"); XL_REGS("mulpd","movupd");
         XL_REGS("addsd","movsd"); XL_REGS("subsd","movsd"); XL_REGS("mulsd","movsd");
+        XL_LOW_REGS("addpd","movupd"); XL_LOW_REGS("subpd","movupd"); XL_LOW_REGS("mulpd","movupd");
+        XL_LOW_REGS("addsd","movsd"); XL_LOW_REGS("subsd","movsd"); XL_LOW_REGS("mulsd","movsd");
     }
     out("gpta_xload_pairs",h);
 }
