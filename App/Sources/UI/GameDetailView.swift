@@ -19,6 +19,7 @@ struct GameDetailView: View {
     @State private var confirmUninstall = false
     @State private var confirmDelete = false
     @State private var choosingProgram = false
+    @State private var startTick = 0   // the Start with choice changed (it lives in UserDefaults)
 
     private var game: LibraryGame? { GameCatalog.find(gameID, steam: steam, custom: custom) }
 
@@ -224,6 +225,21 @@ struct GameDetailView: View {
             HStack(spacing: 8) { ProgressView(); Text(busy) }.font(.subheadline).foregroundStyle(Glass.secondary)
         } else if let why = launcher.blocker(for: game) {
             Text(why).font(.footnote).foregroundStyle(Glass.secondary)
+        }
+        if let id = game.steamID, MadeiraDock.bundled {
+            GlassCard {
+                GlassRow(last: true) {
+                    Text("Start with")
+                    Spacer(minLength: 12)
+                    GlassSegmented(options: ["dock", "direct", "ask"],
+                                   selection: Binding(get: { _ = startTick; return GameLauncher.steamStart(id) ?? UserDefaults.standard.string(forKey: "steamLaunchMode") ?? "ask" },
+                                                      set: { GameLauncher.setSteamStart($0, appID: id); startTick += 1 }),
+                                   compact: true, focusID: "game.steamStart") { $0 == "dock" ? "With Steam" : $0 == "direct" ? "Without Steam" : "Ask" }
+                        .frame(maxWidth: 380)
+                }
+            }
+            Text("With Steam: slower to start; Steam DRM, achievements and online play through Steam work. Without Steam: faster; for games that do not need Steam. Steam Cloud saves sync either way (more in Game settings › Steam).")
+                .font(.footnote).foregroundStyle(Glass.secondary)
         }
         if let failure = wine.dockFailure, game.steamID != nil {
             StatusRow(label: "Steam (Madeira Dock) did not start the game", detail: failure, level: .bad)

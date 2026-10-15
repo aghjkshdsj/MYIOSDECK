@@ -124,6 +124,8 @@ final class UIState: ObservableObject {
     /// The pill's three tabs, and Settings (the gear button), which takes the same place.
     enum Tab: String, CaseIterable, Identifiable {
         case home = "Home", library = "Library", downloads = "Downloads", settings = "Settings"
+        /// The top bar's round buttons: full pages too, like the tabs.
+        case search = "Search", controllers = "Controllers"
         var id: String { rawValue }
     }
     enum Route: Hashable {
@@ -138,8 +140,6 @@ final class UIState: ObservableObject {
 
     @Published var tab: Tab = .home
     @Published var path: [Route] = []
-    @Published var showSearch = false
-    @Published var showControllers = false
     /// The game shown behind the tabs (Home's selected game).
     @Published var focusedGameID: String?
 

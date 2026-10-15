@@ -11,13 +11,14 @@ struct GameSettingsView: View {
     @Environment(\.isLandscape) private var landscape
 
     enum Section: String, CaseIterable, Identifiable {
-        case performance = "Performance", controls = "Controls", display = "Display"
+        case performance = "Performance", controls = "Controls", display = "Display", steam = "Steam"
         var id: String { rawValue }
         var icon: String {
             switch self {
             case .performance: return "gauge.with.dots.needle.67percent"
             case .controls: return "gamecontroller"
             case .display: return "display"
+            case .steam: return "cloud"
             }
         }
     }
@@ -26,6 +27,13 @@ struct GameSettingsView: View {
     @State private var draft = GameSettings()
     @State private var style = PadStyle.xbox
     @State private var keyboardPad = false
+    /// A Steam game's start: "dock" (With Steam), "direct" (Without Steam), "ask".
+    @State private var steamStart = "ask"
+
+    /// Steam only for Steam games, and only where With Steam exists.
+    private var sections: [Section] {
+        Section.allCases.filter { $0 != .steam || (game?.steamID != nil && MadeiraDock.bundled) }
+    }
     @State private var touch = GameInput.TouchMode.off
     @State private var loaded = false
     @State private var editingLayout = false
@@ -41,7 +49,7 @@ struct GameSettingsView: View {
             if landscape {
                 HStack(alignment: .top, spacing: 22) {
                     VStack(alignment: .leading, spacing: 10) {
-                        ForEach(Section.allCases) { s in sidebarItem(s) }
+                        ForEach(sections) { s in sidebarItem(s) }
                         Spacer(minLength: 0)
                         Text("Changes apply next time you play.").font(.footnote).foregroundStyle(Glass.secondary)
                     }
@@ -56,7 +64,7 @@ struct GameSettingsView: View {
                 }
                 .padding(.bottom, 8)
             } else {
-                GlassSegmented(options: Section.allCases, selection: $section, compact: true, focusID: "gamesettings.seg1") { $0.rawValue }
+                GlassSegmented(options: sections, selection: $section, compact: true, focusID: "gamesettings.seg1") { $0.rawValue }
                 PadScrollView { panel.padding(.bottom, 8) }.scrollIndicators(.hidden)
                 VStack(spacing: 8) {
                     Text("Changes apply next time you play.").font(.footnote).foregroundStyle(Glass.secondary)
@@ -103,6 +111,7 @@ struct GameSettingsView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(section.rawValue).font(.title.weight(.bold))
                 Text(section == .controls ? "This game's controller, touch mouse and on-screen controller."
+                     : section == .steam ? "How this game starts."
                      : "Overrides the app defaults for this game.")
                     .foregroundStyle(Glass.secondary)
             }
@@ -110,6 +119,7 @@ struct GameSettingsView: View {
             case .performance: performance
             case .controls: controls
             case .display: display
+            case .steam: steamPanel
             }
         }
     }
@@ -223,6 +233,22 @@ struct GameSettingsView: View {
             .font(.footnote).foregroundStyle(Glass.secondary)
     }
 
+    // MARK: steam
+
+    @ViewBuilder private var steamPanel: some View {
+        GlassCard {
+            GlassRow(last: true) {
+                Text("Start with")
+                Spacer(minLength: 12)
+                GlassSegmented(options: ["dock", "direct", "ask"], selection: Binding(get: { steamStart }, set: { steamStart = $0; saved = false }),
+                               compact: true, focusID: "gamesettings.steamStart") { $0 == "dock" ? "With Steam" : $0 == "direct" ? "Without Steam" : "Ask" }
+                    .frame(maxWidth: 380)
+            }
+        }
+        Text(GameLauncher.steamStartExplanation + " Ask: the choice each time you press Play.")
+            .font(.footnote).foregroundStyle(Glass.secondary)
+    }
+
     // MARK: load / save
 
     private func load() {
@@ -232,6 +258,7 @@ struct GameSettingsView: View {
         style = PadPrefs.style(gameKey: gameID)
         keyboardPad = PadPrefs.keyboard(gameKey: gameID)
         touch = GameInput.touchMode(gameKey: gameID)
+        if let id = game?.steamID { steamStart = GameLauncher.steamStart(id) ?? UserDefaults.standard.string(forKey: "steamLaunchMode") ?? "ask" }
     }
 
     private func reset() {
@@ -239,6 +266,7 @@ struct GameSettingsView: View {
         style = PadPrefs.defaultStyle
         keyboardPad = false
         touch = .off
+        steamStart = UserDefaults.standard.string(forKey: "steamLaunchMode") ?? "ask"
         saved = false
     }
 
@@ -250,6 +278,7 @@ struct GameSettingsView: View {
         PadPrefs.setStyle(style, gameKey: gameID)
         PadPrefs.setKeyboard(keyboardPad, gameKey: gameID)
         d.set(touch.rawValue, forKey: "touchMode.\(gameID)")
+        if let id = game?.steamID, MadeiraDock.bundled { GameLauncher.setSteamStart(steamStart, appID: id) }
         dlog("[game-settings] saved for \(gameID): defaults=\(draft.useDefaults ? 1 : 0) pad=\(style.rawValue)\(keyboardPad ? "+keyboard" : "") touch=\(touch.rawValue)")
         withGlassAnimation { saved = true }
         UINotificationFeedbackGenerator().notificationOccurred(.success)

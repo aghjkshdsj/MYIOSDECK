@@ -153,7 +153,7 @@ final class PadFocus: ObservableObject {
         case .x:
             if let id = focusedID, let s = items[id]?.actions.secondary, items[id]?.scope == topScope { s() }
         case .y:
-            if topScope == "root" { UIState.shared.showSearch = true }
+            if topScope == "root" { UIState.shared.show(.search) }
         case .lb, .rb:
             cycle(key == .rb ? 1 : -1)
         case .menu:
@@ -178,32 +178,26 @@ final class PadFocus: ObservableObject {
     /// itself or from the Search and Controllers panels; LB is the exact reverse of RB.
     private func cycle(_ step: Int) {
         let ui = UIState.shared
+        guard topScope == "root" else { return }   // a dialog, the editor, a sheet: LB/RB do nothing there
         let current: TopDestination
-        switch topScope {
-        case "search": current = .search
-        case "controllers": current = .controllers
-        case "root":
-            switch ui.tab {
-            case .home: current = .home
-            case .library: current = .library
-            case .downloads: current = .downloads
-            case .settings: current = .settings
-            }
-        default: return   // a dialog, the editor, a game's sheet: LB/RB do nothing there
+        switch ui.tab {
+        case .home: current = .home
+        case .library: current = .library
+        case .downloads: current = .downloads
+        case .search: current = .search
+        case .settings: current = .settings
+        case .controllers: current = .controllers
         }
         let next = current.next(step)
-        let sheetUp = ui.showSearch || ui.showControllers
-        ui.showSearch = false
-        ui.showControllers = false
         focusedID = nil
-        DispatchQueue.main.asyncAfter(deadline: .now() + (sheetUp ? 0.45 : 0)) { [weak self] in
+        DispatchQueue.main.async { [weak self] in
             switch next {
             case .home: ui.show(.home)
             case .library: ui.show(.library)
             case .downloads: ui.show(.downloads)
             case .settings: ui.show(.settings)
-            case .search: ui.showSearch = true
-            case .controllers: ui.showControllers = true
+            case .search: ui.show(.search)
+            case .controllers: ui.show(.controllers)
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { self?.ensureFocus() }
         }

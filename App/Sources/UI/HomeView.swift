@@ -244,10 +244,10 @@ struct HomeView: View {
         }
         .font(.subheadline)
         .foregroundStyle(Glass.text.opacity(0.9))
-        .onTapGesture { ui.showControllers = true }
+        .onTapGesture { ui.show(.controllers) }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
-        .padFocus("home.controllers", radius: 10) { ui.showControllers = true }
+        .padFocus("home.controllers", radius: 10) { ui.show(.controllers) }
     }
 
     // MARK: nothing installed yet

@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import SwiftUI
 
-/// Search (the header's magnifier): every game of the library by name; a result opens its page.
+/// Search (the top bar's magnifier): a page like the tabs, every game of the library by name; a
+/// result opens its page.
 struct SearchView: View {
+    @ObservedObject private var ui = UIState.shared
     @ObservedObject private var steam = SteamLibrary.shared
     @ObservedObject private var custom = CustomGames.shared
     @ObservedObject private var recent = RecentlyPlayed.shared
-    @Environment(\.dismiss) private var dismiss
+    @Environment(\.isLandscape) private var landscape
     @State private var query = ""
     @FocusState private var focused: Bool
 
@@ -18,26 +20,24 @@ struct SearchView: View {
     }
 
     var body: some View {
-        VStack(spacing: 14) {
-            HStack(spacing: 10) {
-                HStack(spacing: 8) {
-                    Image(systemName: "magnifyingglass").foregroundStyle(Glass.secondary)
-                    TextField("Search games", text: $query)
-                        .focused($focused)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled()
-                        .submitLabel(.search)
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").foregroundStyle(Glass.secondary)
+                TextField("Search games", text: $query)
+                    .focused($focused)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    .submitLabel(.search)
+                if !query.isEmpty {
+                    Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(Glass.secondary) }
+                        .buttonStyle(.plain).accessibilityLabel("Clear search")
                 }
-                .padding(.horizontal, 16).frame(height: 46).glassCapsule()
-                Button("Cancel") { dismiss() }.buttonStyle(.plain)
-                    .padFocus("search.cancel", radius: 10) { dismiss() }
             }
+            .padding(.horizontal, 16).frame(height: 46).glassCapsule()
+            .padFocus("search.field", radius: 23) { focused = true }
             PadScrollView {
-                LazyVStack(spacing: 8) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: landscape ? 360 : 300), spacing: 10)], spacing: 10) {
                     ForEach(results) { game in
-                        Button {
-                            dismiss()
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { UIState.shared.open(.game(game.id)) }
-                        } label: {
+                        Button { ui.open(.game(game.id)) } label: {
                             HStack(spacing: 14) {
                                 ArtworkView(source: game.artwork, kind: .wide, name: game.name, compactPlaceholder: true)
                                     .frame(width: 92, height: 43)
@@ -54,34 +54,29 @@ struct SearchView: View {
                             .glassPanel(cornerRadius: 14)
                         }
                         .buttonStyle(.plain)
-                        .padFocus("search.\(game.id)", radius: 14, preferred: game.id == results.first?.id,
-                                  secondary: { dismiss(); DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { UIState.shared.open(.gameSettings(game.id)) } }) {
-                            dismiss()
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { UIState.shared.open(.game(game.id)) }
+                        .padFocus("search.\(game.id)", radius: 14, secondary: { ui.open(.gameSettings(game.id)) }) {
+                            ui.open(.game(game.id))
                         }
                     }
-                    if results.isEmpty {
-                        Text(query.isEmpty ? "Your library is empty." : "No game matches \"\(query)\".")
-                            .foregroundStyle(Glass.secondary).padding(.top, 30)
-                    }
+                }
+                if results.isEmpty {
+                    Text(query.isEmpty ? "Your library is empty." : "No game matches \"\(query)\".")
+                        .foregroundStyle(Glass.secondary).padding(.top, 30)
                 }
             }
             .scrollIndicators(.hidden)
         }
-        .padding(16)
-        .foregroundStyle(Glass.text)
-        .background { ArtworkBackdrop(source: .blank) }
+        .padding(.horizontal, landscape ? 10 : 20)
         .onAppear { if !PadFocus.shared.ringVisible { focused = true } }
-        .presentationBackground(.clear)
-        .padScope("search") { dismiss() }
     }
 }
 
-/// The header's controller button: connected controllers and the on-screen controller.
+/// The top bar's controller button: a page like the tabs with the connected controllers, the
+/// controller games see, and the on-screen controller.
 struct ControllersSheet: View {
     @EnvironmentObject private var device: DeviceInfo
     @EnvironmentObject private var settings: Settings
-    @Environment(\.dismiss) private var dismiss
+    @Environment(\.isLandscape) private var landscape
     @State private var editing = false
 
     private var padMode: Binding<TouchPadMode> {
@@ -91,19 +86,14 @@ struct ControllersSheet: View {
     var body: some View {
         PadScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                HStack {
-                    Text("Controllers").font(.title2.weight(.bold))
-                    Spacer()
-                    Button("Done") { dismiss() }.buttonStyle(GlassButtonStyle(compact: true))
-                        .padFocus("controllers.done", radius: 18) { dismiss() }
-                }
+                Text("Controllers").font(.largeTitle.weight(.bold))
                 GlassCard {
                     if device.controllers.isEmpty {
                         GlassRow(last: true) {
                             Image(systemName: "gamecontroller").font(.title2).frame(width: 34)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("No controller connected")
-                                Text("Pair one in iOS Settings › Bluetooth: Xbox, DualSense, Backbone and MFi controllers work.")
+                                Text("Pair one in iOS Settings › Bluetooth: Xbox, DualSense, DualShock 4, Backbone and MFi controllers work.")
                                     .font(.footnote).foregroundStyle(Glass.secondary)
                             }
                         }
@@ -122,23 +112,23 @@ struct ControllersSheet: View {
                 GlassSegmented(options: PadStyle.allCases, selection: Binding(get: { PadStyle(rawValue: settings.padStyle) ?? .xbox },
                                                                                set: { settings.padStyle = $0.rawValue }),
                                compact: true, focusID: "controllers.style") { $0.title }
+                    .frame(maxWidth: 420)
                 Text("For games without their own choice (Game settings, or the game menu while playing). PlayStation also gives games a DualSense, so games with PlayStation support show its buttons.")
                     .font(.footnote).foregroundStyle(Glass.secondary)
                 Text("On-screen controller").font(.headline)
                 GlassSegmented(options: TouchPadMode.allCases, selection: padMode, compact: true, focusID: "controllers.mode") { $0.title }
+                    .frame(maxWidth: 420)
                 Text("Automatic shows it over games while no controller is connected. Games can choose their own in Game settings.")
                     .font(.footnote).foregroundStyle(Glass.secondary)
                 Button { editing = true } label: { Label("Edit default layout", systemImage: "square.and.pencil") }
                     .buttonStyle(GlassButtonStyle(compact: true))
                     .padFocus("controllers.edit", radius: 18) { editing = true }
             }
-            .padding(20)
+            .frame(maxWidth: 900, alignment: .leading)
+            .padding(.horizontal, landscape ? 10 : 20)
+            .padding(.bottom, 24)
         }
-        .foregroundStyle(Glass.text)
-        .background { ArtworkBackdrop(source: .blank) }
-        .presentationDetents([.medium, .large])
-        .presentationBackground(.clear)
-        .padScope("controllers") { dismiss() }
+        .scrollIndicators(.hidden)
         .fullScreenCover(isPresented: $editing) { TouchLayoutEditor(gameKey: nil, title: "Default layout") }
     }
 }

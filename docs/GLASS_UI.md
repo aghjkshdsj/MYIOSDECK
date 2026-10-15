@@ -133,3 +133,20 @@ audio-driven haptics.
 
 Older per-game choices (XInput, XInput + DirectInput, HID, DualSense, Keyboard and mouse) are read as
 the style they meant (`PadStyle.migrate`).
+
+## Build 197 changes
+
+- Search and Controllers are pages like the tabs (the top bar stays), not sheets; LB/RB go through
+  Home, Library, Downloads, Search, Settings, Controllers.
+- With Steam / Without Steam is remembered per game (`steamLaunch.steam.<App ID>`: dock, direct,
+  ask): the first Play asks (when the app default is Ask) and keeps the answer; the game page's
+  Start with and Game settings › Steam change it. Both modes sync Steam Cloud saves through
+  MYIOSDECK before and after the game (SteamCloudSync.beforePlay / gameEnded); With Steam adds Valve's
+  client (Steam DRM, achievements, online play through Steam).
+- Steam Cloud Upload / Download ask "Are you sure?" with what is overwritten, a destructive confirm,
+  and the file list.
+- The on-screen controller stays player 1 (at rest) behind the game menu and the layout editor
+  (`TouchPadPresence`): unplugging it there made DirectInput games lose it until they restarted,
+  which looked like the Xbox / PlayStation switch breaking it. The editor's Xbox / PlayStation toggle
+  is the controller type: saving sets it (for the game, or as the default) and applies it at once in a game.
+- With Steam starts no longer turn on the DirectInput pad (the scan read Valve's dockhost.exe).

@@ -459,7 +459,8 @@ final class WineController: ObservableObject, @unchecked Sendable {
         // its files; read by the game's dinput when it starts). In PlayStation mode DirectInput lists
         // the DualSense instead, and a game naming XInput would see the controller twice.
         var dinput = false
-        if style == .xbox, !keyboardPad, let exe = hostURL(windowsPath: program.exe) ?? hostURL(windowsPath: program.id),
+        // Not for a With Steam start: its program is Valve's launcher (dockhost.exe), not the game.
+        if style == .xbox, !keyboardPad, launch != .dock, let exe = hostURL(windowsPath: program.exe) ?? hostURL(windowsPath: program.id),
            FileManager.default.fileExists(atPath: exe.path) {
             dinput = PadAPIScan.needsDInputPad(PadPrefs.scanAPIs(exe: exe))
         }

@@ -309,14 +309,32 @@ struct ManualTransferSheet: View {
 
     private var upload: Bool { transfer.upload }
 
+    private var warning: String {
+        let game = MainActor.assumeIsolated { SteamLibrary.shared.game(transfer.appID)?.name } ?? "this game"
+        return upload
+            ? "This will overwrite your current Steam Cloud save for \(game) with the save on this iPhone. The cloud version is backed up first (save-backups)."
+            : "This will overwrite the save on this iPhone for \(game) with your Steam Cloud save. The current iPhone save is backed up first (save-backups)."
+    }
+
     var body: some View {
         NavigationStack {
             List {
                 Section {
-                    Button(upload ? "Upload \(transfer.entries.count)" : "Download \(transfer.entries.count)") { confirm() }
-                        .padFocus("transfer.confirm", radius: 10, preferred: true) { confirm() }
+                    Label {
+                        Text(warning).font(.subheadline.weight(.semibold))
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    }
+                    .padding(.vertical, 4)
+                    Button(role: .destructive) { confirm() } label: {
+                        Text(upload ? "Yes, overwrite the cloud saves (\(transfer.entries.count))" : "Yes, overwrite this iPhone's saves (\(transfer.entries.count))")
+                            .fontWeight(.semibold)
+                    }
+                    .padFocus("transfer.confirm", radius: 10) { confirm() }
                     Button("Cancel", role: .cancel) { dismiss() }
-                        .padFocus("transfer.cancel", radius: 10) { dismiss() }
+                        .padFocus("transfer.cancel", radius: 10, preferred: true) { dismiss() }
+                } header: {
+                    Text("Are you sure?")
                 }
                 Section {
                     ForEach(transfer.entries) { e in

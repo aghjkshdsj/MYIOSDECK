@@ -137,5 +137,22 @@ check(PadAPIScan.classify([blob("kernel32.dll")]) == .unknown, "neither")
 check(PadAPIScan.needsDInputPad(.dinputOnly) && !PadAPIScan.needsDInputPad(.xinput) && !PadAPIScan.needsDInputPad(.unknown),
       "only a DirectInput-only game gets the DirectInput pad")
 
+// MARK: - The on-screen controller stays player 1 behind the game menu (build 196)
+
+for mode in TouchPadMode.allCases {
+    let shown = TouchPadPresence.visible(gameRunning: true, mode: mode, physicalController: false, gameOnScreen: true, editing: false)
+    let behindMenu = TouchPadPresence.visible(gameRunning: true, mode: mode, physicalController: false, gameOnScreen: false, editing: false)
+    let connected = TouchPadPresence.connected(gameRunning: true, mode: mode, physicalController: false)
+    check(!behindMenu, "\(mode): not drawn behind the game menu")
+    check(connected == (mode != .off) && shown == connected, "\(mode): drawn and connected over the game")
+}
+check(TouchPadPresence.connected(gameRunning: true, mode: .auto, physicalController: false),
+      "behind the menu (where Xbox / PlayStation is switched) player 1 stays connected: no unplug, no re-plug")
+check(!TouchPadPresence.visible(gameRunning: true, mode: .auto, physicalController: false, gameOnScreen: true, editing: true)
+      && TouchPadPresence.connected(gameRunning: true, mode: .auto, physicalController: false), "the layout editor: hidden, still connected")
+check(!TouchPadPresence.connected(gameRunning: true, mode: .auto, physicalController: true), "Automatic with a controller: the controller is player 1")
+check(TouchPadPresence.connected(gameRunning: true, mode: .always, physicalController: true), "Always: both")
+check(!TouchPadPresence.connected(gameRunning: false, mode: .always, physicalController: false), "no game: released")
+
 print("touch-pad tests: \(checks - failures)/\(checks) passed")
 exit(failures == 0 ? 0 : 1)

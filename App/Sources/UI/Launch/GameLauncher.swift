@@ -129,7 +129,7 @@ final class GameLauncher: ObservableObject {
     /// Play: with Steam (Madeira Dock) or without, as Settings › Steam says, or asked each time.
     func chooseSteamLaunch(_ game: OwnedSteamGame) {
         guard MadeiraDock.bundled else { playSteam(game, viaDock: false); return }
-        switch settings.steamLaunchMode {
+        switch Self.steamStart(game.id) ?? settings.steamLaunchMode {
         case "dock": playSteam(game, viaDock: true)
         case "direct": playSteam(game, viaDock: false)
         default:
@@ -247,6 +247,25 @@ final class GameLauncher: ObservableObject {
         enableJIT { [weak self] in self?.startProgram(p) }
     }
 
+    // MARK: With / Without Steam, per game
+
+    /// A Steam game's own way to start: "dock" (With Steam), "direct" (Without Steam), "ask", or
+    /// nil (the app's default, Settings › Steam).
+    static func steamStart(_ appID: Int) -> String? {
+        UserDefaults.standard.string(forKey: "steamLaunch.steam.\(appID)")
+    }
+
+    static func setSteamStart(_ mode: String?, appID: Int) {
+        let key = "steamLaunch.steam.\(appID)"
+        if let mode { UserDefaults.standard.set(mode, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) }
+        dlog("[steam-play] app=\(appID) starts \(mode == "dock" ? "with Steam" : mode == "direct" ? "without Steam" : mode == "ask" ? "asking each time" : "as the app's default")")
+    }
+
+    static let withSteamText = "With Steam: Valve's Steam client signs in and starts the game, as on a PC, so games that need Steam running work: Steam DRM (Steam checks you own the game), achievements, friends and online play through Steam. Slower to start: without JIT the sign-in takes a few minutes."
+    static let withoutSteamText = "Without Steam: the game starts on its own, faster. Good for games that do not need Steam (DRM-free); a game that needs Steam may not start, and Steam features such as achievements and online play through Steam do not work."
+    static let steamCloudBothText = "Either way MYIOSDECK syncs the game's Steam Cloud saves before it starts and after it ends."
+    static var steamStartExplanation: String { "\(withSteamText)\n\n\(withoutSteamText)\n\n\(steamCloudBothText)" }
+
     static func holdTitle(_ hold: SteamCloudHold) -> String {
         switch hold {
         case .failed: return "Steam Cloud saves were not synced"
@@ -273,10 +292,16 @@ struct LaunchAlerts: ViewModifier {
     func body(content: Content) -> some View {
         content
             .glassDialog(item: $launcher.steamChoiceGame, title: { "Start \($0.name)" }, message: { _ in
-                "With Steam: Valve's Steam client signs in and starts the game, for games that need Steam running (without JIT the sign-in takes several minutes). Without Steam: the game starts on its own, faster. Settings › Steam can make either the default."
+                GameLauncher.steamStartExplanation + "\n\nYour choice is remembered for this game; change it on its page or in its Game settings."
             }) { game in
-                [DialogButton(title: "With Steam") { launcher.playSteam(game, viaDock: true) },
-                 DialogButton(title: "Without Steam") { launcher.playSteam(game, viaDock: false) },
+                [DialogButton(title: "With Steam") {
+                    GameLauncher.setSteamStart("dock", appID: game.id)
+                    launcher.playSteam(game, viaDock: true)
+                 },
+                 DialogButton(title: "Without Steam") {
+                    GameLauncher.setSteamStart("direct", appID: game.id)
+                    launcher.playSteam(game, viaDock: false)
+                 },
                  .cancel()]
             }
             .glassDialog(item: $launcher.steamNoJITGame, title: { _ in "JIT is off" }, message: { _ in

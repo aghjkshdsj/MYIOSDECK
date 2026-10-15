@@ -420,7 +420,7 @@ private struct SteamSettings: View {
                 GlassSegmented(options: ["ask", "dock", "direct"], selection: $settings.steamLaunchMode, compact: true, focusID: "settings.seg7") {
                     $0 == "ask" ? "Ask each time" : $0 == "dock" ? "With Steam" : "Without Steam"
                 }
-                Text("With Steam: Valve's own Steam client (downloaded once from Valve, about 72 MB) signs in with your account, checks the licence and starts the game, so games that need Steam running work. Without JIT its sign-in takes several minutes. Without Steam: the game's program starts on its own, faster (for DRM-free games).")
+                Text(GameLauncher.steamStartExplanation + " Valve's client is downloaded once from Valve (about 72 MB). This is the default for games without their own choice: the first Play of a game asks (with Ask each time) and remembers the answer for that game; its page and Game settings change it.")
                     .font(.footnote).foregroundStyle(Deck.dim)
             }
             DeckCard(title: "Steam Cloud", icon: "icloud") {

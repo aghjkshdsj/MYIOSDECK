@@ -28,8 +28,6 @@ struct RootView: View {
         .modifier(LaunchAlerts())
         .overlay(alignment: .bottom) { PadHintBar() }
         .modifier(GameSessionHost())
-        .sheet(isPresented: $ui.showSearch) { SearchView() }
-        .sheet(isPresented: $ui.showControllers) { ControllersSheet() }
         .onAppear {
             GameLauncher.shared.attach(settings: settings, jit: jit, engine: engine, wine: wine)
             SteamLibrary.shared.start()
@@ -81,6 +79,8 @@ struct TabShell: View {
                     case .library: LibraryView()
                     case .downloads: DownloadsView()
                     case .settings: SettingsView()
+                    case .search: SearchView()
+                    case .controllers: ControllersSheet()
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -102,7 +102,7 @@ struct ShellHeader: View {
                        selection: Binding(get: { ui.tab }, set: { ui.show($0) }),
                        style: .tabs, compact: landscape) { $0.rawValue }
             .padChoice("shell.tabs", options: [UIState.Tab.home, .library, .downloads],
-                       selection: Binding(get: { ui.tab == .settings ? .home : ui.tab }, set: { ui.show($0) }))
+                       selection: Binding(get: { [.home, .library, .downloads].contains(ui.tab) ? ui.tab : .home }, set: { ui.show($0) }))
     }
 
     var body: some View {
@@ -132,15 +132,15 @@ struct ShellHeader: View {
     }
 
     @ViewBuilder private var buttons: some View {
-        GlassIconButton(systemImage: "magnifyingglass", label: "Search") { ui.showSearch = true }
-            .padFocus("shell.search", radius: 22) { ui.showSearch = true }
+        GlassIconButton(systemImage: "magnifyingglass", label: "Search", highlighted: ui.tab == .search) { ui.show(.search) }
+            .padFocus("shell.search", radius: 22) { ui.show(.search) }
         GlassIconButton(systemImage: "gearshape.fill", label: "Settings", highlighted: ui.tab == .settings) { ui.show(.settings) }
             .padFocus("shell.settings", radius: 22) { ui.show(.settings) }
         if landscape {
-            GlassIconButton(systemImage: "gamecontroller.fill", label: "Controllers", badge: !device.controllers.isEmpty) {
-                ui.showControllers = true
+            GlassIconButton(systemImage: "gamecontroller.fill", label: "Controllers", highlighted: ui.tab == .controllers, badge: !device.controllers.isEmpty) {
+                ui.show(.controllers)
             }
-            .padFocus("shell.controllers", radius: 22) { ui.showControllers = true }
+            .padFocus("shell.controllers", radius: 22) { ui.show(.controllers) }
         }
     }
 }

@@ -10,6 +10,8 @@ struct TouchLayoutEditor: View {
     let gameKey: String?
     let title: String
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var settings: Settings
+    @EnvironmentObject private var wine: WineController
 
     @State private var layout = TouchLayout.standard(landscape: true)
     /// The look being edited: each has its own layout (a PlayStation one starts as the Xbox one).
@@ -186,11 +188,15 @@ struct TouchLayoutEditor: View {
 
     private func save(scope: String) {
         saveLayout(scope: scope, for: landscape ?? true)
+        // The look chosen here is the controller type too: saved for the game (or as the default),
+        // and in a game it switches at once (what the game sees as well: WineController.setPadStyle).
+        if scope == TouchLayoutStore.defaultScope { settings.padStyle = style.rawValue } else { PadPrefs.setStyle(style, gameKey: scope) }
+        if TouchPadOverlay.shared.editing, wine.padStyle != style { wine.setPadStyle(style) }
         changed = false
         undo = []
         UINotificationFeedbackGenerator().notificationOccurred(.success)
-        let whose = scope == TouchLayoutStore.defaultScope ? "the default layout" : title
-        withGlassAnimation { savedText = "\(style.title) layout saved for \(whose) (\(landscape == false ? "portrait" : "landscape")). Turn the phone to edit the other orientation." }
+        let whose = scope == TouchLayoutStore.defaultScope ? "the default" : title
+        withGlassAnimation { savedText = "\(style.title) controller and layout saved for \(whose) (\(landscape == false ? "portrait" : "landscape")). Turn the phone to edit the other orientation." }
         if gameKey == nil || scope == gameKey { DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { dismiss() } }
     }
 
@@ -212,7 +218,7 @@ struct TouchLayoutEditor: View {
         HStack(spacing: 14) {
             GlassSegmented(options: PadStyle.allCases, selection: $style, compact: true, focusID: "editor.style") { $0.title }
                 .frame(width: 210)
-                .accessibilityLabel("The controller look being edited")
+                .accessibilityLabel("Controller type, saved with the layout")
             Text("Size").font(.subheadline)
             Slider(value: scale, in: PadControlSpec.scaleRange, onEditingChanged: { began in if began { undo.append(layout) } })
                 .tint(Glass.primary).frame(minWidth: 90, maxWidth: 190)

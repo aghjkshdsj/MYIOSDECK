@@ -207,3 +207,19 @@ enum PadMath {
         return dy > 0 ? PadState.a : PadState.y
     }
 }
+
+/// When the on-screen controller is drawn, and when it is player 1 for the game. They differ on
+/// purpose: behind the game menu or the layout editor it is not drawn, but it stays connected (at
+/// rest), so the game never sees its controller unplugged and plugged in again (a DirectInput game
+/// does not look for it again: build 196, Dokimon after the game menu's Xbox / PlayStation switch).
+enum TouchPadPresence {
+    /// Player 1 for the game: while a game runs, unless turned off, or Automatic with a controller connected.
+    static func connected(gameRunning: Bool, mode: TouchPadMode, physicalController: Bool) -> Bool {
+        gameRunning && (mode == .always || (mode == .auto && !physicalController))
+    }
+
+    /// Drawn: connected, and the game on screen (no menu, no editor over it).
+    static func visible(gameRunning: Bool, mode: TouchPadMode, physicalController: Bool, gameOnScreen: Bool, editing: Bool) -> Bool {
+        connected(gameRunning: gameRunning, mode: mode, physicalController: physicalController) && gameOnScreen && !editing
+    }
+}

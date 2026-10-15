@@ -562,10 +562,17 @@ final class TouchPadOverlay: ObservableObject {
     private var style = PadStyle.xbox
     private var active = false
     private var hostHidden = true
+    /// Player 1 is the on-screen controller (TouchPadPresence.connected).
+    private var playerConnected = false
     let view = TouchControllerView(mode: .play)
 
     private init() {
-        view.onState = { ControllerBridge.shared.setTouchPad(connected: true, $0) }
+        view.onState = { [weak self] s in
+            MainActor.assumeIsolated {
+                guard let self, self.playerConnected else { return }
+                ControllerBridge.shared.setTouchPad(connected: true, s)
+            }
+        }
         view.isHidden = true
         let center = NotificationCenter.default
         for name in [Notification.Name.GCControllerDidConnect, .GCControllerDidDisconnect] {
@@ -646,13 +653,18 @@ final class TouchPadOverlay: ObservableObject {
 
     private func refresh() {
         let physical = GCController.controllers().contains { $0.extendedGamepad != nil }
-        let show = active && !hostHidden && !editing && (mode == .always || (mode == .auto && !physical))
+        let show = TouchPadPresence.visible(gameRunning: active, mode: mode, physicalController: physical,
+                                            gameOnScreen: !hostHidden, editing: editing)
+        // Player 1 stays connected (at rest) behind the game menu and the editor: unplugging it
+        // there made DirectInput games lose the controller for good (build 196).
+        let connected = TouchPadPresence.connected(gameRunning: active, mode: mode, physicalController: physical)
         if !show { view.releaseAll() }
         view.isHidden = !show
         if show != visible {
             visible = show
-            dlog("[touch-pad] \(show ? "shown" : "hidden") (mode \(mode.rawValue), controller \(physical ? "connected" : "none"))")
+            dlog("[touch-pad] \(show ? "shown" : "hidden") (mode \(mode.rawValue), controller \(physical ? "connected" : "none"), player 1 \(connected ? "kept" : "released"))")
         }
-        ControllerBridge.shared.setTouchPad(connected: show, view.state)
+        playerConnected = connected
+        ControllerBridge.shared.setTouchPad(connected: connected, show ? view.state : PadState())
     }
 }
