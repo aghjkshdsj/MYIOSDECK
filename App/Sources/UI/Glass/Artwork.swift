@@ -363,8 +363,12 @@ enum PEIcon {
             }
         }
         func firstData(_ entry: (id: Int, offset: Int, isDir: Bool)) -> Data? {
-            var e = entry
-            while e.isDir { guard let next = entries(e.offset).first else { return nil }; e = next }
+            var e = entry, depth = 0
+            while e.isDir {   // at most a few levels: a malformed file must not loop
+                depth += 1
+                guard depth < 4, let next = entries(e.offset).first else { return nil }
+                e = next
+            }
             let rva = u32(res, e.offset), size = u32(res, e.offset + 4)
             let start = rva - resRVA
             guard start >= 0, size > 0, start + size <= res.count else { return nil }
