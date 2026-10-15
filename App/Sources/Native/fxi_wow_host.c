@@ -55,7 +55,12 @@ typedef struct {
     // Diagnostics: the last 32 system calls (number, return into the stub, the stub's caller, status).
     struct { uint32_t num, stub, caller, status; } ring[32];
     uint32_t ring_n;
+    uint32_t magic;                      // WOW_THREAD_MAGIC: tells a 32-bit thread's struct from anything else
 } wow_thread;
+// TlsSlots[14] of a 64-bit program's thread is that program's own: [quit-watch] once read a Unity
+// game's value there as this struct and crashed the app in fx32_wow_eip (build 187: Hollow Knight and
+// Billie's Wheelie, game menu opened). A thread counts only with this magic and its own TEB.
+#define WOW_THREAD_MAGIC 0x57573332u
 
 static uint64_t g_last_base;   // the newest 32-bit process's window (a notice before any thread runs)
 
@@ -813,6 +818,7 @@ static long host_thread_init(const wow_process *p, uint8_t *teb, uint8_t *cpu_re
     if (!t) {
         t = calloc(1, sizeof *t);
         if (!t) return (long)0xC0000017;
+        t->magic = WOW_THREAD_MAGIC;
         t->cpu = fx32_wow_cpu_new(p->base, (uint32_t)p->bop);
         if (!t->cpu) return (long)0xC0000017;
         TLS_SLOT(teb, WOW_THREAD_SLOT) = t;
@@ -959,7 +965,7 @@ void mid_wow_thread_report(const char *why) {
         if (vm_read_overwrite(mach_task_self(), (vm_address_t)&TLS_SLOT((uint8_t *)teb, WOW_THREAD_SLOT), sizeof tp,
                               (vm_address_t)&tp, &got) != KERN_SUCCESS || !tp ||
             vm_read_overwrite(mach_task_self(), (vm_address_t)tp, sizeof t, (vm_address_t)&t, &got) != KERN_SUCCESS ||
-            got != sizeof t || !t.proc || !t.cpu ||
+            got != sizeof t || t.magic != WOW_THREAD_MAGIC || t.teb != (uint8_t *)teb || !t.proc || !t.cpu ||
             vm_read_overwrite(mach_task_self(), (vm_address_t)t.proc, sizeof proc, (vm_address_t)&proc, &got) != KERN_SUCCESS)
             continue;
         t.proc = &proc;

@@ -295,6 +295,25 @@ static void gs_load(void) {
     out("gs_load", h);
 }
 
+// mov al/eax/rax <-> gs:[moffs64] (a0-a3 with an 8-byte address): Capcom Arcade Stadium reads its
+// TEB with 65 48 a1 <imm64> (build 120 stopped there). Loads and stores, 8/32/64 bits.
+static void gs_moffs(void) {
+    u64 h = 14695981039346656037ull;
+    g_syscall3(158, 0x1001, (long)g_gsblk, 0);   // arch_prctl(ARCH_SET_GS)
+    for (int i = 0; i < N; i++) {
+        for (int k = 0; k < 8; k++) g_gsblk[k] = val();
+        u64 a = val(), b = val(), c = val(), w = val();
+        __asm__ volatile("movabsq %%gs:0x10, %%rax" : "=a"(a) : : "memory");
+        __asm__ volatile("movabsl %%gs:0x2c, %%eax" : "+a"(b) : : "memory");
+        __asm__ volatile("movabsb %%gs:0x33, %%al" : "+a"(c) : : "memory");
+        __asm__ volatile("movabsq %%rax, %%gs:0x18\n\tmovabsl %%eax, %%gs:0x24\n\tmovabsb %%al, %%gs:0x39"
+                         : : "a"(w) : "memory");
+        h = mix(mix(mix(h, a), b), c);
+        for (int k = 0; k < 8; k++) h = mix(h, g_gsblk[k]);
+    }
+    out("gs_moffs", h);
+}
+
 // cbw/cwde/cdqe/cwd/cdq/cqo, lahf/sahf, cmpxchg (reg), xchg with rax
 static void misc(void) {
     u64 h = 14695981039346656037ull;
@@ -700,7 +719,7 @@ static const test_fn kTests[] = {
     fc_o, fc_no, fc_b, fc_ae, fc_e, fc_ne, fc_be, fc_a, fc_s, fc_ns, fc_p, fc_np, fc_l, fc_ge, fc_le, fc_g,
     fz_call, fz_index, fz_xindex, fz_3op, fz_3gap, fz_x3, fz_hoist,
     inc_m_q, inc_m_l, inc_m_w, inc_m_b, dec_m_q, dec_m_l, dec_m_b, neg_m_l, neg_m_w, neg_m_q, not_m_q, not_m_b,
-    movb_ld, movw_ld, muldiv_m, gs_load,
+    movb_ld, movw_ld, muldiv_m, gs_load, gs_moffs,
 };
 
 int guest_main(int argc, char **argv) {

@@ -68,6 +68,8 @@ step_wine() {
     # from the pristine file. 64-bit games keep Madeira's prebuilt dinput.
     git -C "$W" checkout -- dlls/dinput/joystick_ios.c
     python3 "$ROOT/engine/wine/patches/dinput_ios_pad.py" "$W"
+    # An acquired pad that goes away leaves DirectInput's acquired list (Forager froze, build 190).
+    python3 "$ROOT/engine/wine/patches/dinput_ios_unplug.py" "$W"
     mkdir -p "$B"
     cd "$B"
     if [ ! -f config.status ]; then

@@ -478,6 +478,17 @@ static int decode_one_inner(Dec *d) {
         else emit_mov(d, F_RR, sz, gpr(d, d->reg, sz), gpr(d, d->rm, sz), 0);
         return 0;
     }
+    case 0xa0: case 0xa1: case 0xa2: case 0xa3: {   // mov al/eAX/rAX <-> [moffs64]
+        // Capcom Arcade Stadium: 65 48 a1 <8 bytes> = mov rax, gs:[0x8] (the TEB's stack base).
+        int sz = (b & 1) ? bits : 8;
+        d->is_mem = 1; d->riprel = 0;
+        d->base = R_ZERO; d->index = R_ZERO; d->scale = 0;
+        d->disp = (int64_t)rd_u64(d);
+        if (d->seg) d->base = d->seg == 0x64 ? R_FS : R_GS;
+        if (b < 0xa2) emit_mov(d, F_RM, sz, gpr(d, R_AX, sz), 0, 0);
+        else emit_mov(d, F_MR, sz, 0, gpr(d, R_AX, sz), 0);
+        return 0;
+    }
     case 0x8d: {
         modrm(d);
         if (!d->is_mem) return unimplemented(d, "lea reg");

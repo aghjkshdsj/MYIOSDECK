@@ -201,8 +201,15 @@ final class WineController: ObservableObject, @unchecked Sendable {
             if !kind.noJIT {
                 return "Another game can start in the running Wine session only without JIT. \(restart)"
             }
-            // A 64-bit game after a 32-bit one, or the reverse, runs as Madeira's cross-architecture
-            // processes do (the bridge keeps the session's system32; docs/SESSION_REUSE.md).
+            // A 64-bit game after a 32-bit one runs as Madeira's cross-architecture processes do (the
+            // bridge keeps the session's system32; docs/SESSION_REUSE.md). The reverse does not: a
+            // 32-bit game's 64-bit (aarch64) half finds the ARM64EC DLLs in the session's system32,
+            // and only the ARM64EC ntdll retries the other farm (sysx64); WoW64 accepts any machine,
+            // so it loaded the ARM64EC win32u.dll and crashed in it (build 197: Forager after
+            // Dokimon, c0000135). Until the aarch64 side retries sysaa64, it needs a fresh session.
+            if kind.aarch64, let session = sessionKind, !session.aarch64 {
+                return "A 32-bit game cannot start after a 64-bit one in the same Wine session yet. \(restart)"
+            }
             // The controller is never a reason: XInput is there in every session, and the
             // DualSense in every session of a build with the hidpad gate (run()).
         }
@@ -490,6 +497,16 @@ final class WineController: ObservableObject, @unchecked Sendable {
         }
         let prefix = prefixURL.path
         dlog("[wine] booting \(program.exe) in \(prefix)\(programsThisRun > 0 ? " (in the running session, program \(programsThisRun + 1) of this app run)" : "")")
+        // The game's engine, and an Adobe AIR game's runtime, for the log (GameCompatCore.swift):
+        // file names only, off the main thread, never for Wine's own programs.
+        if let exeURL = hostURL(windowsPath: program.exe), !program.exe.lowercased().hasPrefix("c:\\windows\\") {
+            let folder = exeURL.deletingLastPathComponent(), name = exeURL.lastPathComponent
+            DispatchQueue.global(qos: .utility).async {
+                var line = "[compat] \(name): engine \(GameCompat.engine(programFolder: folder))"
+                if let air = GameCompat.airRuntime(programFolder: folder) { line += "; Adobe AIR: \(air)" }
+                dlog(line)
+            }
+        }
         queue.async {
             var err = [CChar](repeating: 0, count: 512)
             let ok = mid_wine_boot(prefix, program.exe, args, &err, err.count)

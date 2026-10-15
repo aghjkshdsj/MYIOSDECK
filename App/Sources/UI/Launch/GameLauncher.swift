@@ -168,6 +168,20 @@ final class GameLauncher: ObservableObject {
                 if dock {
                     try await startThroughDock(game, plan: plan)
                 } else {
+                    // Without Steam: a Steamworks game finds no Steam client and asks steam.exe to
+                    // start it again, then quits (911 Operator, build 190), unless steam_appid.txt
+                    // says it runs outside Steam (GameCompatCore.swift; written once, never replaced).
+                    if let exe = wine.hostURL(windowsPath: plan.exe), let install = wine.hostURL(windowsPath: plan.appPath),
+                       let work = wine.hostURL(windowsPath: plan.workingFolder) {
+                        let appID = game.id
+                        let written = await Task.detached(priority: .userInitiated) {
+                            GameCompat.writeSteamAppID(appID, folders: GameCompat.steamAppIDFolders(
+                                installFolder: install, programFolder: exe.deletingLastPathComponent(), workingFolder: work))
+                        }.value
+                        if !written.isEmpty {
+                            dlog("[steam-play] app=\(appID): steam_appid.txt written in \(written.map { $0.deletingLastPathComponent().lastPathComponent }.joined(separator: ", ")) (runs without Steam: no restart through steam.exe)")
+                        }
+                    }
                     wine.runSteamGame(appID: game.id, title: game.name, plan: plan)
                 }
                 if case .failed(let why) = wine.state { playError = why; return }

@@ -6,7 +6,7 @@ name: Stage 3b - D3D DLLs (16 KB aligned)
 on:
   push:
     branches: [main]
-    paths: ["engine/dxmt/build-pe.sh", "engine/dxmt/PIN", ".github/workflows/dxmt-pe.yml"]
+    paths: ["engine/dxmt/build-pe.sh", "engine/dxmt/PIN", "engine/wine/build-pe-extras.sh", ".github/workflows/dxmt-pe.yml"]
   workflow_dispatch:
 
 permissions:
@@ -54,6 +54,15 @@ jobs:
         id: d3d12
         continue-on-error: true
         run: bash engine/dxmt/build-pe.sh d3d12
+
+      # Wine builtins Madeira's ARM64EC farm lacks (wintypes for IL2CPP games, VC runtimes, XAudio
+      # 2.8/2.9, D3D10/D3DX, ...): new names only, never a replacement (engine/wine/build-pe-extras.sh).
+      - name: Wine modules the ARM64EC farm lacks
+        id: extras
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          bash engine/wine/build-pe-extras.sh engine/dxmt/out-pe 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
 
       # Fails when a DLL imports a toolchain runtime DLL (libc++, libunwind) the prefix lacks.
       - name: Collect and check imports

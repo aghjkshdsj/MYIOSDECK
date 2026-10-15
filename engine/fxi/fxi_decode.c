@@ -202,8 +202,92 @@ static void emit_xstore(Dec *d, const char *mem_name, const char *reg_name) {
     else { u->dst = (uint16_t)d->rm; u->src = (uint16_t)d->reg; }
 }
 
+#if FXI_I386
+// MMX forms (FXI32): no prefix, where 66/F2/F3 select the SSE ones, plus the MMX <-> XMM moves and
+// conversions. fxi_sse.c's m_* handlers; MMX register n is the low half of xmm8+n there.
+// Returns -1 for an opcode/prefix that is not an MMX form.
+static int decode_mmx(Dec *d, uint8_t op, int pf) {
+    static const char *const ops[256] = {
+        [0x60] = "punpcklbw", [0x61] = "punpcklwd", [0x62] = "punpckldq", [0x63] = "packsswb",
+        [0x64] = "pcmpgtb", [0x65] = "pcmpgtw", [0x66] = "pcmpgtd", [0x67] = "packuswb",
+        [0x68] = "punpckhbw", [0x69] = "punpckhwd", [0x6a] = "punpckhdq", [0x6b] = "packssdw",
+        [0x6f] = "movq", [0x74] = "pcmpeqb", [0x75] = "pcmpeqw", [0x76] = "pcmpeqd",
+        [0xd1] = "psrlw", [0xd2] = "psrld", [0xd3] = "psrlq", [0xd4] = "paddq", [0xd5] = "pmullw",
+        [0xd8] = "psubusb", [0xd9] = "psubusw", [0xda] = "pminub", [0xdb] = "pand",
+        [0xdc] = "paddusb", [0xdd] = "paddusw", [0xde] = "pmaxub", [0xdf] = "pandn",
+        [0xe0] = "pavgb", [0xe1] = "psraw", [0xe2] = "psrad", [0xe3] = "pavgw", [0xe4] = "pmulhuw", [0xe5] = "pmulhw",
+        [0xe8] = "psubsb", [0xe9] = "psubsw", [0xea] = "pminsw", [0xeb] = "por",
+        [0xec] = "paddsb", [0xed] = "paddsw", [0xee] = "pmaxsw", [0xef] = "pxor",
+        [0xf1] = "psllw", [0xf2] = "pslld", [0xf3] = "psllq", [0xf4] = "pmuludq", [0xf5] = "pmaddwd", [0xf6] = "psadbw",
+        [0xf8] = "psubb", [0xf9] = "psubw", [0xfa] = "psubd", [0xfb] = "psubq", [0xfc] = "paddb", [0xfd] = "paddw", [0xfe] = "paddd",
+    };
+    Uop *u;
+    if (pf == 0 && ops[op]) { char nm[24]; snprintf(nm, sizeof nm, "m_%s", ops[op]); emit_x(d, nm, 0); return 0; }
+    if (pf == 0) switch (op) {
+    case 0x6e:                                         // movd mm, r/m32
+        u = emit(d, named(d->is_mem ? "m_movd_XM" : "m_movd_XR")); u->dst = (uint16_t)d->reg;
+        if (d->is_mem) set_mem(d, u); else u->src = (uint16_t)(d->rm * 8);
+        return 0;
+    case 0x7e:                                         // movd r/m32, mm
+        u = emit(d, named(d->is_mem ? "m_movd_MX" : "m_movd_RX")); u->src = (uint16_t)d->reg;
+        if (d->is_mem) set_mem(d, u); else u->dst = (uint16_t)(d->rm * 8);
+        return 0;
+    case 0x7f: case 0xe7:                              // movq mm/m64, mm; movntq m64, mm
+        if (!d->is_mem && op == 0xe7) return -1;
+        u = emit(d, named(d->is_mem ? "m_movq_MR" : "m_movq_RR"));
+        if (d->is_mem) { u->src = (uint16_t)d->reg; set_mem(d, u); } else { u->dst = (uint16_t)d->rm; u->src = (uint16_t)d->reg; }
+        return 0;
+    case 0x70: emit_x(d, "m_pshufw", 1); return 0;     // pshufw mm, mm/m64, imm8
+    case 0x71: case 0x72: case 0x73: {                 // shift groups, immediate count
+        static const char *const sh[3][8] = {
+            { 0, 0, "m_psrlw_RI", 0, "m_psraw_RI", 0, "m_psllw_RI", 0 },
+            { 0, 0, "m_psrld_RI", 0, "m_psrad_RI", 0, "m_pslld_RI", 0 },
+            { 0, 0, "m_psrlq_RI", 0, 0, 0, "m_psllq_RI", 0 },
+        };
+        const char *n = sh[op - 0x71][d->reg & 7];
+        if (!n || d->is_mem) return -1;
+        u = emit(d, named(n)); u->dst = (uint16_t)d->rm; u->imm = rd_u8(d);
+        return 0;
+    }
+    case 0xc4: {                                       // pinsrw mm, r32/m16, imm8
+        uint64_t imm = rd_u8(d);
+        u = emit(d, named(d->is_mem ? "m_pinsrw_M" : "m_pinsrw_R"));
+        u->dst = (uint16_t)d->reg; u->src = (uint16_t)(d->rm * 8); u->imm = imm;
+        if (d->is_mem) set_mem(d, u);
+        return 0;
+    }
+    case 0xc5:                                         // pextrw r32, mm, imm8
+        if (d->is_mem) return -1;
+        u = emit(d, named("m_pextrw_R")); u->dst = (uint16_t)(d->reg * 8); u->src = (uint16_t)d->rm; u->imm = rd_u8(d);
+        return 0;
+    case 0xd7:                                         // pmovmskb r32, mm
+        if (d->is_mem) return -1;
+        u = emit(d, named("m_pmovmskb_RR")); u->dst = (uint16_t)(d->reg * 8); u->src = (uint16_t)d->rm;
+        return 0;
+    case 0xf7:                                         // maskmovq mm, mm (to [edi])
+        if (d->is_mem) return -1;
+        u = emit(d, named("m_maskmovq_RR")); u->dst = (uint16_t)d->reg; u->src = (uint16_t)d->rm;
+        return 0;
+    case 0x2a: emit_x(d, "m_cvtpi2ps", 0); return 0;  // cvtpi2ps xmm, mm/m64
+    case 0x2c: emit_x(d, "m_cvttps2pi", 0); return 0; // cvttps2pi mm, xmm/m64
+    case 0x2d: emit_x(d, "m_cvtps2pi", 0); return 0;  // cvtps2pi mm, xmm/m64
+    }
+    if (pf == 1 && op == 0x2a) { emit_x(d, "m_cvtpi2pd", 0); return 0; }    // cvtpi2pd xmm, mm/m64
+    if (pf == 1 && op == 0x2c) { emit_x(d, "m_cvttpd2pi", 0); return 0; }   // cvttpd2pi mm, xmm/m128
+    if (pf == 1 && op == 0x2d) { emit_x(d, "m_cvtpd2pi", 0); return 0; }    // cvtpd2pi mm, xmm/m128
+    if (op == 0xd6 && pf >= 2 && !d->is_mem) {         // movdq2q mm, xmm (F2); movq2dq xmm, mm (F3)
+        u = emit(d, named(pf == 2 ? "m_movdq2q_RR" : "m_movq2dq_RR")); u->dst = (uint16_t)d->reg; u->src = (uint16_t)d->rm;
+        return 0;
+    }
+    return -1;
+}
+#endif
+
 static int decode_sse(Dec *d, uint8_t op) {
     int pf = sse_prefix(d);
+#if FXI_I386
+    if (op == 0x77 && pf == 0) { emit(d, named("m_emms")); return 0; }   // emms (no ModRM byte)
+#endif
     static const char *const arith[16][4] = {
         // 0x51..0x5F by (op - 0x50), prefixes none 66 F2 F3
         [1] = { "sqrtps", "sqrtpd", "sqrtsd", "sqrtss" },
@@ -217,6 +301,9 @@ static int decode_sse(Dec *d, uint8_t op) {
         [0xe] = { "divps", "divpd", "divsd", "divss" }, [0xf] = { "maxps", "maxpd", "maxsd", "maxss" },
     };
     modrm(d);
+#if FXI_I386
+    { int r = decode_mmx(d, op, pf); if (r >= 0) return r; }
+#endif
     if (op >= 0x51 && op <= 0x5f) {
         const char *n = arith[op - 0x50][pf];
         if (!n) return unimplemented(d, "sse op/prefix");
@@ -510,8 +597,19 @@ static int decode_one_inner(Dec *d) {
         else if (d->is_mem) emit_mov(d, F_RM, 32, gpr(d, d->reg, 32), 0, 0);
         else emit_mov(d, F_RR, 32, gpr(d, d->reg, 32), gpr(d, d->rm, 32), 0);
         return 0;
+    case 0xa0: case 0xa1: case 0xa2: case 0xa3: {                     // mov al/eAX/rAX <-> [moffs64]
+        // Capcom Arcade Stadium: 65 48 a1 <8 bytes> = mov rax, gs:[0x8] (the TEB's stack base).
+        int sz = (b & 1) ? bits : 8;
+        d->is_mem = 1; d->riprel = 0;
+        d->base = R_ZERO; d->index = R_ZERO; d->scale = 0;
+        d->disp = (int64_t)rd_u64(d);
+        if (d->seg) d->base = d->seg == 0x64 ? R_FS : R_GS;
+        if (b < 0xa2) emit_mov(d, F_RM, sz, gpr(d, R_AX, sz), 0, 0);
+        else emit_mov(d, F_MR, sz, 0, gpr(d, R_AX, sz), 0);
+        return 0;
+    }
 #endif
-    case 0x68: { Uop *u = emit(d, named("push_I")); u->imm = (uint64_t)rd_s32(d); return 0; }
+    case 0x68:{ Uop *u = emit(d, named("push_I")); u->imm = (uint64_t)rd_s32(d); return 0; }
     case 0x6a: { Uop *u = emit(d, named("push_I")); u->imm = (uint64_t)rd_s8(d); return 0; }
     case 0x69: case 0x6b: {
         modrm(d);

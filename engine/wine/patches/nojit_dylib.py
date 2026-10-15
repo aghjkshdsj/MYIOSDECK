@@ -412,7 +412,18 @@ def main():
              "    status = map_image_view( &view, image_info, size, limit_low, limit_high, alloc_type, is_builtin );\n")
     s = sub(s, enter,
             "    struct ios_nojit_image *nojit = NULL;\n"
-            "    if (ios_nojit_enabled() && nt_name && !offset) nojit = ios_nojit_load( nt_name, image_info->machine );\n\n"
+            "    if (ios_nojit_enabled() && nt_name && !offset) nojit = ios_nojit_load( nt_name, image_info->machine );\n"
+            # A program's own DLL with a Wine name (Hades II ships Microsoft's dbghelp.dll, 0x1f3000
+            # against Wine's 0xf0000) is not the signed image: it failed with c000007b (build 120)
+            # and the game ended with c0000135. It is the program's code, mapped like any other
+            # (no signed dylib: data the x64 CPU interprets). Only images that used to fail here.
+            "    if (nojit && image_info->map_size > nojit->size)\n"
+            "    {\n"
+            "        ios_nojit_trace( \"[nojit] %s: this file (map size 0x%lx) is larger than Wine's signed image (0x%lx): \"\n"
+            "                         \"the program's own copy, loaded as its code\\n\", nojit->name,\n"
+            "                         (unsigned long)image_info->map_size, (unsigned long)nojit->size );\n"
+            "        nojit = NULL;\n"
+            "    }\n\n"
             "    server_enter_uninterrupted_section( &virtual_mutex, &sigset );\n\n"
             "    if (nojit)\n"
             "    {\n"

@@ -281,6 +281,133 @@ static void pinsrw_R(FxiCpu *c, Uop *u) { XR(u->dst)->w[u->imm & 7] = (uint16_t)
 static void pinsrw_M(FxiCpu *c, Uop *u) { XR(u->dst)->w[u->imm & 7] = (uint16_t)ld16(fxi_ea(c, u)); FXI_NEXT(c, u); }
 static void pextrw_R(FxiCpu *c, Uop *u) { c->r[u->dst >> 3] = XR(u->src)->w[u->imm & 7]; FXI_NEXT(c, u); }
 
+#if FXI_I386
+// ---- MMX (FXI32 only) ----
+// 32-bit code has xmm0-7 only, so MMX register n lives in the low half of xmm8+n: nothing else
+// uses those slots there and FxiCpu keeps its layout. x87 values are doubles here (fxi_x87.c), so
+// MMX cannot alias them as on hardware; emms empties the x87 tags, which is what x87 code after an
+// MMX loop expects. dst/src are MMX numbers 0-7, except where a general register is involved
+// (then a GPR byte offset). Valve's 32-bit steam.exe (911 Operator, build 190) stopped on its first
+// movq mm0, [esi]; Flash/AIR runtimes, Bink and many older 32-bit games use MMX as well.
+typedef union { uint8_t b[8]; uint16_t w[4]; uint32_t d[2]; uint64_t q; int8_t sb[8]; int16_t sw[4]; int32_t sd[2]; } M64;
+#define MMQ(i) (c->xmm[8 + ((i) & 7)].q[0])
+#define DEF_M(NAME, ...)                                                                   \
+    static void m_##NAME##_RR(FxiCpu *c, Uop *u) {                                         \
+        M64 dv, sv; dv.q = MMQ(u->dst); sv.q = MMQ(u->src); M64 *D = &dv; const M64 *S = &sv; \
+        (void)D; (void)S; __VA_ARGS__; MMQ(u->dst) = dv.q; FXI_NEXT(c, u);                \
+    }                                                                                      \
+    static void m_##NAME##_RM(FxiCpu *c, Uop *u) {                                         \
+        M64 dv, sv; dv.q = MMQ(u->dst); sv.q = ld64(fxi_ea(c, u)); M64 *D = &dv; const M64 *S = &sv; \
+        (void)D; (void)S; __VA_ARGS__; MMQ(u->dst) = dv.q; FXI_NEXT(c, u);                \
+    }
+#define L8(...) for (int i = 0; i < 8; i++) { __VA_ARGS__; }
+#define L4(...) for (int i = 0; i < 4; i++) { __VA_ARGS__; }
+#define L2(...) for (int i = 0; i < 2; i++) { __VA_ARGS__; }
+
+DEF_M(paddb, L8(D->b[i] += S->b[i]))
+DEF_M(paddw, L4(D->w[i] += S->w[i]))
+DEF_M(paddd, L2(D->d[i] += S->d[i]))
+DEF_M(paddq, D->q += S->q)
+DEF_M(psubb, L8(D->b[i] -= S->b[i]))
+DEF_M(psubw, L4(D->w[i] -= S->w[i]))
+DEF_M(psubd, L2(D->d[i] -= S->d[i]))
+DEF_M(psubq, D->q -= S->q)
+DEF_M(paddsb, L8(D->sb[i] = (int8_t)satS8(D->sb[i] + S->sb[i])))
+DEF_M(paddsw, L4(D->sw[i] = (int16_t)satS16(D->sw[i] + S->sw[i])))
+DEF_M(paddusb, L8(D->b[i] = (uint8_t)satU8(D->b[i] + S->b[i])))
+DEF_M(paddusw, L4(D->w[i] = (uint16_t)satU16(D->w[i] + S->w[i])))
+DEF_M(psubsb, L8(D->sb[i] = (int8_t)satS8(D->sb[i] - S->sb[i])))
+DEF_M(psubsw, L4(D->sw[i] = (int16_t)satS16(D->sw[i] - S->sw[i])))
+DEF_M(psubusb, L8(D->b[i] = (uint8_t)satU8(D->b[i] - S->b[i])))
+DEF_M(psubusw, L4(D->w[i] = (uint16_t)satU16(D->w[i] - S->w[i])))
+DEF_M(pmullw, L4(D->w[i] = (uint16_t)((int32_t)D->sw[i] * S->sw[i])))
+DEF_M(pmulhw, L4(D->w[i] = (uint16_t)(((int32_t)D->sw[i] * S->sw[i]) >> 16)))
+DEF_M(pmulhuw, L4(D->w[i] = (uint16_t)(((uint32_t)D->w[i] * S->w[i]) >> 16)))
+DEF_M(pmuludq, D->q = (uint64_t)D->d[0] * S->d[0])
+DEF_M(pmaddwd, { M64 r; L2(r.d[i] = (uint32_t)((int64_t)D->sw[2 * i] * S->sw[2 * i] + (int64_t)D->sw[2 * i + 1] * S->sw[2 * i + 1])); *D = r; })
+DEF_M(psadbw, { uint32_t s = 0; L8(s += D->b[i] > S->b[i] ? D->b[i] - S->b[i] : S->b[i] - D->b[i]); D->q = s; })
+DEF_M(pavgb, L8(D->b[i] = (uint8_t)((D->b[i] + S->b[i] + 1) >> 1)))
+DEF_M(pavgw, L4(D->w[i] = (uint16_t)((D->w[i] + S->w[i] + 1) >> 1)))
+DEF_M(pminub, L8(D->b[i] = D->b[i] < S->b[i] ? D->b[i] : S->b[i]))
+DEF_M(pmaxub, L8(D->b[i] = D->b[i] > S->b[i] ? D->b[i] : S->b[i]))
+DEF_M(pminsw, L4(D->sw[i] = D->sw[i] < S->sw[i] ? D->sw[i] : S->sw[i]))
+DEF_M(pmaxsw, L4(D->sw[i] = D->sw[i] > S->sw[i] ? D->sw[i] : S->sw[i]))
+DEF_M(pand, D->q &= S->q)
+DEF_M(pandn, D->q = ~D->q & S->q)
+DEF_M(por, D->q |= S->q)
+DEF_M(pxor, D->q ^= S->q)
+DEF_M(pcmpeqb, L8(D->b[i] = D->b[i] == S->b[i] ? 0xff : 0))
+DEF_M(pcmpeqw, L4(D->w[i] = D->w[i] == S->w[i] ? 0xffff : 0))
+DEF_M(pcmpeqd, L2(D->d[i] = D->d[i] == S->d[i] ? 0xffffffffu : 0))
+DEF_M(pcmpgtb, L8(D->b[i] = D->sb[i] > S->sb[i] ? 0xff : 0))
+DEF_M(pcmpgtw, L4(D->w[i] = D->sw[i] > S->sw[i] ? 0xffff : 0))
+DEF_M(pcmpgtd, L2(D->d[i] = D->sd[i] > S->sd[i] ? 0xffffffffu : 0))
+DEF_M(packsswb, { M64 r; L4(r.sb[i] = sat8(D->sw[i]); r.sb[i + 4] = sat8(S->sw[i])); *D = r; })
+DEF_M(packuswb, { M64 r; L4(r.b[i] = satu8(D->sw[i]); r.b[i + 4] = satu8(S->sw[i])); *D = r; })
+DEF_M(packssdw, { M64 r; L2(r.sw[i] = sat16(D->sd[i]); r.sw[i + 2] = sat16(S->sd[i])); *D = r; })
+DEF_M(punpcklbw, { M64 r; L4(r.b[2 * i] = D->b[i]; r.b[2 * i + 1] = S->b[i]); *D = r; })
+DEF_M(punpckhbw, { M64 r; L4(r.b[2 * i] = D->b[i + 4]; r.b[2 * i + 1] = S->b[i + 4]); *D = r; })
+DEF_M(punpcklwd, { M64 r; L2(r.w[2 * i] = D->w[i]; r.w[2 * i + 1] = S->w[i]); *D = r; })
+DEF_M(punpckhwd, { M64 r; L2(r.w[2 * i] = D->w[i + 2]; r.w[2 * i + 1] = S->w[i + 2]); *D = r; })
+DEF_M(punpckldq, D->d[1] = S->d[0])
+DEF_M(punpckhdq, { D->d[0] = D->d[1]; D->d[1] = S->d[1]; })
+// Shifts by an MMX register or memory count (all 64 bits of it count)
+DEF_M(psrlw, L4(D->w[i] = S->q > 15 ? 0 : (uint16_t)(D->w[i] >> S->q)))
+DEF_M(psrld, L2(D->d[i] = S->q > 31 ? 0 : D->d[i] >> S->q))
+DEF_M(psrlq, D->q = S->q > 63 ? 0 : D->q >> S->q)
+DEF_M(psllw, L4(D->w[i] = S->q > 15 ? 0 : (uint16_t)(D->w[i] << S->q)))
+DEF_M(pslld, L2(D->d[i] = S->q > 31 ? 0 : D->d[i] << S->q))
+DEF_M(psllq, D->q = S->q > 63 ? 0 : D->q << S->q)
+DEF_M(psraw, L4(D->sw[i] = (int16_t)(D->sw[i] >> (S->q > 15 ? 15 : S->q))))
+DEF_M(psrad, L2(D->sd[i] = D->sd[i] >> (S->q > 31 ? 31 : S->q)))
+DEF_M(pshufw, { M64 r; L4(r.w[i] = S->w[(u->imm >> (2 * i)) & 3]); *D = r; })
+DEF_M(movq, D->q = S->q)
+// Shifts by an immediate (dst = the r/m register, u->imm = the count)
+#define DEF_MI(NAME, ...) static void m_##NAME##_RI(FxiCpu *c, Uop *u) { M64 v; v.q = MMQ(u->dst); unsigned n = (unsigned)u->imm; __VA_ARGS__; MMQ(u->dst) = v.q; FXI_NEXT(c, u); }
+DEF_MI(psrlw, L4(v.w[i] = n > 15 ? 0 : (uint16_t)(v.w[i] >> n)))
+DEF_MI(psrld, L2(v.d[i] = n > 31 ? 0 : v.d[i] >> n))
+DEF_MI(psrlq, v.q = n > 63 ? 0 : v.q >> n)
+DEF_MI(psllw, L4(v.w[i] = n > 15 ? 0 : (uint16_t)(v.w[i] << n)))
+DEF_MI(pslld, L2(v.d[i] = n > 31 ? 0 : v.d[i] << n))
+DEF_MI(psllq, v.q = n > 63 ? 0 : v.q << n)
+DEF_MI(psraw, L4(v.sw[i] = (int16_t)(v.sw[i] >> (n > 15 ? 15 : n))))
+DEF_MI(psrad, L2(v.sd[i] = v.sd[i] >> (n > 31 ? 31 : n)))
+// Moves between MMX, general registers and memory
+static void m_movd_XR(FxiCpu *c, Uop *u) { MMQ(u->dst) = (uint32_t)c->r[u->src >> 3]; FXI_NEXT(c, u); }   // movd mm, r32
+static void m_movd_XM(FxiCpu *c, Uop *u) { MMQ(u->dst) = ld32(fxi_ea(c, u)); FXI_NEXT(c, u); }          // movd mm, m32
+static void m_movd_RX(FxiCpu *c, Uop *u) { wr32(c, u->dst, (uint32_t)MMQ(u->src)); FXI_NEXT(c, u); }     // movd r32, mm
+static void m_movd_MX(FxiCpu *c, Uop *u) { st32(fxi_ea(c, u), (uint32_t)MMQ(u->src)); FXI_NEXT(c, u); }  // movd m32, mm
+static void m_movq_MR(FxiCpu *c, Uop *u) { st64(fxi_ea(c, u), MMQ(u->src)); FXI_NEXT(c, u); }           // movq/movntq m64, mm
+static void m_pinsrw_R(FxiCpu *c, Uop *u) { M64 v; v.q = MMQ(u->dst); v.w[u->imm & 3] = (uint16_t)c->r[u->src >> 3]; MMQ(u->dst) = v.q; FXI_NEXT(c, u); }
+static void m_pinsrw_M(FxiCpu *c, Uop *u) { M64 v; v.q = MMQ(u->dst); v.w[u->imm & 3] = (uint16_t)ld16(fxi_ea(c, u)); MMQ(u->dst) = v.q; FXI_NEXT(c, u); }
+static void m_pextrw_R(FxiCpu *c, Uop *u) { M64 v; v.q = MMQ(u->src); wr32(c, u->dst, v.w[u->imm & 3]); FXI_NEXT(c, u); }
+static void m_pmovmskb_RR(FxiCpu *c, Uop *u) { M64 v; v.q = MMQ(u->src); uint32_t m = 0; L8(m |= (uint32_t)(v.b[i] >> 7) << i); wr32(c, u->dst, m); FXI_NEXT(c, u); }
+// maskmovq mm1, mm2: the bytes of mm1 whose mm2 byte has its top bit set go to [edi]
+static void m_maskmovq_RR(FxiCpu *c, Uop *u) {
+    M64 v, m; v.q = MMQ(u->dst); m.q = MMQ(u->src);
+    FXI_TOUCH(c, u);
+    uint64_t a = GPTR(c, c->r[R_DI]);
+    L8(if (m.b[i] & 0x80) st8(a + (uint64_t)i, v.b[i]));
+    FXI_NEXT(c, u);
+}
+static void m_emms(FxiCpu *c, Uop *u) { c->fpu_tags = 0xff; FXI_NEXT(c, u); }
+// Conversions between MMX (two int32) and XMM floats/doubles: dst/src are an XMM and an MMX number
+static void m_cvtpi2ps_RR(FxiCpu *c, Uop *u) { M64 v; v.q = MMQ(u->src); XR(u->dst)->f[0] = (float)v.sd[0]; XR(u->dst)->f[1] = (float)v.sd[1]; FXI_NEXT(c, u); }
+static void m_cvtpi2ps_RM(FxiCpu *c, Uop *u) { M64 v; v.q = ld64(fxi_ea(c, u)); XR(u->dst)->f[0] = (float)v.sd[0]; XR(u->dst)->f[1] = (float)v.sd[1]; FXI_NEXT(c, u); }
+static void m_cvtpi2pd_RR(FxiCpu *c, Uop *u) { M64 v; v.q = MMQ(u->src); XR(u->dst)->g[0] = v.sd[0]; XR(u->dst)->g[1] = v.sd[1]; FXI_NEXT(c, u); }
+static void m_cvtpi2pd_RM(FxiCpu *c, Uop *u) { M64 v; v.q = ld64(fxi_ea(c, u)); XR(u->dst)->g[0] = v.sd[0]; XR(u->dst)->g[1] = v.sd[1]; FXI_NEXT(c, u); }
+#define DEF_MCVT(NAME, LOAD, FIELD, TRUNC)                                                      \
+    static void m_##NAME##_RR(FxiCpu *c, Uop *u) { X128 t = c->xmm[u->src]; M64 r; L2(r.sd[i] = cvt_i32(t.FIELD[i], TRUNC)); MMQ(u->dst) = r.q; FXI_NEXT(c, u); } \
+    static void m_##NAME##_RM(FxiCpu *c, Uop *u) { X128 t; memset(&t, 0, sizeof t); memcpy(&t, (const void *)(uintptr_t)fxi_ea(c, u), LOAD); \
+        M64 r; L2(r.sd[i] = cvt_i32(t.FIELD[i], TRUNC)); MMQ(u->dst) = r.q; FXI_NEXT(c, u); }
+DEF_MCVT(cvtps2pi, 8, f, 0)
+DEF_MCVT(cvttps2pi, 8, f, 1)
+DEF_MCVT(cvtpd2pi, 16, g, 0)
+DEF_MCVT(cvttpd2pi, 16, g, 1)
+static void m_movq2dq_RR(FxiCpu *c, Uop *u) { XR(u->dst)->q[0] = MMQ(u->src); XR(u->dst)->q[1] = 0; FXI_NEXT(c, u); }   // movq2dq xmm, mm
+static void m_movdq2q_RR(FxiCpu *c, Uop *u) { MMQ(u->dst) = XR(u->src)->q[0]; FXI_NEXT(c, u); }                       // movdq2q mm, xmm
+#endif
+
 // ---- name table for the decoder ----
 #define E2(n) { #n "_RR", n##_RR }, { #n "_RM", n##_RM }
 #define E4CVT(n) { #n "_R32", n##_R32 }, { #n "_R64", n##_R64 }, { #n "_M32", n##_M32 }, { #n "_M64", n##_M64 }
@@ -319,6 +446,24 @@ static const struct { const char *name; OpFn fn; } kSse[] = {
     E4CVT(cvtsi2ss), E4CVT(cvtsi2sd), E4CVT(cvttss2si), E4CVT(cvtss2si), E4CVT(cvttsd2si), E4CVT(cvtsd2si),
     { "pinsrd_R", pinsrd_R }, { "pinsrd_M", pinsrd_M }, { "pinsrq_R", pinsrq_R }, { "pinsrq_M", pinsrq_M },
     { "pextrd_R", pextrd_R }, { "pextrd_M", pextrd_M }, { "pextrq_R", pextrq_R }, { "pextrq_M", pextrq_M },
+#if FXI_I386
+#define EM(n) { "m_" #n "_RR", m_##n##_RR }, { "m_" #n "_RM", m_##n##_RM }
+#define EMI(n) { "m_" #n "_RI", m_##n##_RI }
+    EM(paddb), EM(paddw), EM(paddd), EM(paddq), EM(psubb), EM(psubw), EM(psubd), EM(psubq),
+    EM(paddsb), EM(paddsw), EM(paddusb), EM(paddusw), EM(psubsb), EM(psubsw), EM(psubusb), EM(psubusw),
+    EM(pmullw), EM(pmulhw), EM(pmulhuw), EM(pmuludq), EM(pmaddwd), EM(psadbw), EM(pavgb), EM(pavgw),
+    EM(pminub), EM(pmaxub), EM(pminsw), EM(pmaxsw), EM(pand), EM(pandn), EM(por), EM(pxor),
+    EM(pcmpeqb), EM(pcmpeqw), EM(pcmpeqd), EM(pcmpgtb), EM(pcmpgtw), EM(pcmpgtd),
+    EM(packsswb), EM(packuswb), EM(packssdw), EM(punpcklbw), EM(punpckhbw), EM(punpcklwd), EM(punpckhwd),
+    EM(punpckldq), EM(punpckhdq), EM(psrlw), EM(psrld), EM(psrlq), EM(psllw), EM(pslld), EM(psllq),
+    EM(psraw), EM(psrad), EM(pshufw), EM(movq),
+    EMI(psrlw), EMI(psrld), EMI(psrlq), EMI(psllw), EMI(pslld), EMI(psllq), EMI(psraw), EMI(psrad),
+    { "m_movd_XR", m_movd_XR }, { "m_movd_XM", m_movd_XM }, { "m_movd_RX", m_movd_RX }, { "m_movd_MX", m_movd_MX },
+    { "m_movq_MR", m_movq_MR }, { "m_pinsrw_R", m_pinsrw_R }, { "m_pinsrw_M", m_pinsrw_M }, { "m_pextrw_R", m_pextrw_R },
+    { "m_pmovmskb_RR", m_pmovmskb_RR }, { "m_maskmovq_RR", m_maskmovq_RR }, { "m_emms", m_emms },
+    EM(cvtpi2ps), EM(cvtpi2pd), EM(cvtps2pi), EM(cvttps2pi), EM(cvtpd2pi), EM(cvttpd2pi),
+    { "m_movq2dq_RR", m_movq2dq_RR }, { "m_movdq2q_RR", m_movdq2q_RR },
+#endif
 };
 
 OpFn fxi_sse_named(const char *name) {

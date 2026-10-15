@@ -113,6 +113,13 @@ The no-JIT map hook picks each DLL's signed dylib by that DLL's machine, not by 
 is new ground for the 32-bit-after-64-bit order (Madeira calls that direction "future" for its
 JIT path): the phone decides.
 
+The phone decided (build 197, Forager after Dokimon): the 32-bit game's aarch64 half loaded
+`system32\win32u.dll`, which in an ARM64EC session is the ARM64EC build, ran its x64 bytes as
+ARM64 code and faulted. Only the ARM64EC ntdll retries the other farm (`sysx64`), and WoW64 accepts
+an image of any machine. `nextGameRefusal` now refuses a 32-bit game in a session whose first game
+was 64-bit, with a restart message, until the aarch64 side retries `sysaa64`
+(docs/COMPATIBILITY.md, follow-ups). 64-bit after 32-bit is unchanged.
+
 ## 3. What was implemented
 
 | where | what |

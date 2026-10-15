@@ -136,7 +136,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           # Step 5: the D3D/Metal DLLs rebuilt with 16 KB sections (dxmt-pe.yml) replace Madeira's
-          # 4 KB-aligned prebuilt ones, which cannot become signed dylibs.
+          # 4 KB-aligned prebuilt ones, which cannot become signed dylibs. The same artifact carries
+          # the Wine builtins the farm lacks (engine/wine/build-pe-extras.sh: new names only).
           D3D_RUN=$(bash tools/latest-run.sh dxmt-pe.yml || true)
           if [ -n "$D3D_RUN" ] && gh run download "$D3D_RUN" -R "$GITHUB_REPOSITORY" -n d3d-pe-dlls -D "$RUNNER_TEMP/d3d-pe"; then
             cp "$RUNNER_TEMP"/d3d-pe/*.dll engine/wine/madeira/app/Madeira/arm64ec-windows/

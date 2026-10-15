@@ -323,6 +323,84 @@ static void sse(void) {
     out("sse", h);
 }
 
+// ---- MMX (FXI32 keeps mm0-7 in the unused xmm8-15): every form on random and edge 64-bit
+// inputs, register and memory sources, immediate and register shift counts, the moves to and
+// from general registers, pshufw/pinsrw/pextrw/pmovmskb/maskmovq, the MMX <-> XMM conversions,
+// then emms. Valve's 32-bit steam.exe (911 Operator, build 190) stopped on its first movq. ----
+static u64 mbuf[4];
+static unsigned char mmask_dst[16];
+static float mfl[4] __attribute__((aligned(16)));
+static double mdb[2] __attribute__((aligned(16)));
+static u64 q64(void) { return (u64)val() << 32 | val(); }
+#define MMX_RR(INSN) do { mbuf[0] = q64(); mbuf[1] = q64();                                       \
+        __asm__ volatile("movq (%[p]), %%mm0\n\tmovq 8(%[p]), %%mm1\n\t" INSN " %%mm1, %%mm0\n\tmovq %%mm0, 16(%[p])" \
+                         : : [p] "r"(mbuf) : "mm0", "mm1", "memory"); h = mix(h, mbuf[2]);        \
+        mbuf[0] = q64(); mbuf[1] = q64();                                                          \
+        __asm__ volatile("movq (%[p]), %%mm2\n\t" INSN " 8(%[p]), %%mm2\n\tmovq %%mm2, 16(%[p])" \
+                         : : [p] "r"(mbuf) : "mm2", "memory"); h = mix(h, mbuf[2]); } while (0)
+#define MMX_SH(INSN) do { mbuf[0] = q64(); mbuf[1] = rnd() % 70;                                   \
+        __asm__ volatile("movq (%[p]), %%mm3\n\tmovq 8(%[p]), %%mm4\n\t" INSN " %%mm4, %%mm3\n\tmovq %%mm3, 16(%[p])" \
+                         : : [p] "r"(mbuf) : "mm3", "mm4", "memory"); h = mix(h, mbuf[2]);        \
+        __asm__ volatile("movq (%[p]), %%mm5\n\t" INSN " 8(%[p]), %%mm5\n\tmovq %%mm5, 16(%[p])" \
+                         : : [p] "r"(mbuf) : "mm5", "memory"); h = mix(h, mbuf[2]); } while (0)
+#define MMX_SI(INSN) do { mbuf[0] = q64();                                                          \
+        __asm__ volatile("movq (%[p]), %%mm6\n\t" INSN "\n\tmovq %%mm6, 16(%[p])"                \
+                         : : [p] "r"(mbuf) : "mm6", "memory"); h = mix(h, mbuf[2]); } while (0)
+static void mmx(void) {
+    u64 h = H0;
+    for (int i = 0; i < N; i++) {
+        MMX_RR("paddb"); MMX_RR("paddw"); MMX_RR("paddd"); MMX_RR("paddq");
+        MMX_RR("psubb"); MMX_RR("psubw"); MMX_RR("psubd"); MMX_RR("psubq");
+        MMX_RR("paddsb"); MMX_RR("paddsw"); MMX_RR("paddusb"); MMX_RR("paddusw");
+        MMX_RR("psubsb"); MMX_RR("psubsw"); MMX_RR("psubusb"); MMX_RR("psubusw");
+        MMX_RR("pmullw"); MMX_RR("pmulhw"); MMX_RR("pmulhuw"); MMX_RR("pmuludq"); MMX_RR("pmaddwd"); MMX_RR("psadbw");
+        MMX_RR("pavgb"); MMX_RR("pavgw"); MMX_RR("pminub"); MMX_RR("pmaxub"); MMX_RR("pminsw"); MMX_RR("pmaxsw");
+        MMX_RR("pand"); MMX_RR("pandn"); MMX_RR("por"); MMX_RR("pxor");
+        MMX_RR("pcmpeqb"); MMX_RR("pcmpeqw"); MMX_RR("pcmpeqd"); MMX_RR("pcmpgtb"); MMX_RR("pcmpgtw"); MMX_RR("pcmpgtd");
+        MMX_RR("packsswb"); MMX_RR("packuswb"); MMX_RR("packssdw");
+        MMX_RR("punpcklbw"); MMX_RR("punpckhbw"); MMX_RR("punpcklwd"); MMX_RR("punpckhwd"); MMX_RR("punpckldq"); MMX_RR("punpckhdq");
+        MMX_SH("psrlw"); MMX_SH("psrld"); MMX_SH("psrlq"); MMX_SH("psllw"); MMX_SH("pslld"); MMX_SH("psllq");
+        MMX_SH("psraw"); MMX_SH("psrad");
+        MMX_SI("psrlw $3, %%mm6"); MMX_SI("psrld $17, %%mm6"); MMX_SI("psrlq $40, %%mm6"); MMX_SI("psllw $15, %%mm6");
+        MMX_SI("pslld $1, %%mm6"); MMX_SI("psllq $63, %%mm6"); MMX_SI("psraw $9, %%mm6"); MMX_SI("psrad $31, %%mm6");
+        MMX_SI("psrlw $16, %%mm6"); MMX_SI("psraw $40, %%mm6");
+        MMX_SI("pshufw $0x1b, %%mm6, %%mm6"); MMX_SI("pshufw $0xe4, (%[p]), %%mm6");
+        // moves between MMX, general registers and memory
+        u32 g = val(), r1, r2, r3;
+        mbuf[0] = q64();
+        __asm__ volatile("movd %[g], %%mm0\n\tmovq %%mm0, 16(%[p])\n\tmovd 4(%[p]), %%mm1\n\tmovd %%mm1, %[r1]\n\t"
+                         "movq (%[p]), %%mm2\n\tpinsrw $2, %[g], %%mm2\n\tpinsrw $0, 6(%[p]), %%mm2\n\tpextrw $2, %%mm2, %[r2]\n\t"
+                         "pmovmskb %%mm2, %[r3]\n\tmovd %%mm2, 24(%[p])\n\tmovntq %%mm2, 8(%[p])"
+                         : [r1] "=&r"(r1), [r2] "=&r"(r2), [r3] "=&r"(r3) : [p] "r"(mbuf), [g] "r"(g) : "mm0", "mm1", "mm2", "memory");
+        h = mix(mix(mix(mix(mix(h, r1), r2), r3), mbuf[1]), mbuf[2] ^ mbuf[3]);
+        for (int k = 0; k < 16; k++) mmask_dst[k] = (unsigned char)k;
+        mbuf[0] = q64(); mbuf[1] = q64();
+        __asm__ volatile("movq (%[p]), %%mm3\n\tmovq 8(%[p]), %%mm4\n\tmaskmovq %%mm4, %%mm3"
+                         : : [p] "r"(mbuf), "D"(mmask_dst + 3) : "mm3", "mm4", "memory");
+        for (int k = 0; k < 16; k++) h = mix(h, mmask_dst[k]);
+        // conversions between MMX and XMM (finite values in int32 range, nearest and truncating)
+        for (int k = 0; k < 4; k++) mfl[k] = (float)(int)(val() & 0xffffff) / 13.0f - 300000.0f;
+        for (int k = 0; k < 2; k++) mdb[k] = (double)(int)val() / 7.0;
+        mbuf[0] = q64();
+        u64 c[6]; v2 x[2];
+        __asm__ volatile("cvtps2pi (%[f]), %%mm0\n\tmovq %%mm0, (%[c])\n\tmovups (%[f]), %%xmm1\n\tcvttps2pi %%xmm1, %%mm1\n\tmovq %%mm1, 8(%[c])\n\t"
+                         "cvtpd2pi (%[d]), %%mm2\n\tmovq %%mm2, 16(%[c])\n\tmovupd (%[d]), %%xmm2\n\tcvttpd2pi %%xmm2, %%mm3\n\tmovq %%mm3, 24(%[c])\n\t"
+                         "movq (%[p]), %%mm4\n\tmovups (%[f]), %%xmm3\n\tcvtpi2ps %%mm4, %%xmm3\n\tmovups %%xmm3, (%[x])\n\t"
+                         "cvtpi2pd (%[p]), %%xmm4\n\tmovupd %%xmm4, 16(%[x])\n\t"
+                         "movq2dq %%mm4, %%xmm5\n\tmovdq2q %%xmm5, %%mm5\n\tpaddd %%mm4, %%mm5\n\tmovq %%mm5, 32(%[c])\n\temms"
+                         : : [f] "r"(mfl), [d] "r"(mdb), [p] "r"(mbuf), [c] "r"(c), [x] "r"(x)
+                         : "mm0", "mm1", "mm2", "mm3", "mm4", "mm5", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "memory");
+        for (int k = 0; k < 5; k++) h = mix(h, c[k]);
+        h = mix(mix(mix(mix(h, (u64)x[0][0]), (u64)x[0][1]), (u64)x[1][0]), (u64)x[1][1]);
+        // x87 after emms: the stack is empty again
+        double z = (double)(int)val() * 0.5;
+        __asm__ volatile("emms\n\tfldl %[z]\n\tfld1\n\tfaddp\n\tfstpl %[z]" : [z] "+m"(z));
+        u64 zb; __builtin_memcpy(&zb, &z, 8); h = mix(h, zb);
+    }
+    __asm__ volatile("emms");
+    out("mmx", h);
+}
+
 // ---- SSE3 (DXMT's i386 D3D9 frontend is built with -msse3): duplicates, horizontal and
 // alternating add/sub, lddqu. Finite values (NaN results differ between hosts in sign). ----
 static float sse3_f[16] __attribute__((aligned(16)));
@@ -454,7 +532,7 @@ static const test_fn kTests[] = {
     lea_l, lea_w, lea_abs, xchg_l, xchg_b, xadd_l, bt_l, bts_l, btr_l, btc_w, bt_imm_l, bts_imm_l, bsf_l, bsr_l,
     cmov_l, cmov_w, cwde,
     cc_o, cc_no, cc_b, cc_ae, cc_e, cc_ne, cc_be, cc_a, cc_s, cc_ns, cc_p, cc_np, cc_l, cc_ge, cc_le, cc_g,
-    muldiv, stack_forms, moffs, strings, control, sse, sse3,
+    muldiv, stack_forms, moffs, strings, control, sse, sse3, mmx,
     daa, das, aaa, aas, aam10, aam16, aam73, aad10, aad7, alias82, xlat_loop, enter_bound,
 };
 
