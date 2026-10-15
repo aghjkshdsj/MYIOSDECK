@@ -80,7 +80,7 @@ jobs:
       - name: Track B XCTest on iOS Simulator
         run: |
           DEVICE=$(xcrun simctl list devices available -j | python3 -c 'import sys,json; d=json.load(sys.stdin)["devices"]; print(next(x["udid"] for v in d.values() for x in v if "iPhone" in x["name"]))')
-          xcodebuild test -project MYIOSDECK.xcodeproj -scheme TrackBTests -configuration Debug -destination "platform=iOS Simulator,id=$DEVICE" -derivedDataPath build/test-dd CODE_SIGNING_ALLOWED=NO > build/track-b-tests.log 2>&1 || { grep -E '(error:|failed|Executed)' build/track-b-tests.log | head -100; exit 1; }
+          xcodebuild test -project MYIOSDECK.xcodeproj -scheme TrackBTests -parallel-testing-enabled NO -configuration Debug -destination "platform=iOS Simulator,id=$DEVICE" -derivedDataPath build/test-dd CODE_SIGNING_ALLOWED=NO > build/track-b-tests.log 2>&1 || { grep -E '(error:|failed|Executed)' build/track-b-tests.log | head -100; exit 1; }
           grep -E '(Executed|Test Suite.*passed)' build/track-b-tests.log | tail -10
 
       - uses: actions/upload-artifact@v5

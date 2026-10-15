@@ -73,3 +73,4 @@ Steam sign-in, live downloads, Wine gameplay or sanitizer results.
   Its supported reuse path keeps the same runtime session alive. Track B's fixed lifecycle
   instead stops the server after a launch, so this integration explicitly requires restarting
   the app before another session; it does not bypass cleanup or silently keep a stopped session.
+- Build 205: made the input test NaN explicitly CGFloat for the current SDK overloads; simulator tests run serially because some tests exercise UserDefaults.

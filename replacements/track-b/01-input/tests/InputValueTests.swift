@@ -80,7 +80,7 @@ final class InputValueTests: XCTestCase {
         XCTAssertEqual(g.map(CGPoint(x: -100, y: -100), bounds: bounds), CGPoint(x: 0, y: 40))
         let tiny = BInputGeometry(width: 0, height: -10, picture: nil)
         XCTAssertEqual(tiny.reach, CGRect(x: 0, y: 0, width: 1, height: 1))
-        XCTAssertEqual(BInputGeometry.clamp(CGPoint(x: 99, y: .nan), to: tiny.reach), .zero)
+        XCTAssertEqual(BInputGeometry.clamp(CGPoint(x: 99, y: CGFloat.nan), to: tiny.reach), .zero)
         let outside = BInputGeometry(width: 100, height: 100, picture: CGRect(x: 200, y: 200, width: 10, height: 10))
         XCTAssertEqual(outside.reach, outside.desktop)
         XCTAssertEqual(outside.unit(.zero), CGPoint(x: -20, y: -20))
