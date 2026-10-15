@@ -33,6 +33,7 @@
 #include "gpta_pin_pload.h"
 #include "gpta_pin_asm_pload.h"
 #include "gpta_pin_asm_fload.h"
+#include "gpta_pin_asm_salu.h"
 #include "gpta_pin_step_noadj.h"
 #include "gpta_pin_eareuse.h"
 #include "gpta_pin_movtest.h"
@@ -424,7 +425,7 @@ static int is_shuffle(const char *n) {
 // at one place per copy alternates between the copies of a trace, which also spaces out repeats of
 // the same branch (the probe: a branch taken again within a few dispatches costs more).
 #if GPTA_USE_ASM_PLOAD
-#define RMAP_SLOTS (1u << 22)   // include all static ARM scale/operand replicas
+#define RMAP_SLOTS (1u << 23)   // include static ARM address and shift/ALU replicas
 #else
 #define RMAP_SLOTS (1u << 21)
 #endif
@@ -490,6 +491,9 @@ static void rmap_init(void) {
     RMAP(t_afl_addpd); RMAP(t_afl_subpd); RMAP(t_afl_mulpd);
     RMAP(t_afl_addss); RMAP(t_afl_subss); RMAP(t_afl_mulss);
     RMAP(t_afl_addsd); RMAP(t_afl_subsd); RMAP(t_afl_mulsd);
+#define ASAL_RMAP(N) RMAP(N);
+    GPTA_ASM_SALU_TABLES(ASAL_RMAP)
+#undef ASAL_RMAP
 #endif
     RMAP(t_lp_first0); RMAP(t_lp_first1); RMAP(t_lp_first2); RMAP(t_lp_first3);
     RMAP(t_lp_next0); RMAP(t_lp_next1); RMAP(t_lp_next2); RMAP(t_lp_next3);
@@ -1384,9 +1388,42 @@ static int lower_direct_load_pair(Out *o, const Uop *u, uint32_t left) {
     return 1;
 }
 
+// Immediate shift/rotate followed by register ALU on that destination.
+// The independent corpus contains this pair in its copy/shift/ALU family.
+// Compile all opcode/count/operand combinations; retain ordinary lowering
+// for zero masked counts, live flags and Windows until full flag recovery.
+static int lower_shift_alu(Out *o, const Uop *u, uint32_t left) {
+#if GPTA_USE_ASM_PLOAD
+    if (left < 2 || g_win) return 0;
+    const Desc *a = find(u[0].fn), *b = find(u[1].fn);
+    if (!a || !b || a->fam != FAM_SHIFT || a->b || a->c2 < 2 || u[0].src == 0xffff ||
+        b->fam != FAM_ALU || b->b != F_RR || b->c2 != a->c2 || u[1].flive) return 0;
+    int D = greg(u[0].dst), E = greg(u[1].src);
+    if (D < 0 || E < 0 || greg(u[1].dst) != D) return 0;
+    int sh = a->a == SH_SHL || a->a == SH_SAL ? 0 : a->a == SH_SHR ? 1 :
+        a->a == SH_SAR ? 2 : a->a == SH_ROL ? 3 : a->a == SH_ROR ? 4 : -1;
+    int op = b->a == ALU_ADD ? 0 : b->a == ALU_SUB ? 1 : b->a == ALU_AND ? 2 :
+        b->a == ALU_OR ? 3 : b->a == ALU_XOR ? 4 : -1;
+    unsigned n = (unsigned)u[0].imm & (a->c2 == 2 ? 31 : 63);
+    if (sh < 0 || op < 0 || !n) return 0;
+    static const PFn (*const tables[5][5])[64][16][16] = {
+#define ASAL_ROW(SH) { gpta_t_asal_##SH##_add,gpta_t_asal_##SH##_sub,gpta_t_asal_##SH##_and,gpta_t_asal_##SH##_or,gpta_t_asal_##SH##_xor }
+        ASAL_ROW(shl),ASAL_ROW(shr),ASAL_ROW(sar),ASAL_ROW(rol),ASAL_ROW(ror)
+#undef ASAL_ROW
+    };
+    put_uop(o,u,tables[sh][op][a->c2-2][n][D][E]);
+    return 1;
+#else
+    return 0;
+#endif
+}
+
 static void lower_block(Out *o, const Block *b) {
     for (uint32_t i = 0; i < b->n; i++) {
         int start = o->n, np = o->np;
+        if (lower_shift_alu(o,&b->u[i],b->n-i)) {
+            bound(o,start,np,b->u[i].rip,0); i++; continue;
+        }
         if (i + 2 < b->n && lower_arith_fcj(o,&b->u[i])) {
             bound(o,start,np,b->u[i].rip,0); i += 2; continue;
         }
@@ -1808,6 +1845,9 @@ static void hidx_build(void) {
     GPTA_PLOAD_TABLES(XL_HIDX)
     GPTA_ASM_PLOAD_TABLES(XL_HIDX)
     GPTA_ASM_FLOAD_TABLES(XL_HIDX)
+#define ASAL_HIDX(N) hidx_tab((const PFn *)gpta_##N, sizeof gpta_##N / sizeof(PFn));
+    GPTA_ASM_SALU_TABLES(ASAL_HIDX)
+#undef ASAL_HIDX
     LP_FIRST_TABLES(XL_HIDX)
     LP_NEXT_TABLES(XL_HIDX)
 #undef XL_HIDX

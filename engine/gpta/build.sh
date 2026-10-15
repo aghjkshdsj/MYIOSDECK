@@ -24,6 +24,7 @@ printf '%s\n' $SRCS | xargs -P "$JOBS" -I{} sh -c '$CC $CFLAGS -c "$HERE/{}" -o 
 if [ "$(uname -m)" = aarch64 ]; then
     python3 "$HERE/gen_pload_asm.py" "$OUT/asm"
     python3 "$HERE/gen_fload_asm.py" "$OUT/asm"
+    python3 "$HERE/gen_salu_asm.py" "$OUT/asm"
     find "$OUT/asm" -name '*.S' -print0 | xargs -0 -P "$JOBS" -I{} sh -c '$CC $CFLAGS -I "$HERE" -c "{}" -o "$OUT/obj/$(basename {} .S).o" || exit 255'
 fi
 "$CC" -o "$OUT/gpta" "$OUT"/obj/*.o -lm -lpthread

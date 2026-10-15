@@ -76,6 +76,7 @@ row below. Interrupted or defective trials are recorded separately.
 | 2a75892 | [38652737023](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38652737023) | 30.74% | 31.44% | 8.17% | 13.98% |
 | 38b402d | [38748996922](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38748996922) | 31.24% | 29.83% | 8.12% | 13.96% |
 | 3af903a | [38750048972](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38750048972) | 31.09% | 30.84% | 8.33% | 13.99% |
+| 1326359 | [38751887410](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38751887410) | 31.87% | 30.39% | 8.46% | 14.00% |
 
 The third trial (result-width branches and simplified floating comparisons)
 regressed. Its ARM64, x86 and iOS gates passed. That trial is rolled back in
@@ -595,6 +596,15 @@ All existing exact-fault and assembly-audit gates remain mandatory. The
 replica hash table is enlarged on this configuration to hold the extra static
 entries. This trial is not measured yet; iPhone execution remains untested.
 
+The packed static trial passed every gate in run 38751887410, including its
+complete native matrix and the full-symbol precision audit. Both suite means
+remain below 50%, as recorded above. The original run 38751523257 completed
+Linux checks and measurements but does not count: BSD xargs rejected the iOS
+assembly compile command before compilation. Its separate raw samples are
+retained; the corrected run is not a best-sample selection. The standard
+profile confirms the packed static handlers are selected. Device execution
+is still not measured.
+
 The next static assembly trial applies the same approach to the existing
 corpus-selected floating load/ADD/SUB/MUL pairs (PS/PD/SS/SD). The standard
 SIMD profile in run 38748996922 identifies runtime scale handling in those
@@ -612,6 +622,19 @@ Standard-only profiling also saves instruction-level perf annotations for
 the mechanically selected hottest symbol and the vector-map adapter. This
 diagnostic-only change leaves engine execution and measured samples
 unchanged; it distinguishes dispatch cost from actual map transitions.
+
+The following trial specializes immediate shift/rotate plus register ALU
+pairs with dead output flags. These pairs occur in the independent corpus's
+copy/shift/ALU family (run 38649944140); the engine matches only the final
+two instructions. It retains the existing copy/shift pair priority. All
+SHL/SHR/SAR/ROL/ROR, ADD/SUB/AND/OR/XOR, 32/64-bit widths, nonzero masked
+counts and register aliases are compiled. ARM shifted operands combine the
+arithmetic where its ISA permits; other cases retain both host operations.
+No guest loop is recognized. Live flags, zero counts and Windows use existing
+lowering. A native unsigned reference checks every static entry, and guest
+differential cases verify count masking, aliases and live-flag fallbacks.
+The replica table grows to retain all static entries without filling its
+open-addressed map. Speed is not measured yet. The held-out source is untouched.
 
 Profile standard workloads with perf stat and perf record. Choose any new
 instruction-pair families from the independent corpus in engine/gpta/corpus.sh.

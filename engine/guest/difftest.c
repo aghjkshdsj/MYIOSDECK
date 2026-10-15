@@ -1085,6 +1085,39 @@ static void gpta_copy_shift_counts(void) {
     out("gpta_copy_shift_counts", h);
 }
 
+// A TEST separates setup copies from these pairs. Both flag liveness paths,
+// source aliases and masked count boundaries use native x86 as the oracle.
+#define SAL_CASE(COUNT,SH,OP,REG,RHS,TAIL) do { \
+    u64 a = val(), b = val(), got[3]; \
+    __asm__ volatile("movq %[a], %%rax\n\tmovq %[b], %%rbx\n\ttestq %%rax, %%rax\n\t" \
+        SH " $" #COUNT ", " REG "\n\t" OP " " RHS ", " REG "\n\t" TAIL \
+        "movq %%rax, 0(%[out])\n\tmovq %%rbx, 8(%[out])\n\tpushfq\n\tpopq 16(%[out])" \
+        : : [a] "r"(a), [b] "r"(b), [out] "r"(got) : "rax","rbx","cc","memory"); \
+    h = mix(mix(mix(h,got[0]),got[1]),got[2] & (ARITH & ~0x10ull)); \
+} while (0)
+#define SAL_FORMS(COUNT,SH,OP) \
+    SAL_CASE(COUNT,SH "l",OP "l","%%eax","%%ebx","testq %%rax, %%rax\n\t"); \
+    SAL_CASE(COUNT,SH "l",OP "l","%%eax","%%eax","testq %%rax, %%rax\n\t"); \
+    SAL_CASE(COUNT,SH "q",OP "q","%%rax","%%rbx","testq %%rax, %%rax\n\t"); \
+    SAL_CASE(COUNT,SH "q",OP "q","%%rax","%%rax","testq %%rax, %%rax\n\t"); \
+    SAL_CASE(COUNT,SH "l",OP "l","%%eax","%%ebx",""); \
+    SAL_CASE(COUNT,SH "l",OP "l","%%eax","%%eax",""); \
+    SAL_CASE(COUNT,SH "q",OP "q","%%rax","%%rbx",""); \
+    SAL_CASE(COUNT,SH "q",OP "q","%%rax","%%rax","")
+#define SAL_ALUS(COUNT,SH) \
+    SAL_FORMS(COUNT,SH,"add"); SAL_FORMS(COUNT,SH,"sub"); SAL_FORMS(COUNT,SH,"and"); \
+    SAL_FORMS(COUNT,SH,"or"); SAL_FORMS(COUNT,SH,"xor")
+#define SAL_COUNTS(SH) \
+    SAL_ALUS(0,SH); SAL_ALUS(1,SH); SAL_ALUS(7,SH); SAL_ALUS(31,SH); SAL_ALUS(32,SH); \
+    SAL_ALUS(63,SH); SAL_ALUS(64,SH); SAL_ALUS(127,SH); SAL_ALUS(255,SH)
+static void gpta_shift_alu_pairs(void) {
+    u64 h = 14695981039346656037ull;
+    for (int i = 0; i < N; i++) {
+        SAL_COUNTS("shl"); SAL_COUNTS("shr"); SAL_COUNTS("sar"); SAL_COUNTS("rol"); SAL_COUNTS("ror");
+    }
+    out("gpta_shift_alu_pairs",h);
+}
+
 static void gpta_shift_counts(void) {
     u64 h = 14695981039346656037ull;
     for (int i = 0; i < N; i++) {
@@ -1823,7 +1856,7 @@ static const test_fn kTests[] = {
     fz_o, fz_no, fz_b, fz_ae, fz_e, fz_ne, fz_be, fz_a, fz_s, fz_ns, fz_p, fz_np, fz_l, fz_ge, fz_le, fz_g,
     fc_o, fc_no, fc_b, fc_ae, fc_e, fc_ne, fc_be, fc_a, fc_s, fc_ns, fc_p, fc_np, fc_l, fc_ge, fc_le, fc_g,
     fz_call, fz_index, fz_xindex, fz_3op, fz_3gap, fz_x3, fz_hoist, gpta_xmem, gpta_result_flags, gpta_xhigh, gpta_cf_flow,
-    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow, gpta_fcj_trace, gpta_jresult_trace, gpta_immstores, gpta_x3high, gpta_step_trace, gpta_shift_counts, gpta_copy_shift_counts, gpta_unary_edges, gpta_alu_memory, gpta_xmm_lane_state, gpta_scalar_mem, gpta_unary_flag_inputs, gpta_xmap_transitions, gpta_cf_only, gpta_unary_trace, gpta_xload_pairs, gpta_ea_pairs, gpta_mov_test_branch, gpta_arith_float_branch, gpta_shift_xor, gpta_arith_float_trace, gpta_direct_load_pairs, gpta_pload_pairs,
+    gpta_scaled_moves, gpta_high_comis, gpta_op3r, gpta_known_carry, gpta_narrow, gpta_fcj_trace, gpta_jresult_trace, gpta_immstores, gpta_x3high, gpta_step_trace, gpta_shift_counts, gpta_copy_shift_counts, gpta_shift_alu_pairs, gpta_unary_edges, gpta_alu_memory, gpta_xmm_lane_state, gpta_scalar_mem, gpta_unary_flag_inputs, gpta_xmap_transitions, gpta_cf_only, gpta_unary_trace, gpta_xload_pairs, gpta_ea_pairs, gpta_mov_test_branch, gpta_arith_float_branch, gpta_shift_xor, gpta_arith_float_trace, gpta_direct_load_pairs, gpta_pload_pairs,
 };
 
 int guest_main(int argc, char **argv) {
