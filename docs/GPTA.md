@@ -660,6 +660,17 @@ and its architectural uop stride is already asserted. All existing trace,
 NaN, alias, exit-flag, suspend and fault gates remain required. Speed is not
 measured yet; this is a scheduling hypothesis, not a performance claim.
 
+The subsequent audit-only change reuses a safe analysis result for an exactly
+matching handler body and local control-flow offsets. Registers, operands,
+immediates and instruction offsets stay in the complete comparison key;
+only code relocation and external branch addresses are normalized, because
+the existing analyser follows only local edges. Unsafe bodies are always
+reanalyzed, and all symbol names still receive their own exclusion decision
+and counts. Cache size and key bytes are bounded. Regression tests cover
+relocation, changed branches/registers/memory, unsafe duplicates and cache
+limits. The analyser's state model and exclusions are unchanged. This reduces
+repeated CI work, not interpreter execution time; speed is not measured yet.
+
 Profile standard workloads with perf stat and perf record. Choose any new
 instruction-pair families from the independent corpus in engine/gpta/corpus.sh.
 Never replace a recognized guest loop with a host loop.

@@ -163,6 +163,53 @@ def family(name):
     name = re.sub(r'_(\d+|[ZM]|N|F|IN|I|64N|32N|64F|32F|64|32|16|8)(?=_|$)', '_#', name)
     return re.sub(r'(_#)+', '_#', name)
 
+
+def analysis_key(insns):
+    """Exact model input modulo relocation of this handler's code addresses.
+
+    analyse() uses absolute addresses only to identify local branch edges.
+    Keep every instruction offset, register, immediate and memory operand;
+    normalize branch destinations to local offsets or an external marker.
+    The full key is compared, not a digest or a handler-name pattern.
+    """
+    if not insns: return b''
+    lo, hi = insns[0][0], insns[-1][0]
+    fields = []
+    for a, mn, ops in insns:
+        if mn in ('b', 'cbz', 'cbnz', 'tbz', 'tbnz') or mn.startswith('b.'):
+            target = re.search(r'\b([0-9a-f]+)$', ops)
+            if target:
+                value = int(target[1], 16)
+                edge = '@local:' + str(value-lo) if lo <= value <= hi else '@external'
+                ops = ops[:target.start(1)] + edge
+        fields.extend((str(a-lo), mn, ops))
+    return '\0'.join(fields).encode('utf-8')
+
+
+class SafeBodies:
+    """Bounded exact-body certificates; unsafe bodies are never cached."""
+    def __init__(self, max_entries=131072, max_bytes=64*1024*1024):
+        self.entries = collections.OrderedDict()
+        self.max_entries, self.max_bytes = max_entries, max_bytes
+        self.bytes = self.hits = self.fresh = 0
+
+    def check(self, insns):
+        key = analysis_key(insns)
+        if key in self.entries:
+            guest = self.entries[key]
+            self.entries.move_to_end(key)
+            self.hits += 1
+            return [], guest
+        self.fresh += 1
+        violations, guest = analyse(insns)
+        if not violations and self.max_entries > 0 and len(key) <= self.max_bytes:
+            while self.entries and (len(self.entries) >= self.max_entries or self.bytes+len(key) > self.max_bytes):
+                old, _ = self.entries.popitem(last=False)
+                self.bytes -= len(old)
+            self.entries[key] = guest
+            self.bytes += len(key)
+        return violations, guest
+
 # Pair fusions Windows mode does not use (gpta_pin.c, try_fuse: g_win): their second instruction
 # touches memory after the first wrote a register, so they may report a violation.
 WIN_EXCLUDED = ('p_amr_', 'p_alea_', 'p_ami_', 'p_axz_', 'p_pop2_', 'p_push2_', 'p_popret_')
@@ -175,11 +222,12 @@ def main():
     total = with_guest = bad = 0
     fam = collections.Counter(); famall = collections.Counter(); examples = {}
     gate = 0
-    # Each handler's control-flow analysis is unchanged. Retain only the
-    # current handler and short diagnostic examples, not the whole image.
+    bodies = SafeBodies()
+    # Each handler's control-flow analysis is unchanged. Retain the current
+    # handler, bounded exact-body keys and short examples, not the whole image.
     for name, insns in iter_funcs(open(sys.argv[1], errors='replace')):
         total += 1
-        v, g = analyse(insns)
+        v, g = bodies.check(insns)
         if g: with_guest += 1
         f = family(name)
         famall[f] += 1
@@ -190,6 +238,9 @@ def main():
             if not name.startswith(WIN_EXCLUDED + NAT_EXCLUDED): gate += 1
     print('precise: %d pinned handlers, %d touch guest memory, %d may fault after a side effect, '
           '%d of them used in Windows mode' % (total, with_guest, bad, gate))
+    print('precise: %d exact-body safety certificates reused, %d bodies freshly analysed; '
+          'cache retains %d keys, %d key bytes' %
+          (bodies.hits, bodies.fresh, len(bodies.entries), bodies.bytes))
     for f, n in fam.most_common(60):
         name, (a, mn, why), start, _ = examples[f]
         print('  %6d / %-6d %-28s e.g. %s at +%#x (%s) after %s%s' % (n, famall[f], f, name, a - start, mn, why,
