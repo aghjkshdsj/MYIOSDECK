@@ -60,3 +60,16 @@ audit and release-export audit. The workflow creates an ad-hoc-signed IPA artifa
 not publish a release and does not merge main. Sideloading requires re-signing with the
 user's provisioning identity. Successful CI is not evidence of device execution, live
 Steam sign-in, live downloads, Wine gameplay or sanitizer results.
+
+## Integration build fixes
+
+- Build 204: the simulator SDK has the system liblzma binary but not its public headers.
+  CI now stages unchanged public headers from Homebrew xz for compilation and still links
+  Apple's system liblzma. No replacement decoder or unrelated runtime is rebuilt.
+- Host settings now query the replacement touch-mode store through a separate adapter;
+  host launch selection and single-session refusal messages were aligned with the new path.
+- Runtime limitation evidence: the repository's existing SESSION_REUSE investigation records
+  that server and loader state cannot be torn down and initialized again in one app process.
+  Its supported reuse path keeps the same runtime session alive. Track B's fixed lifecycle
+  instead stops the server after a launch, so this integration explicitly requires restarting
+  the app before another session; it does not bypass cleanup or silently keep a stopped session.

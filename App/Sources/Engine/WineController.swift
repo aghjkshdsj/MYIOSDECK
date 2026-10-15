@@ -85,7 +85,10 @@ final class WineController: ObservableObject, @unchecked Sendable {
             // A Steam game's end, however it ended (its own quit, Quit game, Force quit, a crash,
             // a start that failed): its changed saves go up to Steam Cloud (SteamCloudSync).
             switch state {
-            case .finished, .failed: Task { @MainActor in SteamCloudSync.shared.gameEnded() }
+            case .finished, .failed: Task { @MainActor in
+                if self.dockActive { TrackBSteamHostIntegration.release() }
+                SteamCloudSync.shared.gameEnded()
+            }
             default: break
             }
         }
@@ -187,42 +190,13 @@ final class WineController: ObservableObject, @unchecked Sendable {
     /// Why another game cannot start now (nil: it can, as far as is known without the game;
     /// `kind` adds the game's own checks).
     func nextGameRefusal(_ kind: SessionKind? = nil) -> String? {
-        let restart = "To play another, swipe MYIOSDECK away in the app switcher and open it again."
-        guard Self.reuseEnabled else {
-            return "MYIOSDECK runs one Windows game per launch. \(restart) (Settings › Without JIT › Play another game without restarting lets the next game start without that.)"
-        }
-        guard let session = sessionKind, session.noJIT, sessionKept else {
-            return "This Wine session was not kept for another game (it started with JIT, or before Play another game without restarting was on). \(restart)"
-        }
-        guard mid_wine_session_reusable() != 0 else {
-            return "The last game's Wine session is no longer running. \(restart)"
-        }
-        if let kind {
-            if !kind.noJIT {
-                return "Another game can start in the running Wine session only without JIT. \(restart)"
-            }
-            // A 64-bit game after a 32-bit one, or the reverse, runs as Madeira's cross-architecture
-            // processes do (the bridge keeps the session's system32; docs/SESSION_REUSE.md).
-            // The controller is never a reason: XInput is there in every session, and the
-            // DualSense in every session of a build with the hidpad gate (run()).
-        }
-        // The x64 CPU is not a reason to refuse: every 64-bit game of a run takes the first one's (run()).
-        let freeMB = os_proc_available_memory() >> 20
-        if freeMB < Self.minFreeMB {
-            return "Only \(freeMB) MB of memory is free: an earlier game's memory stays in use until MYIOSDECK closes. \(restart)"
-        }
-        return nil
+        programsThisRun > 0 ? "Restart MYIOSDECK before starting another Windows session." : nil
     }
 
-    /// What kind of start run() is doing (set by the run* helpers just before it).
     private enum Launch { case program, steam, custom, dock }
     private var nextLaunch = Launch.program
-
     private let queue = DispatchQueue(label: "myiosdeck.wine", qos: .userInitiated)
-
-    var prefixURL: URL {
-        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("wine-prefix")
-    }
+    var prefixURL: URL { SteamLibrary.prefix }
 
     /// Stage 4d: a Steam game started as its own program (no Steam client). The
     /// bridge publishes its identity (SteamAppId / SteamGameId / SteamAppPath)
@@ -308,6 +282,10 @@ final class WineController: ObservableObject, @unchecked Sendable {
             state = .failed(why)
         }
         guard linked else { return refuse("This build does not include Wine yet.") }
+        if launch != .dock && MainActor.assumeIsolated({ TrackBSessionGate.reserved }) {
+            dlog("[steamhost] another Windows launch is blocked while Steam owns the session")
+            return
+        }
         switch state {
         case .booting, .running:
             // A game is still running, maybe with its view hidden: its state stays as it is (a

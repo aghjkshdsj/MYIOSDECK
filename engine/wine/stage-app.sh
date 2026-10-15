@@ -28,6 +28,7 @@ A="$M/app/Madeira"
 ls "$A/arm64ec-windows/ntdll.dll" "$A/arm64ec-windows/xtajit64.dll" "$A/prefix-template.tar.gz" > /dev/null
 
 # Track B owns all app-side bridge code. Stage binary dependencies and resources only.
+rm -f "$A/arm64ec-windows/dockhost.exe" "$A/arm64ec-windows/dock-notices.txt"
 
 LINK=""
 for f in "$LIBS"/*.a; do LINK="$LINK \$(SRCROOT)/${f#"$ROOT/"}"; done

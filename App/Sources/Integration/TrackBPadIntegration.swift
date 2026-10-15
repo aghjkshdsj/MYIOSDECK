@@ -2,6 +2,12 @@
 // Copyright (c) 2026 the MYIOSDECK author
 import Foundation
 
+extension GameInput {
+    static func touchMode(gameKey: String) -> TouchMode {
+        TouchMode(rawValue: UserDefaults.standard.string(forKey: "touchMode.\(gameKey)") ?? "") ?? .off
+    }
+}
+
 // Owned by ControllerBridge.queue; keeps app UI capture and touch-pad composition outside
 // the clean-room input implementation. Package sampling invokes one integration hook.
 final class TrackBPadIntegration {

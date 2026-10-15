@@ -107,6 +107,7 @@ targets:
         HEADER_SEARCH_PATHS:
           - "$(inherited)"
           - "$(SRCROOT)/App/Generated"
+          - "$(SRCROOT)/build/lzma-include"
           - "$(SRCROOT)/replacements/track-b/02-wine-bridge"
           - "$(SRCROOT)/replacements/track-b/03-steam-client"
           - "$(SRCROOT)/engine/guest"
@@ -151,6 +152,7 @@ targets:
         SWIFT_OBJC_BRIDGING_HEADER: tests/track-b/Bridging.h
         HEADER_SEARCH_PATHS:
           - "$(SRCROOT)/App/Sources/Native"
+          - "$(SRCROOT)/build/lzma-include"
           - "$(SRCROOT)/replacements/track-b/03-steam-client"
           - "$(SRCROOT)/replacements/track-b/03-steam-client/tests"
         OTHER_LDFLAGS: ["-lz", "-llzma", "-lcompression"]

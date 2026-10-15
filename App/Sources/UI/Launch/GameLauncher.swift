@@ -162,7 +162,9 @@ final class GameLauncher: ObservableObject {
                 }
             }
             do {
-                let plan = viaDock ? SteamLaunchPlan(exe: "", arguments: "", workingFolder: "", appPath: "") : try await steamLibrary.launchPlan(game.id)
+                let plan: SteamLaunchPlan
+                if viaDock { plan = SteamLaunchPlan(exe: "", arguments: "", workingFolder: "", appPath: "") }
+                else { plan = try await steamLibrary.launchPlan(game.id) }
                 let dock = MadeiraDock.bundled && viaDock
                 GameSettingsStore.prepareLaunch(RecentlyPlayed.steam(game.id), wine: wine)
                 if dock {
