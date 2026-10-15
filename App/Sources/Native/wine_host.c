@@ -139,7 +139,7 @@ void mid_pad_set(int slot, int connected, uint16_t buttons, uint8_t lt, uint8_t 
     winios_gamepad_set_state(slot, &s);
 }
 
-void mid_hidpad_set(int connected, uint16_t buttons, uint8_t lt, uint8_t rt,
+void mid_hidpad_set(int connected, uint32_t buttons, uint8_t lt, uint8_t rt,
                     int16_t lx, int16_t ly, int16_t rx, int16_t ry) {
     if (!connected) { winios_hidpad_set_state(NULL); return; }
     struct winios_hidpad h = {0};
@@ -152,6 +152,22 @@ void mid_hidpad_set(int connected, uint16_t buttons, uint8_t lt, uint8_t rt,
     h.battery = WINIOS_HIDPAD_BATTERY_UNKNOWN;
     winios_hidpad_set_state(&h);
 }
+
+int mid_hidpad_gate(void) {
+#ifdef MYIOSDECK_HIDPAD_GATE
+    return 1;
+#else
+    return 0;
+#endif
+}
+
+/* Madeira's PadOutput.m (staged app source; its GCController parameter is an object pointer). */
+extern void madeira_pad_output_configure(int xinput, int hid);
+extern void madeira_pad_output_set_slot(int slot, void *controller);
+extern void madeira_pad_output_set_active(int active);
+void mid_pad_output_configure(int xinput, int hid) { madeira_pad_output_configure(xinput, hid); }
+void mid_pad_output_set_slot(int slot, void *controller) { madeira_pad_output_set_slot(slot, controller); }
+void mid_pad_output_set_active(int active) { madeira_pad_output_set_active(active); }
 
 extern void winios_post_key(int vk, int down);
 extern void winios_pointer(int x, int y, unsigned int flags, unsigned int data);
@@ -342,7 +358,11 @@ void mid_pad_set(int slot, int connected, uint16_t buttons, uint8_t lt, uint8_t 
                  int16_t lx, int16_t ly, int16_t rx, int16_t ry) {
     (void)slot; (void)connected; (void)buttons; (void)lt; (void)rt; (void)lx; (void)ly; (void)rx; (void)ry;
 }
-void mid_hidpad_set(int connected, uint16_t buttons, uint8_t lt, uint8_t rt,
+int mid_hidpad_gate(void) { return 0; }
+void mid_pad_output_configure(int xinput, int hid) { (void)xinput; (void)hid; }
+void mid_pad_output_set_slot(int slot, void *controller) { (void)slot; (void)controller; }
+void mid_pad_output_set_active(int active) { (void)active; }
+void mid_hidpad_set(int connected, uint32_t buttons, uint8_t lt, uint8_t rt,
                     int16_t lx, int16_t ly, int16_t rx, int16_t ry) {
     (void)connected; (void)buttons; (void)lt; (void)rt; (void)lx; (void)ly; (void)rx; (void)ry;
 }

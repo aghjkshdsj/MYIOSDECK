@@ -67,6 +67,8 @@ final class Settings: ObservableObject {
     @Published var touchPadMode: String { didSet { d.set(touchPadMode, forKey: "touchPadMode") } }
     /// A light tap felt when an on-screen button is pressed.
     @Published var touchPadHaptics: Bool { didSet { d.set(touchPadHaptics, forKey: "touchPadHaptics") } }
+    /// Player 1 for games without their own choice: "xbox" or "playstation" (PadPrefs).
+    @Published var padStyle: String { didSet { d.set(padStyle, forKey: "padStyle") } }
 
     /// The defaults of every setting (also read by GameDefaults without a Settings object).
     static func registerDefaults(_ d: UserDefaults) {
@@ -99,5 +101,6 @@ final class Settings: ObservableObject {
         monitorHeight = d.integer(forKey: "monitorHeight")
         touchPadMode = d.string(forKey: "touchPadMode") ?? "auto"
         touchPadHaptics = d.bool(forKey: "touchPadHaptics")
+        padStyle = PadPrefs.defaultStyle.rawValue
     }
 }

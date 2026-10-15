@@ -15,7 +15,7 @@ swiftc -O -o "$OUT/steam-cloud-tests" "$ROOT/App/Sources/Steam/SteamCloudCore.sw
 swiftc -O -o "$OUT/steam-cm-tests" "$ROOT/App/Sources/Steam/SteamCMList.swift" "$HERE/steam_cm/main.swift"
 "$OUT/steam-cm-tests" | tee "$OUT/steam-cm-tests.txt"
 # The on-screen controller (stick, D-pad, merging with a physical pad, layouts) and Game settings.
-swiftc -O -o "$OUT/touch-pad-tests" "$ROOT/App/Sources/Engine/TouchPadCore.swift" "$ROOT/App/Sources/Engine/GameSettingsCore.swift" "$HERE/touch_pad/main.swift"
+swiftc -O -o "$OUT/touch-pad-tests" "$ROOT/App/Sources/Engine/TouchPadCore.swift" "$ROOT/App/Sources/Engine/GameSettingsCore.swift" "$ROOT/App/Sources/Engine/PadStyleCore.swift" "$HERE/touch_pad/main.swift"
 "$OUT/touch-pad-tests" | tee "$OUT/touch-pad-tests.txt"
 # Driving the app's UI with a controller: focus moves, repeat on hold, the stick, the menu chord.
 swiftc -O -o "$OUT/pad-nav-tests" "$ROOT/App/Sources/Engine/PadNavCore.swift" "$HERE/pad_nav/main.swift"

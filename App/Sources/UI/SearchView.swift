@@ -118,6 +118,12 @@ struct ControllersSheet: View {
                         }
                     }
                 }
+                Text("Controller games see").font(.headline)
+                GlassSegmented(options: PadStyle.allCases, selection: Binding(get: { PadStyle(rawValue: settings.padStyle) ?? .xbox },
+                                                                               set: { settings.padStyle = $0.rawValue }),
+                               compact: true, focusID: "controllers.style") { $0.title }
+                Text("For games without their own choice (Game settings, or the game menu while playing). PlayStation also gives games a DualSense, so games with PlayStation support show its buttons.")
+                    .font(.footnote).foregroundStyle(Glass.secondary)
                 Text("On-screen controller").font(.headline)
                 GlassSegmented(options: TouchPadMode.allCases, selection: padMode, compact: true, focusID: "controllers.mode") { $0.title }
                 Text("Automatic shows it over games while no controller is connected. Games can choose their own in Game settings.")

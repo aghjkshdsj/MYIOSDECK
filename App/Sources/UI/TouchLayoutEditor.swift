@@ -12,6 +12,9 @@ struct TouchLayoutEditor: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var layout = TouchLayout.standard(landscape: true)
+    /// The look being edited: each has its own layout (a PlayStation one starts as the Xbox one).
+    @State private var style = PadStyle.xbox
+    @State private var styleSet = false
     @State private var landscape: Bool?
     @State private var selected: PadControl?
     @State private var undo: [TouchLayout] = []
@@ -31,7 +34,7 @@ struct TouchLayoutEditor: View {
             ZStack {
                 ArtworkBackdrop(source: artwork, blurred: false)
                 Color.black.opacity(0.15).ignoresSafeArea()
-                TouchCanvas(layout: $layout, selected: $selected) { before in
+                TouchCanvas(layout: $layout, selected: $selected, style: style) { before in
                     undo.append(before)
                     changed = true
                     savedText = nil
@@ -45,7 +48,19 @@ struct TouchLayoutEditor: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
             }
-            .onAppear { load(isLandscape) }
+            .onAppear {
+                if !styleSet {
+                    styleSet = true
+                    // In a game: the look it has now; else the game's, or the default.
+                    style = TouchPadOverlay.shared.editing ? TouchPadOverlay.shared.currentStyle : PadPrefs.style(gameKey: gameKey)
+                }
+                load(isLandscape)
+            }
+            .onChange(of: style) { old, _ in
+                if changed { TouchLayoutStore.save(layout, scope: gameKey ?? TouchLayoutStore.defaultScope, landscape: landscape ?? true, style: old) }
+                changed = false
+                load(landscape ?? isLandscape, force: true)
+            }
             .onChange(of: isLandscape) { _, l in load(l) }
         }
         .statusBarHidden()
@@ -70,7 +85,7 @@ struct TouchLayoutEditor: View {
     private func toggleActions() -> [DialogButton] {
         PadControl.allCases.map { c in
             let shown = !(layout.spec(c)?.hidden ?? true)
-            return DialogButton(title: (shown ? "✓ " : "") + c.title) {
+            return DialogButton(title: (shown ? "✓ " : "") + c.title(style)) {
                 undo.append(layout)
                 layout.update(c) { $0.hidden = shown }
                 if shown, selected == c { selected = nil }
@@ -90,13 +105,13 @@ struct TouchLayoutEditor: View {
         if let last = undo.popLast() { layout = last; selected = nil; changed = !undo.isEmpty }
     }
 
-    private func load(_ isLandscape: Bool) {
-        if landscape != nil, changed, landscape != isLandscape {
+    private func load(_ isLandscape: Bool, force: Bool = false) {
+        if !force, landscape != nil, changed, landscape != isLandscape {
             // The screen turned with unsaved changes: they belong to the other orientation's layout.
             saveLayout(scope: gameKey ?? TouchLayoutStore.defaultScope, for: landscape!)
         }
         landscape = isLandscape
-        layout = TouchLayoutStore.layout(for: gameKey, landscape: isLandscape)
+        layout = TouchLayoutStore.layout(for: gameKey, landscape: isLandscape, style: style)
         undo = []
         selected = nil
         changed = false
@@ -133,7 +148,7 @@ struct TouchLayoutEditor: View {
             VStack(spacing: 4) {
                 Text("Edit layout").font(.body.weight(.medium))
                     .padding(.horizontal, 22).frame(height: 40).glassCapsule()
-                Text(savedText ?? (selected.map { "\($0.title): drag to move, a corner to resize" } ?? "Drag a control to move it"))
+                Text(savedText ?? (selected.map { "\($0.title(style)): drag to move, a corner to resize" } ?? "Drag a control to move it"))
                     .font(.footnote).foregroundStyle(.white.opacity(0.85))
                     .shadow(color: .black.opacity(0.6), radius: 3)
             }
@@ -166,7 +181,7 @@ struct TouchLayoutEditor: View {
     }
 
     private func saveLayout(scope: String, for isLandscape: Bool) {
-        TouchLayoutStore.save(layout, scope: scope, landscape: isLandscape)
+        TouchLayoutStore.save(layout, scope: scope, landscape: isLandscape, style: style)
     }
 
     private func save(scope: String) {
@@ -175,7 +190,7 @@ struct TouchLayoutEditor: View {
         undo = []
         UINotificationFeedbackGenerator().notificationOccurred(.success)
         let whose = scope == TouchLayoutStore.defaultScope ? "the default layout" : title
-        withGlassAnimation { savedText = "Saved for \(whose) (\(landscape == false ? "portrait" : "landscape")). Turn the phone to edit the other orientation." }
+        withGlassAnimation { savedText = "\(style.title) layout saved for \(whose) (\(landscape == false ? "portrait" : "landscape")). Turn the phone to edit the other orientation." }
         if gameKey == nil || scope == gameKey { DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { dismiss() } }
     }
 
@@ -195,11 +210,14 @@ struct TouchLayoutEditor: View {
 
     private var bottomPanel: some View {
         HStack(spacing: 14) {
+            GlassSegmented(options: PadStyle.allCases, selection: $style, compact: true, focusID: "editor.style") { $0.title }
+                .frame(width: 210)
+                .accessibilityLabel("The controller look being edited")
             Text("Size").font(.subheadline)
             Slider(value: scale, in: PadControlSpec.scaleRange, onEditingChanged: { began in if began { undo.append(layout) } })
                 .tint(Glass.primary).frame(minWidth: 90, maxWidth: 190)
                 .disabled(selected == nil)
-                .accessibilityLabel(selected.map { "Size of \($0.title)" } ?? "Size (select a control first)")
+                .accessibilityLabel(selected.map { "Size of \($0.title(style))" } ?? "Size (select a control first)")
                 .padFocus("editor.size", radius: 12, adjust: { d in
                     if selected == nil { selectNext() }
                     guard let c = selected, let before = layout.spec(c)?.scale else { return false }
@@ -226,7 +244,7 @@ struct TouchLayoutEditor: View {
                         if shown, selected == c { selected = nil }
                         changed = true
                     } label: {
-                        Label(c.title, systemImage: shown ? "checkmark.circle.fill" : "circle")
+                        Label(c.title(style), systemImage: shown ? "checkmark.circle.fill" : "circle")
                     }
                 }
             } label: {
@@ -257,11 +275,13 @@ struct TouchLayoutEditor: View {
 private struct TouchCanvas: UIViewRepresentable {
     @Binding var layout: TouchLayout
     @Binding var selected: PadControl?
+    let style: PadStyle
     /// A drag or resize ended: the layout before it (for undo).
     let edited: (TouchLayout) -> Void
 
     func makeUIView(context: Context) -> TouchControllerView {
         let v = TouchControllerView(mode: .edit)
+        v.style = style
         v.setLayout(layout)
         v.onSelect = { c in DispatchQueue.main.async { selected = c } }
         v.onLayoutChanged = { [weak v] new in
@@ -278,6 +298,7 @@ private struct TouchCanvas: UIViewRepresentable {
 
     func updateUIView(_ v: TouchControllerView, context: Context) {
         if !v.isDragging { v.setLayout(layout) }
+        if v.style != style { v.style = style }
         v.selected = selected
         v.setNeedsLayout()
     }

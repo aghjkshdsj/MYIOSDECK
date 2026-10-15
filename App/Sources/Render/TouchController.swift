@@ -21,6 +21,10 @@ final class TouchControllerView: UIView {
     /// The layout for an orientation (play mode reloads it when the screen turns).
     var layoutProvider: ((Bool) -> TouchLayout)?
     var haptics = true
+    /// Xbox or PlayStation look (labels, colours, symbols); the layout is the same kind of thing.
+    var style = PadStyle.xbox {
+        didSet { for v in views.values { v.style = style; v.setNeedsDisplay() } }
+    }
 
     private var views: [PadControl: PadControlView] = [:]
     private let selection = SelectionFrameView()
@@ -36,6 +40,7 @@ final class TouchControllerView: UIView {
         isOpaque = false
         for c in PadControl.allCases {
             let v = PadControlView(control: c)
+            v.style = style
             v.isUserInteractionEnabled = false
             views[c] = v
             addSubview(v)
@@ -286,6 +291,7 @@ final class PadControlView: UIView {
     var pressed: UInt16 = 0
     var knob = CGPoint.zero          // stick deflection, -1...1, y down
     var selectedLook = false
+    var style = PadStyle.xbox
 
     init(control: PadControl) {
         self.control = control
@@ -308,7 +314,7 @@ final class PadControlView: UIView {
         case .dpad: drawDpad(b)
         case .face: drawFace(b)
         case .lb, .rb, .lt, .rt: drawShoulder(b)
-        case .view, .menu: drawRound(b)
+        case .view, .menu, .home: drawRound(b)
         }
     }
 
@@ -378,6 +384,7 @@ final class PadControlView: UIView {
     }
 
     private func drawFace(_ b: CGRect) {
+        if style == .playstation { drawPlayStationFace(b); return }
         let d = b.width * 0.38
         let buttons: [(String, UInt16, CGPoint, UIColor)] = [
             ("Y", PadState.y, CGPoint(x: b.midX, y: b.minY + d / 2), UIColor(red: 0.98, green: 0.80, blue: 0.20, alpha: 1)),
@@ -393,16 +400,52 @@ final class PadControlView: UIView {
         }
     }
 
+    /// Cross, Circle, Square, Triangle in their colours and shapes (Cross where A is).
+    private func drawPlayStationFace(_ b: CGRect) {
+        let d = b.width * 0.38
+        let green = UIColor(red: 0.27, green: 0.77, blue: 0.60, alpha: 1), red = UIColor(red: 0.95, green: 0.33, blue: 0.36, alpha: 1)
+        let blue = UIColor(red: 0.36, green: 0.55, blue: 0.94, alpha: 1), pink = UIColor(red: 0.91, green: 0.50, blue: 0.82, alpha: 1)
+        let buttons: [(Int, UInt16, CGPoint, UIColor)] = [
+            (0, PadState.y, CGPoint(x: b.midX, y: b.minY + d / 2), green),       // triangle
+            (1, PadState.x, CGPoint(x: b.minX + d / 2, y: b.midY), pink),        // square
+            (2, PadState.b, CGPoint(x: b.maxX - d / 2, y: b.midY), red),         // circle
+            (3, PadState.a, CGPoint(x: b.midX, y: b.maxY - d / 2), blue),        // cross
+        ]
+        for (shape, bit, c, color) in buttons {
+            let r = CGRect(x: c.x - d / 2, y: c.y - d / 2, width: d, height: d)
+            let on = pressed & bit != 0
+            stroked(UIBezierPath(ovalIn: r), fill: on ? color.withAlphaComponent(0.55) : Self.fill)
+            let s = d * 0.22, mark = UIBezierPath()
+            switch shape {
+            case 0:
+                mark.move(to: CGPoint(x: c.x, y: c.y - s * 1.05))
+                mark.addLine(to: CGPoint(x: c.x + s * 1.05, y: c.y + s * 0.75))
+                mark.addLine(to: CGPoint(x: c.x - s * 1.05, y: c.y + s * 0.75))
+                mark.close()
+            case 1: mark.append(UIBezierPath(rect: CGRect(x: c.x - s * 0.85, y: c.y - s * 0.85, width: s * 1.7, height: s * 1.7)))
+            case 2: mark.append(UIBezierPath(ovalIn: CGRect(x: c.x - s, y: c.y - s, width: 2 * s, height: 2 * s)))
+            default:
+                mark.move(to: CGPoint(x: c.x - s, y: c.y - s)); mark.addLine(to: CGPoint(x: c.x + s, y: c.y + s))
+                mark.move(to: CGPoint(x: c.x + s, y: c.y - s)); mark.addLine(to: CGPoint(x: c.x - s, y: c.y + s))
+            }
+            (on ? UIColor.white : color).setStroke()
+            mark.lineWidth = max(2.5, d * 0.07)
+            mark.lineJoinStyle = .round
+            mark.lineCapStyle = .round
+            mark.stroke()
+        }
+    }
+
     private func drawShoulder(_ b: CGRect) {
         let on = pressed != 0
         let path = UIBezierPath(roundedRect: b, cornerRadius: min(b.height * 0.45, 22))
         stroked(path, fill: on ? Self.fillPressed : Self.fill)
         let text: String
         switch control {
-        case .lb: text = "L"
-        case .rb: text = "R"
-        case .lt: text = "LT"
-        default: text = "RT"
+        case .lb: text = style == .playstation ? "L1" : "L"
+        case .rb: text = style == .playstation ? "R1" : "R"
+        case .lt: text = style == .playstation ? "L2" : "LT"
+        default: text = style == .playstation ? "R2" : "RT"
         }
         drawLabel(text, in: b, size: b.height * 0.42, color: .white, weight: .semibold)
     }
@@ -410,9 +453,15 @@ final class PadControlView: UIView {
     private func drawRound(_ b: CGRect) {
         let on = pressed != 0
         stroked(UIBezierPath(ovalIn: b), fill: on ? Self.fillPressed : Self.fill)
-        let name = control == .menu ? "line.3.horizontal" : "rectangle.on.rectangle"
+        let ps = style == .playstation
+        let name: String
+        switch control {
+        case .menu: name = "line.3.horizontal"
+        case .home: name = ps ? "playstation.logo" : "xbox.logo"
+        default: name = ps ? "square.and.arrow.up" : "rectangle.on.rectangle"
+        }
         let cfg = UIImage.SymbolConfiguration(pointSize: b.width * 0.36, weight: .semibold)
-        if let img = UIImage(systemName: name, withConfiguration: cfg)?.withTintColor(.white, renderingMode: .alwaysOriginal) {
+        if let img = (UIImage(systemName: name, withConfiguration: cfg) ?? UIImage(systemName: "circle.circle", withConfiguration: cfg))?.withTintColor(.white, renderingMode: .alwaysOriginal) {
             img.draw(at: CGPoint(x: b.midX - img.size.width / 2, y: b.midY - img.size.height / 2))
         }
     }
@@ -451,30 +500,34 @@ final class SelectionFrameView: UIView {
 enum TouchLayoutStore {
     static let defaultScope = "default"
 
-    private static func key(_ scope: String, _ landscape: Bool) -> String {
-        "touchLayout.\(scope).\(landscape ? "landscape" : "portrait")"
+    /// Xbox layouts keep the keys they had; PlayStation ones have their own, and start as the Xbox one.
+    private static func key(_ scope: String, _ landscape: Bool, _ style: PadStyle = .xbox) -> String {
+        "touchLayout.\(scope).\(style == .playstation ? "ps." : "")\(landscape ? "landscape" : "portrait")"
     }
 
-    static func stored(_ scope: String, landscape: Bool) -> TouchLayout? {
-        guard let data = UserDefaults.standard.data(forKey: key(scope, landscape)),
+    static func stored(_ scope: String, landscape: Bool, style: PadStyle = .xbox) -> TouchLayout? {
+        if style == .playstation, UserDefaults.standard.data(forKey: key(scope, landscape, .playstation)) == nil {
+            return stored(scope, landscape: landscape, style: .xbox)
+        }
+        guard let data = UserDefaults.standard.data(forKey: key(scope, landscape, style)),
               let l = try? JSONDecoder().decode(TouchLayout.self, from: data) else { return nil }
         return l.completed(landscape: landscape)
     }
 
     /// The default layout (the user's, else MYIOSDECK's).
-    static func defaultLayout(landscape: Bool) -> TouchLayout {
-        stored(defaultScope, landscape: landscape) ?? .standard(landscape: landscape)
+    static func defaultLayout(landscape: Bool, style: PadStyle = .xbox) -> TouchLayout {
+        stored(defaultScope, landscape: landscape, style: style) ?? .standard(landscape: landscape)
     }
 
     /// A game's layout: its own, else the default.
-    static func layout(for game: String?, landscape: Bool) -> TouchLayout {
-        if let game, !game.isEmpty, let own = stored(game, landscape: landscape) { return own }
-        return defaultLayout(landscape: landscape)
+    static func layout(for game: String?, landscape: Bool, style: PadStyle = .xbox) -> TouchLayout {
+        if let game, !game.isEmpty, let own = stored(game, landscape: landscape, style: style) { return own }
+        return defaultLayout(landscape: landscape, style: style)
     }
 
-    static func save(_ l: TouchLayout, scope: String, landscape: Bool) {
-        if let data = try? JSONEncoder().encode(l) { UserDefaults.standard.set(data, forKey: key(scope, landscape)) }
-        dlog("[touch-pad] layout saved for \(scope) (\(landscape ? "landscape" : "portrait"))")
+    static func save(_ l: TouchLayout, scope: String, landscape: Bool, style: PadStyle = .xbox) {
+        if let data = try? JSONEncoder().encode(l) { UserDefaults.standard.set(data, forKey: key(scope, landscape, style)) }
+        dlog("[touch-pad] \(style.title) layout saved for \(scope) (\(landscape ? "landscape" : "portrait"))")
     }
 
     static func hasOwnLayout(_ game: String) -> Bool {
@@ -482,7 +535,7 @@ enum TouchLayoutStore {
     }
 
     static func removeOwnLayout(_ game: String) {
-        for l in [true, false] { UserDefaults.standard.removeObject(forKey: key(game, l)) }
+        for l in [true, false] { for s in PadStyle.allCases { UserDefaults.standard.removeObject(forKey: key(game, l, s)) } }
     }
 
     static func resetDefault() { removeOwnLayout(defaultScope) }
@@ -506,6 +559,7 @@ final class TouchPadOverlay: ObservableObject {
     }
 
     private var gameKey = ""
+    private var style = PadStyle.xbox
     private var active = false
     private var hostHidden = true
     let view = TouchControllerView(mode: .play)
@@ -563,9 +617,19 @@ final class TouchPadOverlay: ObservableObject {
         refresh()
     }
 
+    /// Xbox or PlayStation (a game start, the game menu): its look and its layout, at once.
+    func setStyle(_ s: PadStyle) {
+        guard s != style else { return }
+        style = s
+        reloadLayout()
+    }
+    var currentStyle: PadStyle { style }
+
     func reloadLayout() {
         let key = gameKey
-        view.layoutProvider = { landscape in TouchLayoutStore.layout(for: key, landscape: landscape) }
+        let s = style
+        view.style = s
+        view.layoutProvider = { landscape in TouchLayoutStore.layout(for: key, landscape: landscape, style: s) }
         view.reloadFromProvider()
     }
 

@@ -63,8 +63,18 @@ void mid_pad_set(int slot, int connected, uint16_t buttons, uint8_t lt, uint8_t 
 
 /// Player 1 as the HID gamepad (MADEIRA_HIDPAD sessions): same units as
 /// mid_pad_set; L2/R2 digital bits follow the triggers. No-op without Wine.
-void mid_hidpad_set(int connected, uint16_t buttons, uint8_t lt, uint8_t rt,
+void mid_hidpad_set(int connected, uint32_t buttons, uint8_t lt, uint8_t rt,
                     int16_t lx, int16_t ly, int16_t rx, int16_t ry);
+
+/// 1 when the staged wineserver hides its DualSense pad while no PlayStation pad is published
+/// (engine/wine/patches/hidpad_gate.py): the pad can then exist in every session.
+int mid_hidpad_gate(void);
+
+/// Rumble, lightbar and adaptive triggers from the game to the controller (Madeira's PadOutput.m):
+/// configure once per session; a slot's GCController (NULL: none); the app active or not.
+void mid_pad_output_configure(int xinput, int hid);
+void mid_pad_output_set_slot(int slot, void *controller);
+void mid_pad_output_set_active(int active);
 
 /// Keyboard mode: a Windows virtual-key press (down=1) or release (down=0),
 /// and a mouse button event (MOUSEEVENTF_* flags, no movement). No-op without Wine.

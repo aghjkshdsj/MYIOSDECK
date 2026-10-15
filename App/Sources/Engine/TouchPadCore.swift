@@ -20,7 +20,7 @@ struct PadState: Equatable {
 
     static let up: UInt16 = 0x0001, down: UInt16 = 0x0002, left: UInt16 = 0x0004, right: UInt16 = 0x0008
     static let start: UInt16 = 0x0010, back: UInt16 = 0x0020, l3: UInt16 = 0x0040, r3: UInt16 = 0x0080
-    static let lb: UInt16 = 0x0100, rb: UInt16 = 0x0200
+    static let lb: UInt16 = 0x0100, rb: UInt16 = 0x0200, guide: UInt16 = 0x0400
     static let a: UInt16 = 0x1000, b: UInt16 = 0x2000, x: UInt16 = 0x4000, y: UInt16 = 0x8000
 
     /// Player 1 with a physical controller and the on-screen one together: buttons of either,
@@ -44,21 +44,26 @@ struct PadState: Equatable {
 
 /// The controls the on-screen controller has.
 enum PadControl: String, Codable, CaseIterable, Identifiable {
-    case leftStick, rightStick, dpad, face, lb, rb, lt, rt, view, menu
+    case leftStick, rightStick, dpad, face, lb, rb, lt, rt, view, menu, home
     var id: String { rawValue }
 
-    var title: String {
+    var title: String { title(.xbox) }
+
+    /// Its name on an Xbox or a PlayStation controller.
+    func title(_ style: PadStyle) -> String {
+        let ps = style == .playstation
         switch self {
         case .leftStick: return "Left stick"
         case .rightStick: return "Right stick"
         case .dpad: return "D-pad"
-        case .face: return "A B X Y"
-        case .lb: return "LB (L)"
-        case .rb: return "RB (R)"
-        case .lt: return "LT"
-        case .rt: return "RT"
-        case .view: return "View (Back)"
-        case .menu: return "Menu (Start)"
+        case .face: return ps ? "Cross Circle Square Triangle" : "A B X Y"
+        case .lb: return ps ? "L1" : "LB"
+        case .rb: return ps ? "R1" : "RB"
+        case .lt: return ps ? "L2" : "LT"
+        case .rt: return ps ? "R2" : "RT"
+        case .view: return ps ? "Create" : "View"
+        case .menu: return ps ? "Options" : "Menu"
+        case .home: return ps ? "PS button" : "Xbox button"
         }
     }
 
@@ -70,7 +75,7 @@ enum PadControl: String, Codable, CaseIterable, Identifiable {
         case .face: return CGSize(width: 150, height: 150)
         case .lb, .rb: return CGSize(width: 104, height: 50)
         case .lt, .rt: return CGSize(width: 76, height: 50)
-        case .view, .menu: return CGSize(width: 46, height: 46)
+        case .view, .menu, .home: return CGSize(width: 46, height: 46)
         }
     }
 
@@ -81,6 +86,7 @@ enum PadControl: String, Codable, CaseIterable, Identifiable {
         case .rb: return PadState.rb
         case .view: return PadState.back
         case .menu: return PadState.start
+        case .home: return PadState.guide
         default: return nil
         }
     }
@@ -135,6 +141,7 @@ struct TouchLayout: Codable, Equatable {
                 PadControlSpec(control: .rt, x: 0.78, y: 0.23),
                 PadControlSpec(control: .view, x: 0.45, y: 0.23),
                 PadControlSpec(control: .menu, x: 0.55, y: 0.23),
+                PadControlSpec(control: .home, x: 0.50, y: 0.36, hidden: true),
                 PadControlSpec(control: .dpad, x: 0.17, y: 0.47, scale: 0.9),
                 PadControlSpec(control: .leftStick, x: 0.11, y: 0.82, scale: 0.9),
                 PadControlSpec(control: .face, x: 0.88, y: 0.60),
@@ -152,6 +159,7 @@ struct TouchLayout: Codable, Equatable {
             PadControlSpec(control: .rightStick, x: 0.74, y: 0.89, hidden: true),
             PadControlSpec(control: .view, x: 0.42, y: 0.50),
             PadControlSpec(control: .menu, x: 0.58, y: 0.50),
+            PadControlSpec(control: .home, x: 0.50, y: 0.58, hidden: true),
         ])
     }
 

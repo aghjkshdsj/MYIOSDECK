@@ -363,26 +363,15 @@ private struct ControlsSettings: View {
                 StatusRow(label: device.controllers.isEmpty ? "No controller connected" : "Connected",
                           detail: device.controllers.isEmpty ? "Bluetooth Xbox or DualSense controllers, Backbone and MFi controllers work." : device.controllers.joined(separator: ", "),
                           level: device.controllers.isEmpty ? .idle : .good)
-                Picker("Controller API", selection: $settings.controllerAPI) {
-                    Text("XInput (Xbox controller)").tag("xinput")
-                    Text("XInput + DirectInput").tag("dinput")
-                    Text("HID gamepad").tag("hid")
-                    Text("HID DualSense (PS5)").tag("dualsense")
-                    Text("Keyboard and mouse").tag("keyboard")
+                HStack {
+                    Text("Controller")
+                    Spacer()
+                    GlassSegmented(options: PadStyle.allCases, selection: Binding(get: { PadStyle(rawValue: settings.padStyle) ?? .xbox },
+                                                                                   set: { settings.padStyle = $0.rawValue }),
+                                   compact: true, focusID: "settings.padStyle") { $0.title }
+                        .frame(maxWidth: 300)
                 }
-                .pickerStyle(.menu)
-                .padFocus("settings.controllerAPI", radius: 10, adjust: { d in
-                    let all = GameSessionHost.controllerOrder
-                    let i = all.firstIndex(of: settings.controllerAPI) ?? 0
-                    guard let n = ChoiceStep.index(i, count: all.count, delta: d) else { return false }
-                    settings.controllerAPI = all[n]
-                    return true
-                }) {
-                    showActions("Controller API", GameSessionHost.controllerOrder.map { api in
-                        DialogButton(title: (api == settings.controllerAPI ? "✓ " : "") + (GameSessionHost.controllerNames[api] ?? api)) { settings.controllerAPI = api }
-                    })
-                }
-                Text("How Windows games see your controller, for games without their own choice; takes effect the next time a game starts. XInput suits most games. If a game ignores the controller, try DirectInput (older games), HID or DualSense (engines that look for devices, such as Unity's old input system), or Keyboard and mouse, which works with any game that takes keys: A Space, B Ctrl, X E, Y R, LB Q, RB F, L3 Shift, R3 C, Menu Esc, Options Enter, D-pad arrows, left stick WASD, RT left click, LT right click.")
+                Text("What games see, for games without their own choice (Game settings, or the game menu while playing, switch it at once). Xbox: an Xbox controller, which every game with controller support reads. PlayStation: a DualSense as well, so games with PlayStation support show its buttons; Xbox-only games keep working. You never pick an API: XInput, DirectInput (for older games that only read it, found from their files) and the DualSense's HID reports are given to the game that needs them. A PlayStation controller works in both: Cross, Circle, Square and Triangle are A, B, X and Y; the touchpad click is View on Xbox; the game's rumble, lightbar and trigger effects reach it. A game without controller support can use the controller as keyboard and mouse (Game settings or the game menu): A Space, B Ctrl, X E, Y R, LB Q, RB F, L3 Shift, R3 C, Menu Esc, View Enter, D-pad arrows, left stick WASD, right stick the mouse, RT left click, LT right click.")
                     .font(.footnote).foregroundStyle(Deck.dim)
             }
             DeckCard(title: "Touch mouse", icon: "hand.point.up.left") {

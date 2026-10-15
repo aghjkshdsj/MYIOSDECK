@@ -98,3 +98,38 @@ or View + Menu (Select + Start) held together for 0.6 s. A three-finger tap stil
 Not driven by the controller: text fields (Search's field, Steam sign-in by password: use QR sign-in,
 whose method choice the controller can switch), iOS's own share sheet and Files picker, and dragging
 controls in the layout editor (the controller can pick a control with X on Size and resize it).
+
+## Xbox and PlayStation controllers
+
+One choice, Xbox or PlayStation (Settings › Controls and the Controllers panel for the default, Game
+settings › Controls per game, the game menu while playing), plus a separate per-game switch for the
+controller as keyboard and mouse. The player never picks an API (`Engine/PadStyleCore.swift`,
+`Engine/PadPrefs.swift`, `Engine/ControllerBridge.swift`, `WineController.run`):
+
+| | Xbox | PlayStation |
+| --- | --- | --- |
+| XInput (player 1) | yes | yes (XInput-only games keep working) |
+| DualSense HID (Sony 054C:0CE6, Madeira's `hidpad_ios.c`) | absent | present: SDL/HIDAPI, libScePad, hid.dll, DirectInput's HID joystick |
+| MYIOSDECK's DirectInput pad (`MADEIRA_DINPUT_PAD`) | only for a game that names DirectInput and never XInput in its files (`PadAPIScan`, cached per program) | no (DirectInput lists the DualSense) |
+| On-screen controller | A B X Y, LB/RB/LT/RT, View/Menu, Xbox button | Cross Circle Square Triangle, L1/R1/L2/R2, Create/Options, PS button; its own layout per orientation (starts as the Xbox one) |
+
+What switches while a game runs, without restarting it or MYIOSDECK: the physical controller's mapping,
+the on-screen controller's look and layout, XInput (always connected), and the DualSense's presence.
+The DualSense is made when Wine starts, for every session (engine/wine/patches/hidpad_gate.py: in
+Xbox mode opening it fails as for an unplugged pad), so every game of a kept session can have either.
+What a game does with a controller that appears or goes is up to the game: most look for HID and
+DirectInput devices only when they start, so their buttons (prompts) change at their next start; the
+DirectInput pad too is decided at a game's start. A Wine build without the gate makes the DualSense only
+for a session that starts in PlayStation mode (the app logs which; stage-app.sh writes
+`MYIOSDECK_HIDPAD_GATE` when the staged wineserver has the gate).
+
+Physical PlayStation controllers (DualSense, DualShock 4): Cross/Circle/Square/Triangle are A/B/X/Y,
+Create is View, Options is Menu, the touchpad click is the DualSense's touchpad button in PlayStation
+mode and View in Xbox mode, the PS button is Guide where iOS gives it to apps. The game's output
+reaches the pad through Madeira's PadOutput.m (now armed by ControllerBridge): XInput rumble, and in
+PlayStation mode the DualSense output reports (rumble, adaptive triggers as the closest GameController
+mode, lightbar, player LEDs). iOS gives apps no access to the DualSense's speaker, microphone or
+audio-driven haptics.
+
+Older per-game choices (XInput, XInput + DirectInput, HID, DualSense, Keyboard and mouse) are read as
+the style they meant (`PadStyle.migrate`).

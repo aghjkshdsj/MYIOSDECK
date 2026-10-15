@@ -90,16 +90,16 @@ final class WineController: ObservableObject, @unchecked Sendable {
             }
         }
     }
-    /// The Controller API this Wine session started with (its HID / DirectInput
-    /// devices exist only if it started with them).
-    @Published private(set) var sessionAPI = "xinput"
+    /// The HID pad this Wine session's wineserver made when it started ("dualsense", or "" for
+    /// none): with the hidpad gate (engine/wine/patches/hidpad_gate.py) every session has it.
+    private(set) var sessionHIDPad = ""
+    /// Player 1 now (the game menu shows and switches it): Xbox or PlayStation, and whether the
+    /// controller is keyboard and mouse.
+    @Published private(set) var padStyle = PadStyle.xbox
+    @Published private(set) var padKeyboard = false
 
-    static func bridgeMode(_ api: String) -> ControllerBridge.Mode {
-        switch api {
-        case "hid", "dualsense": return .hid
-        case "keyboard": return .keyboard
-        default: return .xinput
-        }
+    static func bridgeMode(style: PadStyle, keyboard: Bool) -> ControllerBridge.Mode {
+        keyboard ? .keyboard : style == .playstation ? .playstation : .xbox
     }
 
     /// The program this session started (its controller choice is remembered per program).
@@ -112,35 +112,33 @@ final class WineController: ObservableObject, @unchecked Sendable {
     /// The running (or last) game's settings, nil for a test program.
     @Published private(set) var sessionOverrides: LaunchOverrides?
 
-    /// Modes whose device exists only if the session started with it: the HID gamepads, and
-    /// the DirectInput joystick (MADEIRA_DINPUT_PAD, read at session start).
-    static let sessionStartAPIs: Set<String> = ["hid", "dualsense", "dinput"]
+    /// The DualSense identity can reach a game of this session (its wineserver made the pad).
+    var playStationAvailable: Bool { sessionHIDPad == "dualsense" || programsThisRun == 0 }
 
-    /// The controller API a program starts with: its own last choice (games differ: a
-    /// GameMaker game wants XInput, Steins;Gate DirectInput), else Settings › Controller.
-    static func controllerAPI(for programID: String, gameKey: String? = nil) -> String {
-        if let gameKey, !gameKey.isEmpty, let own = UserDefaults.standard.string(forKey: "controllerAPI.\(gameKey)") { return own }
-        return UserDefaults.standard.string(forKey: "controllerAPI.\(programID)")
-            ?? UserDefaults.standard.string(forKey: "controllerAPI") ?? "xinput"
+    /// In-game switch to Xbox or PlayStation (the game menu): at once, and remembered for this game.
+    /// XInput stays connected either way; the DualSense appears or goes (a game that looks for
+    /// controllers only when it starts sees the change at its next start).
+    func setPadStyle(_ s: PadStyle) {
+        PadPrefs.setStyle(s, gameKey: sessionGameKey)
+        padStyle = s
+        dlog("[pad] in-game switch to \(s.title)")
+        ControllerBridge.shared.setMode(Self.bridgeMode(style: s, keyboard: padKeyboard))
+        Task { @MainActor in TouchPadOverlay.shared.setStyle(s) }
     }
 
-    /// The running session's controller API as the game menu shows it.
-    var currentControllerAPI: String { Self.controllerAPI(for: sessionProgramID, gameKey: sessionGameKey) }
+    /// In-game switch of the controller-as-keyboard-and-mouse mode: at once, remembered for this game.
+    func setPadKeyboard(_ on: Bool) {
+        PadPrefs.setKeyboard(on, gameKey: sessionGameKey)
+        padKeyboard = on
+        dlog("[pad] in-game keyboard and mouse \(on ? "on" : "off")")
+        ControllerBridge.shared.setMode(Self.bridgeMode(style: padStyle, keyboard: on))
+    }
 
-    /// In-game switch (the game menu). Saved as this program's own choice for its next launch
-    /// (Settings › Controller stays the default of every other game: Steins;Gate's DirectInput
-    /// started Crab Game with it); applied now unless the mode needs a device this session was
-    /// not started with. Returns whether it took effect now.
-    @discardableResult
-    func switchController(to api: String) -> Bool {
-        if !sessionGameKey.isEmpty { UserDefaults.standard.set(api, forKey: "controllerAPI.\(sessionGameKey)") }
-        else if sessionProgramID.isEmpty { UserDefaults.standard.set(api, forKey: "controllerAPI") }
-        else { UserDefaults.standard.set(api, forKey: "controllerAPI.\(sessionProgramID)") }
-        let needsStart = Self.sessionStartAPIs.contains(api) && api != sessionAPI
-        dlog("[xinput] in-game switch to \(api)\(needsStart ? " (applies at next launch)" : "")")
-        guard !needsStart else { return false }
-        ControllerBridge.shared.setMode(Self.bridgeMode(api))
-        return true
+    /// A C:\ path in the prefix as a file on this iPhone (nil for anything else).
+    func hostURL(windowsPath: String) -> URL? {
+        guard windowsPath.count > 3, windowsPath.dropFirst().hasPrefix(":\\") else { return nil }
+        let rel = windowsPath.dropFirst(3).replacingOccurrences(of: "\\", with: "/")
+        return prefixURL.appendingPathComponent("drive_c").appendingPathComponent(rel)
     }
     let linked = mid_wine_linked()
 
@@ -185,9 +183,6 @@ final class WineController: ObservableObject, @unchecked Sendable {
         return mid_wine_force_quit() != 0
     }
 
-    static func hidPad(_ api: String) -> String {
-        api == "hid" ? "generic" : api == "dualsense" ? "dualsense" : ""
-    }
 
     /// Why another game cannot start now (nil: it can, as far as is known without the game;
     /// `kind` adds the game's own checks).
@@ -208,9 +203,8 @@ final class WineController: ObservableObject, @unchecked Sendable {
             }
             // A 64-bit game after a 32-bit one, or the reverse, runs as Madeira's cross-architecture
             // processes do (the bridge keeps the session's system32; docs/SESSION_REUSE.md).
-            if kind.hidPad != session.hidPad {
-                return "This game's controller mode (\(kind.hidPad.isEmpty ? "not a HID gamepad" : "HID gamepad")) differs from the running Wine session's, which Wine sets up when it starts. Choose the same mode for it, or: \(restart)"
-            }
+            // The controller is never a reason: XInput is there in every session, and the
+            // DualSense in every session of a build with the hidpad gate (run()).
         }
         // The x64 CPU is not a reason to refuse: every 64-bit game of a run takes the first one's (run()).
         let freeMB = os_proc_available_memory() >> 20
@@ -348,14 +342,20 @@ final class WineController: ObservableObject, @unchecked Sendable {
         // Madeira's wineserver cannot start twice in one process (init_registry aborts on
         // "\Registry"), so a later game either joins the running session (session reuse,
         // docs/SESSION_REUSE.md) or needs a restart (nextGameRefusal says which, and why).
-        let api = Self.controllerAPI(for: program.id, gameKey: overrides?.gameKey)
+        // Player 1: Xbox or PlayStation (and keyboard and mouse), the game's own choice or the default.
+        let style = PadPrefs.style(gameKey: overrides?.gameKey, programID: program.id)
+        let keyboardPad = PadPrefs.keyboard(gameKey: overrides?.gameKey, programID: program.id)
+        // The DualSense HID pad is made when the wineserver starts. With the hidpad gate it is made
+        // for every session and is absent in Xbox mode (ControllerBridge), so either style works
+        // for every game of a kept session; without it, only for a PlayStation session.
+        let wantHIDPad = mid_hidpad_gate() != 0 || style == .playstation
         let noJITSession = program.noJIT && !mid_jit_pool_ready()
         // The x64 CPU (Settings › Windows games: FXR). FXI and FXR both drop the blocks of an
         // earlier game before a later one starts (wine_host.c), so every 64-bit game of a run may
         // use either; but all of them use the first one's (fxrThisRun). 32-bit games never use it (FXI32).
         let wantFXR = noJITSession && !program.aarch64 && (overrides?.fxr ?? UserDefaults.standard.bool(forKey: "winFXR"))
         let useFXR = noJITSession && !program.aarch64 && (fxrThisRun ?? wantFXR)
-        let kind = SessionKind(noJIT: noJITSession, aarch64: program.aarch64, hidPad: Self.hidPad(api), fxr: useFXR)
+        let kind = SessionKind(noJIT: noJITSession, aarch64: program.aarch64, hidPad: wantHIDPad ? "dualsense" : "", fxr: useFXR)
         if programsThisRun > 0, let why = nextGameRefusal(kind) {
             dlog("[session-reuse] \(program.title) not started: \(why)")
             return refuse(why)
@@ -449,17 +449,28 @@ final class WineController: ObservableObject, @unchecked Sendable {
         let hud = overrides?.performanceHUD ?? false
         Task { @MainActor in GameHostView.shared.setPerformanceHUD(hud) }
         unsetenv("MADEIRA_DINPUT_PAD"); unsetenv("MADEIRA_HIDPAD"); unsetenv("MADEIRA_HIDPAD_NAME")
-        // DirectInput view of the pad; its trace (Madeira's joystick_ios.c, rate-limited: what the
-        // game reads once it has acquired the pad) shows in the log whether it ever does.
         unsetenv("MADEIRA_DINPUT_TRACE")
-        if api == "dinput" { setenv("MADEIRA_DINPUT_PAD", "1", 1); setenv("MADEIRA_DINPUT_TRACE", "1", 1) }
-        if api == "hid" || api == "dualsense" {
-            setenv("MADEIRA_HIDPAD", api == "hid" ? "generic" : "dualsense", 1)
-            if api == "hid", let name = GCController.controllers().first?.vendorName { setenv("MADEIRA_HIDPAD_NAME", name, 1) }
+        if wantHIDPad { setenv("MADEIRA_HIDPAD", "dualsense", 1) }   // read when the wineserver starts
+        if programsThisRun == 0 { sessionHIDPad = wantHIDPad ? "dualsense" : "" }
+        else if style == .playstation, sessionHIDPad.isEmpty {
+            dlog("[pad] \(program.title) is set to PlayStation, but this Wine session started without the DualSense: XInput (Xbox) until MYIOSDECK restarts")
         }
-        sessionAPI = api
-        ControllerBridge.shared.setMode(Self.bridgeMode(api))
-        dlog("[xinput] controller API for this session: \(api)")
+        // DirectInput: MYIOSDECK's pad for a game that reads DirectInput and never XInput (found in
+        // its files; read by the game's dinput when it starts). In PlayStation mode DirectInput lists
+        // the DualSense instead, and a game naming XInput would see the controller twice.
+        var dinput = false
+        if style == .xbox, !keyboardPad, let exe = hostURL(windowsPath: program.exe) ?? hostURL(windowsPath: program.id),
+           FileManager.default.fileExists(atPath: exe.path) {
+            dinput = PadAPIScan.needsDInputPad(PadPrefs.scanAPIs(exe: exe))
+        }
+        // Its trace (Madeira's joystick_ios.c, rate-limited) shows in the log whether the game reads it.
+        if dinput { setenv("MADEIRA_DINPUT_PAD", "1", 1); setenv("MADEIRA_DINPUT_TRACE", "1", 1) }
+        padStyle = style
+        padKeyboard = keyboardPad
+        ControllerBridge.shared.setMode(Self.bridgeMode(style: style, keyboard: keyboardPad))
+        let padStyleNow = style
+        Task { @MainActor in TouchPadOverlay.shared.setStyle(padStyleNow) }
+        dlog("[pad] \(program.title): \(keyboardPad ? "keyboard and mouse" : style.title)\(dinput ? ", with the DirectInput pad" : "")\(wantHIDPad ? "; DualSense device \(mid_hidpad_gate() != 0 ? "in the session (shown in PlayStation mode)" : "made for this session")" : "")")
         // DXMT takes the layer when the program creates its swapchain.
         if program.graphics {
             GameHostView.register()

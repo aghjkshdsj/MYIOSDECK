@@ -24,7 +24,8 @@ struct GameSettingsView: View {
 
     @State private var section = Section.performance
     @State private var draft = GameSettings()
-    @State private var api = "xinput"
+    @State private var style = PadStyle.xbox
+    @State private var keyboardPad = false
     @State private var touch = GameInput.TouchMode.off
     @State private var loaded = false
     @State private var editingLayout = false
@@ -173,22 +174,12 @@ struct GameSettingsView: View {
         GlassCard {
             GlassRow {
                 Text("Controller")
-                Spacer()
-                Picker("Controller", selection: Binding(get: { api }, set: { api = $0; saved = false })) {
-                    ForEach(GameSessionHost.controllerOrder, id: \.self) { Text(GameSessionHost.controllerNames[$0] ?? $0).tag($0) }
-                }
-                .pickerStyle(.menu)
-                .padFocus("gamesettings.controller", radius: 10, adjust: { d in
-                    let all = GameSessionHost.controllerOrder, i = all.firstIndex(of: api) ?? 0
-                    guard let n = ChoiceStep.index(i, count: all.count, delta: d) else { return false }
-                    api = all[n]; saved = false
-                    return true
-                }) {
-                    showActions("Controller", GameSessionHost.controllerOrder.map { a in
-                        DialogButton(title: (a == api ? "✓ " : "") + (GameSessionHost.controllerNames[a] ?? a)) { api = a; saved = false }
-                    })
-                }
+                Spacer(minLength: 12)
+                GlassSegmented(options: PadStyle.allCases, selection: Binding(get: { style }, set: { style = $0; saved = false }),
+                               compact: true, focusID: "gamesettings.style") { $0.title }
+                    .frame(maxWidth: 330)
             }
+            GlassToggleRow(title: "Controller as keyboard and mouse", isOn: Binding(get: { keyboardPad }, set: { keyboardPad = $0; saved = false }))
             GlassRow {
                 Text("Touch mouse")
                 Spacer(minLength: 12)
@@ -202,7 +193,7 @@ struct GameSettingsView: View {
                 GlassSegmented(options: TouchPadMode.allCases, selection: touchPad, compact: true, focusID: "gamesettings.seg5") { $0.title }.frame(maxWidth: 330)
             }
         }
-        Text("Controller: how the game sees a controller (XInput suits most games; DirectInput and HID start with the game). Touch mouse: Trackpad moves a cursor, Tap clicks where you touch; a three-finger tap opens the game menu in every mode. On-screen controller: Automatic hides it while a controller is connected.")
+        Text("Controller: what the game sees, and the on-screen controller's look. Xbox suits every game; PlayStation also gives games with PlayStation support a DualSense, so they show its buttons (Xbox-only games keep working). Each API the game reads gets the controller by itself. Switch it in the game menu while playing too. Keyboard and mouse: the controller presses keys, for games without controller support. Touch mouse: Trackpad moves a cursor, Tap clicks where you touch; a three-finger tap opens the game menu in every mode. On-screen controller: Automatic hides it while a controller is connected.")
             .font(.footnote).foregroundStyle(Glass.secondary)
         HStack(spacing: 12) {
             Button { editingLayout = true } label: { Label("Edit on-screen layout", systemImage: "square.and.pencil") }
@@ -238,13 +229,15 @@ struct GameSettingsView: View {
         guard !loaded else { return }
         loaded = true
         draft = GameSettingsStore.load(gameID)
-        api = UserDefaults.standard.string(forKey: "controllerAPI.\(gameID)") ?? UserDefaults.standard.string(forKey: "controllerAPI") ?? "xinput"
+        style = PadPrefs.style(gameKey: gameID)
+        keyboardPad = PadPrefs.keyboard(gameKey: gameID)
         touch = GameInput.touchMode(gameKey: gameID)
     }
 
     private func reset() {
         draft = GameSettings()
-        api = UserDefaults.standard.string(forKey: "controllerAPI") ?? "xinput"
+        style = PadPrefs.defaultStyle
+        keyboardPad = false
         touch = .off
         saved = false
     }
@@ -254,9 +247,10 @@ struct GameSettingsView: View {
         let d = UserDefaults.standard
         // Kept under the game even when equal to the default: an older choice kept under the
         // game's program (before games had keys) must not win over this one.
-        d.set(api, forKey: "controllerAPI.\(gameID)")
+        PadPrefs.setStyle(style, gameKey: gameID)
+        PadPrefs.setKeyboard(keyboardPad, gameKey: gameID)
         d.set(touch.rawValue, forKey: "touchMode.\(gameID)")
-        dlog("[game-settings] saved for \(gameID): defaults=\(draft.useDefaults ? 1 : 0) api=\(api) touch=\(touch.rawValue)")
+        dlog("[game-settings] saved for \(gameID): defaults=\(draft.useDefaults ? 1 : 0) pad=\(style.rawValue)\(keyboardPad ? "+keyboard" : "") touch=\(touch.rawValue)")
         withGlassAnimation { saved = true }
         UINotificationFeedbackGenerator().notificationOccurred(.success)
     }

@@ -153,6 +153,10 @@ build_wineserver() {
     git -C "$M" checkout -- build/wineserver/request_ios.c build/wineserver/fd_ios.c
     git -C "$W" checkout -- server/process.c server/thread.c
     python3 "$HERE/patches/session_reuse.py" "$M" server
+    # The DualSense HID pad is there for every session, absent unless the app shows a PlayStation pad
+    # (engine/wine/patches/hidpad_gate.py).
+    git -C "$M" checkout -- build/wineserver/hidpad_ios.c
+    python3 "$HERE/patches/hidpad_gate.py" "$M"
     local fail=0 src name repl
     for src in "$W"/server/*.c; do
         name="$(basename "$src" .c)"

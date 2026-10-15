@@ -110,5 +110,32 @@ let enc = try! JSONDecoder().decode(GameSettings.self, from: JSONEncoder().encod
 check(enc == gs, "game settings survive JSON")
 check((try? JSONDecoder().decode(GameSettings.self, from: Data("{\"useDefaults\":false}".utf8)))?.cpu == nil, "older stored settings decode")
 
+// MARK: - Xbox / PlayStation
+
+check(PadStyle.migrate(legacyAPI: nil) == nil, "no older choice")
+let mDS = PadStyle.migrate(legacyAPI: "dualsense")!
+check(mDS.style == .playstation && !mDS.keyboard, "an older DualSense choice is PlayStation")
+let mKB = PadStyle.migrate(legacyAPI: "keyboard")!
+check(mKB.style == .xbox && mKB.keyboard, "keyboard and mouse is kept as its own switch")
+for api in ["xinput", "dinput", "hid"] { let m = PadStyle.migrate(legacyAPI: api)!; check(m.style == .xbox && !m.keyboard, "\(api) is Xbox (DirectInput now automatic)") }
+check(PadControl.face.title(.playstation).contains("Cross") && PadControl.lb.title(.playstation) == "L1" && PadControl.rt.title(.xbox) == "RT",
+      "control names per style")
+check(PadControl.home.button == PadState.guide && PadControl.view.button == PadState.back, "the PS / Xbox button is Guide")
+check(TouchLayout.standard(landscape: true).spec(.home)?.hidden == true, "the PS / Xbox button starts hidden")
+
+func blob(_ s: String, wide: Bool = false) -> Data {
+    var d = Data(repeating: 0x90, count: 64)
+    for b in s.utf8 { d.append(b); if wide { d.append(0) } }
+    d.append(contentsOf: [0, 0, 0x4d, 0x5a])
+    return d
+}
+check(PadAPIScan.classify([blob("XINPUT1_4.dll")]) == .xinput, "an XInput import (any case)")
+check(PadAPIScan.classify([blob("xinput1_3.dll", wide: true)]) == .xinput, "XInput loaded by a UTF-16 name")
+check(PadAPIScan.classify([blob("DINPUT8.dll"), blob("DirectInput8Create")]) == .dinputOnly, "DirectInput only")
+check(PadAPIScan.classify([blob("dinput8.dll"), blob("XInputGetState")]) == .xinput, "both: XInput (no DirectInput pad, no double controller)")
+check(PadAPIScan.classify([blob("kernel32.dll")]) == .unknown, "neither")
+check(PadAPIScan.needsDInputPad(.dinputOnly) && !PadAPIScan.needsDInputPad(.xinput) && !PadAPIScan.needsDInputPad(.unknown),
+      "only a DirectInput-only game gets the DirectInput pad")
+
 print("touch-pad tests: \(checks - failures)/\(checks) passed")
 exit(failures == 0 ? 0 : 1)

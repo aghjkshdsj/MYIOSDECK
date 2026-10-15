@@ -186,6 +186,14 @@ cat > "$ROOT/App/Generated/wine_version.h" <<H
 #define MYIOSDECK_WITH_WINE 1
 #define MYIOSDECK_MADEIRA_SHA "${MADEIRA_SHA}"
 H
+# The staged wineserver hides its DualSense pad in Xbox mode (engine/wine/patches/hidpad_gate.py):
+# then the app creates the pad for every session (WineController); else only in PlayStation mode.
+if grep -aq "open refused: the app shows no PlayStation pad" "$LIBS/libwineserver.a"; then
+    echo "#define MYIOSDECK_HIDPAD_GATE 1" >> "$ROOT/App/Generated/wine_version.h"
+    echo "wineserver: DualSense pad gate present"
+else
+    echo "wineserver: no DualSense pad gate (an older Wine unix build): PlayStation mode needs the game to start in it"
+fi
 # Add the sources and resources to the XcodeGen spec (CI working copy only).
 python3 - "$ROOT/project.yml" <<'PY'
 import sys

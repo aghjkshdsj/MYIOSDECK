@@ -3,19 +3,26 @@ import Foundation
 import GameController
 import UIKit
 
-/// Controllers (Bluetooth, Backbone, MFi) for Windows games: each GCController's
-/// extended gamepad is sampled every 4 ms and published to Wine's iOS driver.
-/// Player 1 goes where Settings › Controller API says (per session):
-/// - XInput (also "+ DirectInput", which only adds a DirectInput view in Wine);
-/// - HID: the virtual HID gamepad, leaving XInput as a HID pad on Windows does;
-/// - Keyboard: keys and mouse buttons, for games whose controller support fails
-///   (Madeira's PadKeyboardMouse defaults); the right stick moves the cursor (GameInput).
-/// Players 2-4 stay XInput. The XInput mapping is Madeira's (GamepadInput.swift).
-/// While the app is inactive, pads stay connected with everything released.
+/// Controllers (Bluetooth Xbox, DualSense, DualShock 4, Backbone, MFi) for Windows games: each
+/// GCController's extended gamepad is sampled every 4 ms and published to Wine's iOS driver.
+/// Player 1, as the game's controller choice says (PadPrefs; switchable while it plays):
+/// - Xbox: an XInput controller (and MYIOSDECK's DirectInput pad for DirectInput-only games, set
+///   when the game starts: WineController);
+/// - PlayStation: XInput as well, and the DualSense HID controller Madeira's wineserver serves
+///   (Sony's identity and reports: games with PlayStation support show its buttons; DirectInput
+///   lists it). With the hidpad gate (engine/wine/patches/hidpad_gate.py) that device exists in
+///   every session and is absent while nothing is published here, so the switch works both ways;
+/// - keyboard and mouse: keys and mouse buttons, for games without controller support (Madeira's
+///   PadKeyboardMouse defaults); the right stick moves the cursor (GameInput).
+/// Players 2-4 stay XInput. The mapping is Madeira's (GamepadInput.swift): a PlayStation pad's
+/// Cross / Circle / Square / Triangle are A / B / X / Y, Create is View, Options is Menu, the
+/// touchpad click is the DualSense's own touchpad button (View on an Xbox controller).
+/// While the app is inactive, pads stay connected with everything released. The game's rumble,
+/// lightbar and trigger effects reach the pad through Madeira's PadOutput.m.
 final class ControllerBridge: @unchecked Sendable {
     static let shared = ControllerBridge()
 
-    enum Mode: String { case xinput, hid, keyboard }
+    enum Mode: String { case xbox, playstation, keyboard }
 
     private let queue = DispatchQueue(label: "myiosdeck.controllers", qos: .userInteractive)
     private var pads: [GCExtendedGamepad?] = [nil, nil, nil, nil]
@@ -23,7 +30,7 @@ final class ControllerBridge: @unchecked Sendable {
     private var active = true
     private var firstPress = [false, false, false, false]
     private var lastButtons: [UInt16] = [0, 0, 0, 0]
-    private var mode = Mode.xinput
+    private var mode = Mode.xbox
     private var heldKeys = Set<Int32>()      // keyboard mode: VKs currently down
     private var heldMouse: UInt16 = 0        // keyboard mode: 1 left, 2 right
 
@@ -58,12 +65,14 @@ final class ControllerBridge: @unchecked Sendable {
         }
     }
 
-    /// Called before a Wine session starts; the mode holds for that session.
+    /// What player 1 is; takes effect at once (a game start sets it, and the game menu).
     func setMode(_ m: Mode) {
         queue.async { [self] in
-            if mode == .hid, m != .hid { mid_hidpad_set(0, 0, 0, 0, 0, 0, 0, 0) }
-            if mode == .keyboard, m != .keyboard { applyKeyboard(keys: [], mouse: 0) }
+            guard m != mode else { return }
+            if mode == .keyboard { applyKeyboard(keys: [], mouse: 0) }
+            dlog("[pad] player 1: \(m == .xbox ? "Xbox controller (XInput)" : m == .playstation ? "PlayStation controller (DualSense HID, and XInput)" : "keyboard and mouse")")
             mode = m
+            updateTimer()
             sample()
         }
     }
@@ -89,15 +98,15 @@ final class ControllerBridge: @unchecked Sendable {
         heldMouse = mouse
     }
 
-    private func keyboard(_ b: UInt16, _ lt: UInt8, _ rt: UInt8, _ lx: Int16, _ ly: Int16, _ rx: Int16, _ ry: Int16) {
+    private func keyboard(_ s: PadState) {
         var keys = Set<Int32>()
-        for (mask, vk) in Self.keyMap where b & mask != 0 { keys.insert(vk) }
-        if ly > 16384 { keys.insert(0x57) }    // left stick: W
-        if ly < -16384 { keys.insert(0x53) }   // S
-        if lx < -16384 { keys.insert(0x41) }   // A
-        if lx > 16384 { keys.insert(0x44) }    // D
-        stickMouse(rx, ry)   // before the buttons: a click lands where the cursor went
-        applyKeyboard(keys: keys, mouse: (rt > 128 ? 1 : 0) | (lt > 128 ? 2 : 0))
+        for (mask, vk) in Self.keyMap where s.buttons & mask != 0 { keys.insert(vk) }
+        if s.ly > 16384 { keys.insert(0x57) }    // left stick: W
+        if s.ly < -16384 { keys.insert(0x53) }   // S
+        if s.lx < -16384 { keys.insert(0x41) }   // A
+        if s.lx > 16384 { keys.insert(0x44) }    // D
+        stickMouse(s.rx, s.ry)   // before the buttons: a click lands where the cursor went
+        applyKeyboard(keys: keys, mouse: (s.rt > 128 ? 1 : 0) | (s.lt > 128 ? 2 : 0))
     }
 
     // Keyboard mode: the right stick moves the cursor (Madeira's PadStickMouse), up to
@@ -126,6 +135,9 @@ final class ControllerBridge: @unchecked Sendable {
     @MainActor func start() {
         guard !started else { return }
         started = true
+        // The game's rumble (XInput) and DualSense output reports (rumble, adaptive triggers,
+        // lightbar, player LEDs) to the controller in that slot.
+        mid_pad_output_configure(1, 1)
         let center = NotificationCenter.default
         for name in [Notification.Name.GCControllerDidConnect, .GCControllerDidDisconnect] {
             center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
@@ -133,12 +145,15 @@ final class ControllerBridge: @unchecked Sendable {
             }
         }
         center.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            mid_pad_output_set_active(0)
             self?.setActive(false)
         }
         center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.refresh() }
+            mid_pad_output_set_active(1)
             self?.setActive(true)
         }
+        mid_pad_output_set_active(1)
         refresh()
     }
 
@@ -156,7 +171,14 @@ final class ControllerBridge: @unchecked Sendable {
             for (c, p) in live {
                 guard !owners.contains(where: { $0 === c }), let i = owners.firstIndex(where: { $0 == nil }) else { continue }
                 owners[i] = c; pads[i] = p
-                dlog("[xinput] slot=\(i) connected: \(c.vendorName ?? "controller")")
+                let kind = p is GCDualSenseGamepad ? "DualSense" : p is GCDualShockGamepad ? "DualShock 4" : p is GCXboxGamepad ? "Xbox" : "controller"
+                dlog("[xinput] slot=\(i) connected: \(c.vendorName ?? "controller") (\(kind))")
+            }
+            let slots = owners
+            DispatchQueue.main.async {
+                for (i, c) in slots.enumerated() {
+                    mid_pad_output_set_slot(Int32(i), c.map { Unmanaged.passUnretained($0).toOpaque() })
+                }
             }
             updateTimer()
             sample()
@@ -173,7 +195,10 @@ final class ControllerBridge: @unchecked Sendable {
 
     private func updateTimer() {
         let needed = active && (touchConnected || pads.contains(where: { $0 != nil }))
-        if !needed { timer?.cancel(); timer = nil; return }
+        if !needed {
+            timer?.cancel(); timer = nil
+            return
+        }
         guard timer == nil else { return }
         let t = DispatchSource.makeTimerSource(queue: queue)
         t.schedule(deadline: .now(), repeating: .milliseconds(4), leeway: .milliseconds(1))
@@ -193,61 +218,64 @@ final class ControllerBridge: @unchecked Sendable {
         return UInt8((max(0, min(1, v)) * 255).rounded())
     }
 
+    /// A PlayStation pad's touchpad click (nil for other controllers).
+    private static func touchpad(_ pad: GCExtendedGamepad) -> Bool {
+        if let ds = pad as? GCDualSenseGamepad { return ds.touchpadButton.isPressed }
+        if let ds4 = pad as? GCDualShockGamepad { return ds4.touchpadButton.isPressed }
+        return false
+    }
+
     private func sample() {
         for i in pads.indices {
-            let route: Mode = i == 0 ? mode : .xinput
-            let hid = route == .hid
-            // One publisher per slot: XInput, the HID gamepad, or keys (player 1).
-            func publish(_ connected: Int32, _ b: UInt16, _ lt: UInt8, _ rt: UInt8,
-                         _ lx: Int16, _ ly: Int16, _ rx: Int16, _ ry: Int16) {
-                switch route {
-                case .xinput:
-                    mid_pad_set(Int32(i), connected, b, lt, rt, lx, ly, rx, ry)
-                case .hid:
-                    mid_pad_set(Int32(i), 0, 0, 0, 0, 0, 0, 0, 0)
-                    mid_hidpad_set(connected, b, lt, rt, lx, ly, rx, ry)
-                case .keyboard:
-                    mid_pad_set(Int32(i), 0, 0, 0, 0, 0, 0, 0, 0)
-                    keyboard(b, lt, rt, lx, ly, rx, ry)
-                }
-            }
             let touch = i == 0 && touchConnected
-            guard let pad = pads[i] else {
-                if touch, active {
-                    let t = touchState
-                    if t.buttons != 0, lastButtons[i] == 0 { mid_wow_trace_calls(3) }
-                    lastButtons[i] = t.buttons
-                    publish(1, t.buttons, t.lt, t.rt, t.lx, t.ly, t.rx, t.ry)
-                } else {
-                    publish(touch ? 1 : 0, 0, 0, 0, 0, 0, 0, 0)
+            var state = PadState()
+            var touchpadDown = false
+            var connected = touch
+            if let pad = pads[i] {
+                connected = true
+                if active, !uiOwns {
+                    let map: [(GCControllerButtonInput?, UInt16)] = [
+                        (pad.dpad.up, 0x0001), (pad.dpad.down, 0x0002), (pad.dpad.left, 0x0004), (pad.dpad.right, 0x0008),
+                        (pad.buttonMenu, 0x0010), (pad.buttonOptions, 0x0020),
+                        (pad.leftThumbstickButton, 0x0040), (pad.rightThumbstickButton, 0x0080),
+                        (pad.leftShoulder, 0x0100), (pad.rightShoulder, 0x0200), (pad.buttonHome, 0x0400),
+                        (pad.buttonA, 0x1000), (pad.buttonB, 0x2000), (pad.buttonX, 0x4000), (pad.buttonY, 0x8000),
+                    ]
+                    var buttons: UInt16 = 0
+                    for (b, mask) in map where b?.isPressed == true { buttons |= mask }
+                    touchpadDown = Self.touchpad(pad)
+                    state = PadState(buttons: buttons,
+                                     lt: Self.trigger(pad.leftTrigger.value), rt: Self.trigger(pad.rightTrigger.value),
+                                     lx: Self.axis(pad.leftThumbstick.xAxis.value), ly: Self.axis(pad.leftThumbstick.yAxis.value),
+                                     rx: Self.axis(pad.rightThumbstick.xAxis.value), ry: Self.axis(pad.rightThumbstick.yAxis.value))
                 }
-                continue
             }
-            guard active, !uiOwns else { publish(1, 0, 0, 0, 0, 0, 0, 0); continue }
-            let map: [(GCControllerButtonInput?, UInt16)] = [
-                (pad.dpad.up, 0x0001), (pad.dpad.down, 0x0002), (pad.dpad.left, 0x0004), (pad.dpad.right, 0x0008),
-                (pad.buttonMenu, 0x0010), (pad.buttonOptions, 0x0020),
-                (pad.leftThumbstickButton, 0x0040), (pad.rightThumbstickButton, 0x0080),
-                (pad.leftShoulder, 0x0100), (pad.rightShoulder, 0x0200), (pad.buttonHome, 0x0400),
-                (pad.buttonA, 0x1000), (pad.buttonB, 0x2000), (pad.buttonX, 0x4000), (pad.buttonY, 0x8000),
-            ]
-            var buttons: UInt16 = 0
-            for (b, mask) in map where b?.isPressed == true { buttons |= mask }
-            var physical = PadState(buttons: buttons,
-                                    lt: Self.trigger(pad.leftTrigger.value), rt: Self.trigger(pad.rightTrigger.value),
-                                    lx: Self.axis(pad.leftThumbstick.xAxis.value), ly: Self.axis(pad.leftThumbstick.yAxis.value),
-                                    rx: Self.axis(pad.rightThumbstick.xAxis.value), ry: Self.axis(pad.rightThumbstick.yAxis.value))
-            if touch { physical = physical.merged(with: touchState) }
-            buttons = physical.buttons
-            // A new press: a 32-bit program's calls for the next 3 s go to the log (GameInput.traceInput),
-            // so what its XInput / DirectInput code does with the pad can be read there.
-            if buttons != 0, lastButtons[i] == 0 { mid_wow_trace_calls(3) }
-            lastButtons[i] = buttons
-            if buttons != 0, !firstPress[i] {
+            if touch, active, !uiOwns { state = state.merged(with: touchState) }
+            let route: Mode = i == 0 ? mode : .xbox
+            // On an Xbox controller (and XInput) the touchpad click is View.
+            var xbuttons = state.buttons
+            if touchpadDown { xbuttons |= PadState.back }
+            if xbuttons != 0, lastButtons[i] == 0 { mid_wow_trace_calls(3) }   // GameInput.traceInput
+            lastButtons[i] = xbuttons
+            if xbuttons != 0, !firstPress[i] {
                 firstPress[i] = true
-                dlog("[xinput] slot=\(i) first press buttons=0x\(String(buttons, radix: 16)) published to \(hid ? "HID gamepad" : route == .keyboard ? "keyboard" : "XInput")")
+                dlog("[xinput] slot=\(i) first press buttons=0x\(String(xbuttons, radix: 16)) as \(route.rawValue)")
             }
-            publish(1, buttons, physical.lt, physical.rt, physical.lx, physical.ly, physical.rx, physical.ry)
+            switch route {
+            case .xbox:
+                mid_pad_set(Int32(i), connected ? 1 : 0, xbuttons, state.lt, state.rt, state.lx, state.ly, state.rx, state.ry)
+                if i == 0 { mid_hidpad_set(0, 0, 0, 0, 0, 0, 0, 0) }
+            case .playstation:
+                mid_pad_set(Int32(i), connected ? 1 : 0, xbuttons, state.lt, state.rt, state.lx, state.ly, state.rx, state.ry)
+                // The DualSense is there in PlayStation mode even with no controller (it is what a
+                // game that looks for one at its start finds); the touchpad is its own button.
+                let hidButtons = UInt32(state.buttons) | (touchpadDown ? 0x0001_0000 : 0)
+                mid_hidpad_set(1, hidButtons, state.lt, state.rt, state.lx, state.ly, state.rx, state.ry)
+            case .keyboard:
+                mid_pad_set(Int32(i), 0, 0, 0, 0, 0, 0, 0, 0)
+                mid_hidpad_set(0, 0, 0, 0, 0, 0, 0, 0)
+                if active, !uiOwns { var k = state; k.buttons = xbuttons; keyboard(k) } else { keyboard(PadState()) }
+            }
         }
     }
 }

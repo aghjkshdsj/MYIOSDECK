@@ -66,7 +66,7 @@ struct GameSessionHost: ViewModifier {
             .glassDialog(session.title, isPresented: $showGameMenu, message: gameMenuMessage) {
                 var b: [DialogButton] = [
                     DialogButton(title: "Resume"),
-                    DialogButton(title: "Controller: \(Self.controllerNames[wine.currentControllerAPI] ?? "XInput")…") {
+                    DialogButton(title: "Controller: \(wine.padKeyboard ? "keyboard and mouse" : wine.padStyle.title)…") {
                         submenu { showControllerMenu = true }
                     },
                     DialogButton(title: "Touch mouse: \(Self.touchNames[GameInput.shared.touchMode] ?? "Off")…") {
@@ -84,15 +84,16 @@ struct GameSessionHost: ViewModifier {
                 b.append(DialogButton(title: "Quit game and close MYIOSDECK", role: .destructive) { CrashReporter.shared.quitApp() })
                 return b
             }
-            .glassDialog("Controller", isPresented: $showControllerMenu,
-                         message: "XInput and Keyboard and mouse switch at once. DirectInput and HID modes need the game to start with them, so they apply at the next launch. The choice is remembered for this game only; Settings › Controls is the default for the others.") {
-                Self.controllerOrder.map { api -> DialogButton in
-                    let current = api == wine.currentControllerAPI
-                    let later = WineController.sessionStartAPIs.contains(api) && api != wine.sessionAPI
-                    return DialogButton(title: (current ? "✓ " : "") + (Self.controllerNames[api] ?? api) + (later ? " (next launch)" : "")) {
-                        wine.switchController(to: api)
+            .glassDialog("Controller", isPresented: $showControllerMenu, message: Self.controllerMessage(wine)) {
+                PadStyle.allCases.map { s in
+                    DialogButton(title: (s == wine.padStyle && !wine.padKeyboard ? "✓ " : "") + s.title) {
+                        if wine.padKeyboard { wine.setPadKeyboard(false) }
+                        wine.setPadStyle(s)
                     }
-                } + [.cancel()]
+                } + [
+                    DialogButton(title: (wine.padKeyboard ? "✓ " : "") + "Controller as keyboard and mouse") { wine.setPadKeyboard(!wine.padKeyboard) },
+                    .cancel(),
+                ]
             }
             .glassDialog("Touch mouse", isPresented: $showTouchMenu,
                          message: "Off: touching the game does nothing, so holding the phone never clicks. A three-finger tap opens the game menu in every mode (with a controller: the Home button, or View + Menu held together). On-screen controller buttons keep working in every mode. The choice is remembered for this game.") {
@@ -212,11 +213,15 @@ struct GameSessionHost: ViewModifier {
         }
     }
 
-    static let controllerOrder = ["xinput", "dinput", "hid", "dualsense", "keyboard"]
-    static let controllerNames = [
-        "xinput": "Xbox (XInput)", "dinput": "XInput + DirectInput", "hid": "HID gamepad",
-        "dualsense": "DualSense (PS5)", "keyboard": "Keyboard and mouse",
-    ]
+    /// What a switch does to the running game.
+    static func controllerMessage(_ wine: WineController) -> String {
+        var m = "Xbox and PlayStation switch at once: your controller's buttons, the on-screen controller and what the game reads. Games that only read Xbox controllers (XInput) keep working either way. A game with PlayStation support shows PlayStation buttons when it finds the DualSense, which most games look for when they start: if it does not change now, it will the next time this game starts (MYIOSDECK stays open)."
+        if !wine.playStationAvailable {
+            m += " This Wine session started without the DualSense (an older Wine build): it reaches games after MYIOSDECK restarts."
+        }
+        m += " Keyboard and mouse: the controller presses keys and moves the mouse, for games without controller support. Remembered for this game; Settings › Controls has the default."
+        return m
+    }
     static let touchNames: [GameInput.TouchMode: String] = [
         .off: "Off", .trackpad: "Trackpad with cursor", .direct: "Tap where you click",
     ]
