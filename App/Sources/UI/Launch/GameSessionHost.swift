@@ -51,6 +51,7 @@ struct GameSessionHost: ViewModifier {
             .background(Color.black)
             .statusBarHidden()
             .persistentSystemOverlays(.hidden)
+            .padScope("game")   // the app behind takes no focus while the game is up
             .onAppear {
                 GameHostView.onMenu = {
                     dlog("[ui] game menu opening (surface shown \(session.shown), menu already open \(showGameMenu))")
@@ -62,64 +63,56 @@ struct GameSessionHost: ViewModifier {
                 }
                 TouchPadOverlay.shared.sessionShown(gameKey: session.gameID, mode: wine.sessionOverrides?.touchPad)
             }
-            .confirmationDialog(session.title, isPresented: $showGameMenu, titleVisibility: .visible) {
-                Button("Resume") {}
-                Button("Controller: \(Self.controllerNames[wine.currentControllerAPI] ?? "XInput")…") {
-                    submenu { showControllerMenu = true }
-                }
-                Button("Touch mouse: \(Self.touchNames[GameInput.shared.touchMode] ?? "Off")…") {
-                    submenu { showTouchMenu = true }
-                }
-                Button("On-screen controller: \(pad.visible ? "shown" : "hidden")…") {
-                    submenu { showPadMenu = true }
-                }
-                Button("Hide game (keeps running)") { session.shown = false }
+            .glassDialog(session.title, isPresented: $showGameMenu, message: gameMenuMessage) {
+                var b: [DialogButton] = [
+                    DialogButton(title: "Resume"),
+                    DialogButton(title: "Controller: \(Self.controllerNames[wine.currentControllerAPI] ?? "XInput")…") {
+                        submenu { showControllerMenu = true }
+                    },
+                    DialogButton(title: "Touch mouse: \(Self.touchNames[GameInput.shared.touchMode] ?? "Off")…") {
+                        submenu { showTouchMenu = true }
+                    },
+                    DialogButton(title: "On-screen controller: \(pad.visible ? "shown" : "hidden")…") {
+                        submenu { showPadMenu = true }
+                    },
+                    DialogButton(title: "Hide game (keeps running)") { session.shown = false },
+                ]
                 if wine.sessionKept {
-                    Button("Quit game") { requestQuit() }
-                    if quitStuck {
-                        Button("Force quit", role: .destructive) { forceQuit() }
-                    }
+                    b.append(DialogButton(title: "Quit game") { requestQuit() })
+                    if quitStuck { b.append(DialogButton(title: "Force quit", role: .destructive) { forceQuit() }) }
                 }
-                Button("Quit game and close MYIOSDECK", role: .destructive) { CrashReporter.shared.quitApp() }
-            } message: {
-                if wine.sessionKept && quitStuck {
-                    Text("\(session.title) has not closed. Force quit ends it at once (unsaved progress is lost) and MYIOSDECK stays open for the next game.")
-                } else if wine.sessionKept {
-                    Text("Quit game asks the game to close, as its window's close button does: confirm in the game if it asks. A game still running 10 s later is force quit (unsaved progress is lost). MYIOSDECK stays open for the next game. Quit game and close MYIOSDECK stops it at once.")
-                } else {
-                    Text("A Windows game can only be stopped by closing MYIOSDECK; unsaved progress is lost.")
-                }
+                b.append(DialogButton(title: "Quit game and close MYIOSDECK", role: .destructive) { CrashReporter.shared.quitApp() })
+                return b
             }
-            .confirmationDialog("Controller", isPresented: $showControllerMenu, titleVisibility: .visible) {
-                ForEach(Self.controllerOrder, id: \.self) { api in
+            .glassDialog("Controller", isPresented: $showControllerMenu,
+                         message: "XInput and Keyboard and mouse switch at once. DirectInput and HID modes need the game to start with them, so they apply at the next launch. The choice is remembered for this game only; Settings › Controls is the default for the others.") {
+                Self.controllerOrder.map { api -> DialogButton in
                     let current = api == wine.currentControllerAPI
                     let later = WineController.sessionStartAPIs.contains(api) && api != wine.sessionAPI
-                    Button((current ? "✓ " : "") + (Self.controllerNames[api] ?? api) + (later ? " (next launch)" : "")) {
+                    return DialogButton(title: (current ? "✓ " : "") + (Self.controllerNames[api] ?? api) + (later ? " (next launch)" : "")) {
                         wine.switchController(to: api)
                     }
-                }
-            } message: {
-                Text("XInput and Keyboard and mouse switch at once. DirectInput and HID modes need the game to start with them, so they apply at the next launch. The choice is remembered for this game only; Settings › Controls is the default for the others.")
+                } + [.cancel()]
             }
-            .confirmationDialog("Touch mouse", isPresented: $showTouchMenu, titleVisibility: .visible) {
-                ForEach(GameInput.TouchMode.allCases, id: \.self) { mode in
-                    Button((mode == GameInput.shared.touchMode ? "✓ " : "") + (Self.touchNames[mode] ?? mode.rawValue)) {
+            .glassDialog("Touch mouse", isPresented: $showTouchMenu,
+                         message: "Off: touching the game does nothing, so holding the phone never clicks. A three-finger tap opens the game menu in every mode (with a controller: the Home button, or View + Menu held together). On-screen controller buttons keep working in every mode. The choice is remembered for this game.") {
+                GameInput.TouchMode.allCases.map { mode in
+                    DialogButton(title: (mode == GameInput.shared.touchMode ? "✓ " : "") + (Self.touchNames[mode] ?? mode.rawValue)) {
                         GameInput.shared.setTouchMode(mode)
                     }
-                }
-            } message: {
-                Text("Off: touching the game does nothing, so holding the phone never clicks. A three-finger tap opens this menu in every mode. On-screen controller buttons keep working in every mode. The choice is remembered for this game.")
+                } + [.cancel()]
             }
-            .confirmationDialog("On-screen controller", isPresented: $showPadMenu, titleVisibility: .visible) {
-                ForEach(TouchPadMode.allCases) { mode in
-                    Button((mode == pad.mode ? "✓ " : "") + Self.padNames[mode]!) { pad.setMode(mode, remember: true) }
-                }
-                Button("Edit layout…") {
-                    // The editor is full screen over the hidden game view.
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { pad.editing = true }
-                }
-            } message: {
-                Text("Automatic shows it while no controller is connected and hides it when one connects. The choice is remembered for this game.")
+            .glassDialog("On-screen controller", isPresented: $showPadMenu,
+                         message: "Automatic shows it while no controller is connected and hides it when one connects. The choice is remembered for this game.") {
+                TouchPadMode.allCases.map { mode in
+                    DialogButton(title: (mode == pad.mode ? "✓ " : "") + Self.padNames[mode]!) { pad.setMode(mode, remember: true) }
+                } + [
+                    DialogButton(title: "Edit layout…") {
+                        // The editor is full screen over the hidden game view.
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { pad.editing = true }
+                    },
+                    .cancel(),
+                ]
             }
             .fullScreenCover(isPresented: $pad.editing) {
                 TouchLayoutEditor(gameKey: session.gameID.isEmpty ? nil : session.gameID, title: session.title)
@@ -145,6 +138,15 @@ struct GameSessionHost: ViewModifier {
                     GameHostView.shared.isHidden = false
                 }
             }
+    }
+
+    private var gameMenuMessage: String {
+        if wine.sessionKept && quitStuck {
+            return "\(session.title) has not closed. Force quit ends it at once (unsaved progress is lost) and MYIOSDECK stays open for the next game."
+        } else if wine.sessionKept {
+            return "Quit game asks the game to close, as its window's close button does: confirm in the game if it asks. A game still running 10 s later is force quit (unsaved progress is lost). MYIOSDECK stays open for the next game. Quit game and close MYIOSDECK stops it at once."
+        }
+        return "A Windows game can only be stopped by closing MYIOSDECK; unsaved progress is lost."
     }
 
     private func submenu(_ open: @escaping () -> Void) {
@@ -248,6 +250,7 @@ struct ReturnToGameBar: View {
             }
             .buttonStyle(.plain)
             .accessibilityHint("Shows the running game")
+            .padFocus("shell.return", radius: 22, preferred: true) { session.shown = true }
         }
     }
 }

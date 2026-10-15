@@ -12,6 +12,7 @@ struct SteamCloudSection: View {
     @State private var restoring: SteamCloudBackup?
     @State private var message: String?
     @State private var working = false
+    @State private var showBackups = false
 
     private var state: SteamCloudSync.GameState { cloud.games[appID] ?? .init() }
     private var record: SteamCloudRecord { cloud.record(appID) }
@@ -29,11 +30,14 @@ struct SteamCloudSection: View {
                     Button("Sync now") { run { _ = await cloud.sync(appID, reason: "Sync now") } }
                         .buttonStyle(DeckButtonStyle())
                         .disabled(working || gameRunning || cloud.isBusy(appID))
+                        .padFocus("cloud.sync", radius: 20) { if !(working || gameRunning || cloud.isBusy(appID)) { run { _ = await cloud.sync(appID, reason: "Sync now") } } }
                     if working || cloud.isBusy(appID) { ProgressView() }
                 }
                 HStack(spacing: 10) {
                     Button("Upload saves…") { prepare(upload: true) }
+                        .padFocus("cloud.upload", radius: 10) { if !(working || gameRunning || cloud.isBusy(appID)) { prepare(upload: true) } }
                     Button("Download saves…") { prepare(upload: false) }
+                        .padFocus("cloud.download", radius: 10) { if !(working || gameRunning || cloud.isBusy(appID)) { prepare(upload: false) } }
                 }
                 .buttonStyle(.bordered)
                 .disabled(working || gameRunning || cloud.isBusy(appID))
@@ -56,15 +60,10 @@ struct SteamCloudSection: View {
                 run { message = await cloud.runManual(t) }
             }
         }
-        .confirmationDialog(restoring.map { "Restore the backup of \(Self.date($0.created))?" } ?? "",
-                            isPresented: Binding(get: { restoring != nil }, set: { if !$0 { restoring = nil } }),
-                            titleVisibility: .visible, presenting: restoring) { backup in
-            Button("Restore \(backup.files.count) file\(backup.files.count == 1 ? "" : "s")") {
+        .glassDialog(item: $restoring, title: { "Restore the backup of \(Self.date($0.created))?" }, message: { _ in "The saved copies go back where the game reads them. This iPhone's current copies are backed up first, so this can be undone. Then the usual sync runs: the restored saves go up to Steam Cloud unless the cloud changed meanwhile (then you choose), and the cloud's copies they replace are backed up too." }) { backup in
+            [DialogButton(title: "Restore \(backup.files.count) file\(backup.files.count == 1 ? "" : "s")") {
                 run { message = await cloud.restore(appID, backup) }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: { _ in
-            Text("The saved copies go back where the game reads them. This iPhone's current copies are backed up first, so this can be undone. Then the usual sync runs: the restored saves go up to Steam Cloud unless the cloud changed meanwhile (then you choose), and the cloud's copies they replace are backed up too.")
+             }, .cancel()]
         }
     }
 
@@ -156,10 +155,12 @@ struct SteamCloudSection: View {
                         Button(c.entry.kind == .cloudOnly ? "Restore from cloud" : "Keep cloud's") {
                             run { await cloud.resolve(appID, [c], useCloud: true) }
                         }
+                        .padFocus("cloud.keepCloud.\(c.id)", radius: 10) { if !(working || gameRunning) { run { await cloud.resolve(appID, [c], useCloud: true) } } }
                         Spacer()
                         Button(c.entry.kind == .cloudOnly ? "Leave deleted here" : "Keep this iPhone's") {
                             run { await cloud.resolve(appID, [c], useCloud: false) }
                         }
+                        .padFocus("cloud.keepLocal.\(c.id)", radius: 10) { if !(working || gameRunning) { run { await cloud.resolve(appID, [c], useCloud: false) } } }
                     }
                     .buttonStyle(.bordered)
                     .disabled(working || gameRunning)
@@ -170,8 +171,10 @@ struct SteamCloudSection: View {
             if state.conflicts.count > 1 {
                 HStack {
                     Button("Keep all from the cloud") { run { await cloud.resolve(appID, state.conflicts, useCloud: true) } }
+                        .padFocus("cloud.allCloud", radius: 10) { if !(working || gameRunning) { run { await cloud.resolve(appID, state.conflicts, useCloud: true) } } }
                     Spacer()
                     Button("Keep all from this iPhone") { run { await cloud.resolve(appID, state.conflicts, useCloud: false) } }
+                        .padFocus("cloud.allLocal", radius: 10) { if !(working || gameRunning) { run { await cloud.resolve(appID, state.conflicts, useCloud: false) } } }
                 }
                 .buttonStyle(.bordered)
                 .disabled(working || gameRunning)
@@ -212,7 +215,7 @@ struct SteamCloudSection: View {
 
     @ViewBuilder private var backupList: some View {
         if !backups.isEmpty {
-            DisclosureGroup("Backups (\(backups.count))") {
+            DisclosureGroup(isExpanded: $showBackups) {
                 ForEach(backups) { b in
                     HStack {
                         VStack(alignment: .leading, spacing: 1) {
@@ -224,10 +227,14 @@ struct SteamCloudSection: View {
                         Button("Restore…") { restoring = b }
                             .buttonStyle(.bordered)
                             .disabled(working || gameRunning)
+                            .padFocus("cloud.restore.\(b.id)", radius: 10) { if !(working || gameRunning) { restoring = b } }
                     }
                 }
                 Text("In the Files app: On My iPhone › MYIOSDECK › save-backups › \(String(appID)).")
                     .font(.caption2).foregroundStyle(Deck.dim)
+            } label: {
+                Text("Backups (\(backups.count))")
+                    .padFocus("cloud.backups", radius: 8) { withGlassAnimation { showBackups.toggle() } }
             }
             .font(.subheadline)
         }
@@ -288,6 +295,7 @@ struct SteamCloudPage: View {
             .background(Deck.bg)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
+        .padScope("cloudPage") { dismiss() }
     }
 }
 
@@ -304,6 +312,12 @@ struct ManualTransferSheet: View {
     var body: some View {
         NavigationStack {
             List {
+                Section {
+                    Button(upload ? "Upload \(transfer.entries.count)" : "Download \(transfer.entries.count)") { confirm() }
+                        .padFocus("transfer.confirm", radius: 10, preferred: true) { confirm() }
+                    Button("Cancel", role: .cancel) { dismiss() }
+                        .padFocus("transfer.cancel", radius: 10) { dismiss() }
+                }
                 Section {
                     ForEach(transfer.entries) { e in
                         VStack(alignment: .leading, spacing: 4) {
@@ -336,6 +350,7 @@ struct ManualTransferSheet: View {
                 }
             }
         }
+        .padScope("transfer") { dismiss() }
     }
 
     private func side(_ title: String, present: Bool, size: UInt64, time: UInt64) -> some View {

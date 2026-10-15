@@ -36,24 +36,20 @@ struct GameDetailView: View {
                 }
             }
             .onAppear { ui.focusedGameID = game.id }
-            .confirmationDialog("Uninstall \(game.name)?", isPresented: $confirmUninstall, titleVisibility: .visible) {
-                Button("Delete the game's files", role: .destructive) {
+            .glassDialog("Uninstall \(game.name)?", isPresented: $confirmUninstall,
+                         message: "Removes the game's folder and Steam's install record from this iPhone. Saves kept elsewhere (Documents, AppData, Steam Cloud) stay. Install downloads it again.") {
+                [DialogButton(title: "Delete the game's files", role: .destructive) {
                     if let id = game.steamID {
                         steam.uninstall(id)
                         recent.forget(game.id)
                     }
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("Removes the game's folder and Steam's install record from this iPhone. Saves kept elsewhere (Documents, AppData, Steam Cloud) stay. Install downloads it again.")
+                 }, .cancel()]
             }
-            .confirmationDialog("Delete \(game.name)?", isPresented: $confirmDelete, titleVisibility: .visible) {
-                Button("Delete the game's files", role: .destructive) { delete(game) }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text(deleteMessage(game))
+            .glassDialog("Delete \(game.name)?", isPresented: $confirmDelete, message: deleteMessage(game)) {
+                [DialogButton(title: "Delete the game's files", role: .destructive) { delete(game) }, .cancel()]
             }
             .sheet(isPresented: $choosingProgram) { if let g = game.custom { ProgramPicker(game: g) } }
+            .padMenu { ui.open(.gameSettings(game.id)) }
         } else {
             GlassPage(back: "Back", title: "Game not found") {
                 Text("It was removed from the library.").foregroundStyle(Glass.secondary)
@@ -102,6 +98,7 @@ struct GameDetailView: View {
                 .padding(14).glassPanel()
             Button("Cancel download") { if let id = game.steamID { steam.cancel(id) } }
                 .buttonStyle(GlassButtonStyle(fullWidth: true))
+                .padFocus("game.cancelDownload1", radius: 25, preferred: true) { if let id = game.steamID { steam.cancel(id) } }
         case .downloading(let p):
             header(game, title: game.name)
             VStack(alignment: .leading, spacing: 8) {
@@ -114,11 +111,13 @@ struct GameDetailView: View {
                 .font(.footnote).foregroundStyle(Glass.secondary)
             Button("Cancel download") { if let id = game.steamID { steam.cancel(id) } }
                 .buttonStyle(GlassButtonStyle(fullWidth: true))
+                .padFocus("game.cancelDownload2", radius: 25, preferred: true) { if let id = game.steamID { steam.cancel(id) } }
         case .failed(let why):
             header(game, title: game.name)
             StatusRow(label: "Download failed", detail: why, level: .bad).padding(14).glassPanel()
             Button { if let id = game.steamID { steam.install(id) } } label: { Label("Retry", systemImage: "arrow.clockwise") }
                 .buttonStyle(PrimaryButtonStyle(fullWidth: true))
+                .padFocus("game.retry", radius: 28, preferred: true) { if let id = game.steamID { steam.install(id) } }
         case .installed: installedSection(game)
         }
     }
@@ -158,6 +157,7 @@ struct GameDetailView: View {
                 Spacer()
                 Toggle("Add to Favorites", isOn: favorites.binding(game.id)).labelsHidden().tint(Glass.primary)
             }
+            .padToggle("game.favorite.install", isOn: favorites.binding(game.id))
         }
         if let sizes, let free = StorageInfo.available, Int64(clamping: sizes.disk) > free {
             Label("Not enough space: free some on this iPhone first (Settings › Storage).", systemImage: "exclamationmark.triangle.fill")
@@ -172,7 +172,11 @@ struct GameDetailView: View {
         }
         .buttonStyle(PrimaryButtonStyle(fullWidth: true))
         .disabled(!steam.signedIn || game.steamID.flatMap { steam.game($0) } == nil)
+        .padFocus("game.install", radius: 28, preferred: true) {
+            if steam.signedIn, let id = game.steamID, steam.game(id) != nil { steam.install(id) }
+        }
         Button("Cancel") { ui.back() }.buttonStyle(GlassButtonStyle(fullWidth: true))
+            .padFocus("game.installCancel", radius: 25) { ui.back() }
     }
 
     private func infoRow(_ icon: String, _ label: String, _ value: String, last: Bool = false) -> some View {
@@ -205,12 +209,16 @@ struct GameDetailView: View {
             Button { launcher.play(game) } label: { Label("Play", systemImage: "play.fill").frame(maxWidth: .infinity) }
                 .buttonStyle(PrimaryButtonStyle(fullWidth: true))
                 .disabled(launcher.blocker(for: game) != nil || launcher.busyText != nil)
+                .padFocus("game.play", radius: 28, preferred: true, secondary: { ui.open(.gameSettings(game.id)) }) {
+                    if launcher.blocker(for: game) == nil, launcher.busyText == nil { launcher.play(game) }
+                }
             Button { ui.open(.gameSettings(game.id)) } label: {
                 Image(systemName: "slider.horizontal.3").font(.system(size: 20, weight: .semibold))
                     .frame(width: 56, height: 56).glassCircle()
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Game settings")
+            .padFocus("game.settingsButton", radius: 28) { ui.open(.gameSettings(game.id)) }
         }
         if let busy = launcher.busyText {
             HStack(spacing: 8) { ProgressView(); Text(busy) }.font(.subheadline).foregroundStyle(Glass.secondary)
@@ -228,6 +236,7 @@ struct GameDetailView: View {
                 Spacer()
                 Toggle("Favorite", isOn: favorites.binding(game.id)).labelsHidden().tint(Glass.primary)
             }
+            .padToggle("game.favorite", isOn: favorites.binding(game.id))
             Button { ui.open(.gameSettings(game.id)) } label: {
                 GlassRow(last: true) {
                     Image(systemName: "slider.horizontal.3").font(.title3).frame(width: 28)
@@ -239,6 +248,7 @@ struct GameDetailView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .padFocus("game.settingsRow", radius: 12) { ui.open(.gameSettings(game.id)) }
         }
         if let id = game.steamID, steam.installedBuild(id) != nil {
             SteamCloudSection(appID: id)
@@ -266,26 +276,32 @@ struct GameDetailView: View {
                 if steam.game(id) != nil, steam.installedBuild(id) != nil {
                     Button { steam.install(id) } label: { Label("Check for update / repair", systemImage: "arrow.triangle.2.circlepath") }
                         .buttonStyle(GlassButtonStyle(fullWidth: true))
+                        .padFocus("game.update", radius: 25) { steam.install(id) }
                     Button { confirmUninstall = true } label: { Label("Uninstall…", systemImage: "trash") }
                         .buttonStyle(GlassButtonStyle(fullWidth: true, destructive: true))
                         .disabled(launcher.deleteBlocker != nil)
+                        .padFocus("game.uninstall", radius: 25) { if launcher.deleteBlocker == nil { confirmUninstall = true } }
                 } else {
                     Button { confirmDelete = true } label: { Label("Delete…", systemImage: "trash") }
                         .buttonStyle(GlassButtonStyle(fullWidth: true, destructive: true))
                         .disabled(launcher.deleteBlocker != nil)
+                        .padFocus("game.delete", radius: 25) { if launcher.deleteBlocker == nil { confirmDelete = true } }
                 }
             case .custom(let g):
                 Text(g.exe).font(.footnote.monospaced()).foregroundStyle(Glass.secondary).lineLimit(1).truncationMode(.middle)
                 Button { choosingProgram = true } label: { Label("Choose the program…", systemImage: "doc.badge.gearshape") }
                     .buttonStyle(GlassButtonStyle(fullWidth: true))
+                    .padFocus("game.program", radius: 25) { choosingProgram = true }
                 Button {
                     custom.remove(g, files: false)
                     ui.back()
                 } label: { Label("Remove from the list (keep files)", systemImage: "minus.circle") }
                     .buttonStyle(GlassButtonStyle(fullWidth: true))
+                    .padFocus("game.remove", radius: 25) { custom.remove(g, files: false); ui.back() }
                 Button { confirmDelete = true } label: { Label("Delete the game's files…", systemImage: "trash") }
                     .buttonStyle(GlassButtonStyle(fullWidth: true, destructive: true))
                     .disabled(launcher.deleteBlocker != nil)
+                    .padFocus("game.deleteFiles", radius: 25) { if launcher.deleteBlocker == nil { confirmDelete = true } }
             }
             if let why = launcher.deleteBlocker { Text(why).font(.footnote).foregroundStyle(Glass.secondary) }
             Text(game.steamID != nil
@@ -324,29 +340,50 @@ struct ProgramPicker: View {
     let game: CustomGame
     @Environment(\.dismiss) private var dismiss
 
+    private func choose(_ p: GameProgram) {
+        var g = game
+        g.exe = p.path
+        CustomGames.shared.update(g)
+        dismiss()
+    }
+
     var body: some View {
         let programs = CustomGames.programs(in: game.folder)
-        NavigationStack {
-            List(programs) { p in
-                Button {
-                    var g = game
-                    g.exe = p.path
-                    CustomGames.shared.update(g)
-                    dismiss()
-                } label: {
-                    HStack {
-                        VStack(alignment: .leading) {
-                            Text(p.path).font(.body)
-                            Text("\(p.kind), \(bytesText(Int64(p.size)))").font(.caption).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text(game.name).font(.title2.weight(.bold)).lineLimit(1)
+                Spacer()
+                Button("Close") { dismiss() }.buttonStyle(GlassButtonStyle(compact: true))
+                    .padFocus("programs.close", radius: 18) { dismiss() }
+            }
+            Text("The program that starts the game:").font(.subheadline).foregroundStyle(Glass.secondary)
+            PadScrollView {
+                VStack(spacing: 8) {
+                    ForEach(programs) { p in
+                        Button { choose(p) } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(p.path).font(.body).multilineTextAlignment(.leading)
+                                    Text("\(p.kind), \(bytesText(Int64(p.size)))").font(.caption).foregroundStyle(Glass.secondary)
+                                }
+                                Spacer()
+                                if p.path == game.exe { Image(systemName: "checkmark").foregroundStyle(Glass.primary) }
+                            }
+                            .padding(14)
+                            .glassPanel(cornerRadius: 14)
                         }
-                        Spacer()
-                        if p.path == game.exe { Image(systemName: "checkmark") }
+                        .buttonStyle(.plain)
+                        .padFocus("programs.\(p.path)", radius: 14, preferred: p.path == game.exe) { choose(p) }
                     }
                 }
+                .padding(.vertical, 6)
             }
-            .navigationTitle(game.name)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
         }
+        .padding(20)
+        .foregroundStyle(Glass.text)
+        .background { ArtworkBackdrop(source: .blank) }
+        .presentationBackground(.clear)
+        .padScope("programs") { dismiss() }
     }
 }
 

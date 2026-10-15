@@ -60,3 +60,34 @@ A double tap that stays down on a stick is L3/R3. tests/host/touch_pad checks th
 Clears Library/Caches, tmp and Windows' temp folders in the prefix (users/*/AppData/Local/Temp,
 windows/temp). Never Documents (games, saves, save-backups, logs). Once Wine has run in this app
 run it only clears the artwork cache: Wine keeps live files (server files, mappings) in tmp/Caches.
+
+## Controller navigation of the app
+
+iOS gives SwiftUI no controller-driven focus on iPhone, so the app has its own
+(`UI/Focus/PadFocus.swift`, pure logic in `Engine/PadNavCore.swift`, tests in tests/host/pad_nav):
+
+- Views mark themselves `.padFocus(id) { action }` (also `padToggle`, `padChoice`, `padSlider`) and
+  report their frames; the D-pad or left stick moves a white ring with a blue glow to the nearest item
+  that way (`FocusMath.next`), repeating while held (0.38 s, then every 85 ms).
+- A activates, B goes back (closes a sheet or dialog, pops a page, else returns to Home), LB / RB
+  switch tabs (Home, Library, Downloads, Settings), Y opens Search, X is the focused game's Game
+  settings, Menu opens the game's "…" on Home, its Game settings on a game page, else Settings.
+  Left / right change segmented choices, sliders and pickers instead of moving.
+- Sheets, dialogs, the editor and the game view are scopes (`.padScope`): only the top one's items
+  take focus. `PadScrollView` scrolls the focused item into view.
+- iOS alerts and confirmation dialogs cannot be driven by a controller, so every question is a glass
+  dialog in a window of its own above everything (`UI/Focus/GlassDialogs.swift`), the game menu too.
+  Menus also open as such a list when chosen with the controller.
+- A touch hides the ring; the next controller press shows it again where it was.
+
+Who has the controller: while a game's view is on screen (no dialog over it) the game does, as
+before. Otherwise (Library, Settings, a hidden game, the game menu) the UI does and the game sees its
+pad connected with nothing pressed (`ControllerBridge.setUIOwnsPads`); going back to the game waits
+until every button is released, so the A that chose Resume never reaches the game.
+
+The game menu while playing: the Home / guide button if the controller has one iOS hands to apps,
+or View + Menu (Select + Start) held together for 0.6 s. A three-finger tap still works.
+
+Not driven by the controller: text fields (Search's field, Steam sign-in by password: use QR sign-in,
+whose method choice the controller can switch), iOS's own share sheet and Files picker, and dragging
+controls in the layout editor (the controller can pick a control with X on Size and resize it).

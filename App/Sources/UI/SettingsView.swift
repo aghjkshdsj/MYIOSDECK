@@ -13,7 +13,7 @@ struct SettingsView: View {
             HStack(alignment: .top, spacing: 24) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Settings").font(.title2.weight(.bold)).padding(.bottom, 6)
-                    ScrollView {
+                    PadScrollView {
                         VStack(alignment: .leading, spacing: 4) {
                             ForEach(SettingsSection.allCases) { s in sidebarItem(s) }
                         }
@@ -24,7 +24,7 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     Text(section.rawValue).font(.title.weight(.bold))
                     if section.scrolls {
-                        ScrollView {
+                        PadScrollView {
                             SettingsSectionContent(section: section)
                                 .padding(.bottom, 24)
                                 .frame(maxWidth: 760, alignment: .leading)
@@ -39,7 +39,7 @@ struct SettingsView: View {
             .padding(.horizontal, 10)
             .padding(.top, 6)
         } else {
-            ScrollView {
+            PadScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     Text("Settings").font(.largeTitle.weight(.bold))
                     GlassCard {
@@ -54,6 +54,7 @@ struct SettingsView: View {
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
+                            .padFocus("settings.row.\(s.rawValue)", radius: 12) { ui.open(.settings(s)) }
                         }
                     }
                 }
@@ -80,6 +81,8 @@ struct SettingsView: View {
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(section == s ? .isSelected : [])
+        .padFocus("settings.side.\(s.rawValue)", radius: 14, preferred: s == section,
+                  onFocus: { withGlassAnimation { section = s } }) { withGlassAnimation { section = s } }
     }
 }
 
@@ -125,13 +128,14 @@ private struct AppearanceSettings: View {
                 GlassRow {
                     Text("Theme")
                     Spacer(minLength: 12)
-                    GlassSegmented(options: Appearance.Theme.allCases, selection: $look.theme, compact: true) { $0.title }
+                    GlassSegmented(options: Appearance.Theme.allCases, selection: $look.theme, compact: true, focusID: "settings.seg1") { $0.title }
                         .frame(maxWidth: 330)
                 }
                 GlassRow(last: true) {
                     Text("Glass intensity")
                     Spacer(minLength: 12)
                     Slider(value: $look.glassIntensity, in: 0...1).tint(Glass.primary).frame(maxWidth: 330)
+                        .padSlider("settings.glass", value: $look.glassIntensity, range: 0...1, step: 0.1)
                         .accessibilityValue("\(Int(look.glassIntensity * 100)) percent")
                 }
             }
@@ -180,9 +184,11 @@ private struct PerformanceSettings: View {
                 if !jit.isReady {
                     Button(jitButtonTitle) { GameLauncher.shared.enableJIT() }
                         .buttonStyle(DeckButtonStyle())
+                        .padFocus("settings.enableJIT", radius: 20) { GameLauncher.shared.enableJIT() }
                         .disabled(jit.state == .waitingForDebugger || jit.state == .preparing)
                 } else if engine.state != .ready {
                     Button("Start engine") { engine.start(settings: settings) }.buttonStyle(DeckButtonStyle())
+                        .padFocus("settings.startEngine", radius: 20) { engine.start(settings: settings) }
                         .disabled(engine.state == .starting)
                 }
                 Text("Without JIT games run in MYIOSDECK's interpreter: no StikDebug needed, slower. With JIT (StikDebug + LocalDevVPN, docs/INSTALL.md) everything runs through FEX at full speed.")
@@ -193,7 +199,7 @@ private struct PerformanceSettings: View {
                 HStack {
                     Text("Frame rate")
                     Spacer()
-                    GlassSegmented(options: [30, 40, 60, 0], selection: frameCap, compact: true) { $0 == 0 ? "Off" : "\($0)" }
+                    GlassSegmented(options: [30, 40, 60, 0], selection: frameCap, compact: true, focusID: "settings.seg2") { $0 == 0 ? "Off" : "\($0)" }
                         .frame(maxWidth: 300)
                 }
                 Text("Caps Direct3D 10 and 11 games (DXMT paces their frames); 40 is a good battery/smoothness middle ground, as on the Steam Deck. Off leaves the pace to the game. Each game can override it in its Game settings.")
@@ -201,46 +207,55 @@ private struct PerformanceSettings: View {
                 HStack {
                     Text("Resolution")
                     Spacer()
-                    GlassSegmented(options: LaunchOverrides.resolutions, selection: $settings.monitorHeight, compact: true) { "\($0)p" }
+                    GlassSegmented(options: LaunchOverrides.resolutions, selection: $settings.monitorHeight, compact: true, focusID: "settings.seg3") { "\($0)p" }
                         .frame(maxWidth: 330)
                 }
                 Text("The height of the screen Windows sees; its width follows this iPhone's shape. Read when Wine starts.")
                     .font(.footnote).foregroundStyle(Deck.dim)
                 Toggle("Show performance overlay", isOn: $settings.gameHUD).tint(Deck.accent)
+                    .padToggle("settings.toggle.Show performance overlay", isOn: $settings.gameHUD)
                 Text("Metal's overlay over the game: frame rate, frame time, GPU time.")
                     .font(.footnote).foregroundStyle(Deck.dim)
             }
 
             DeckCard(title: "Without JIT", icon: "lock.shield") {
                 Toggle("Windows games: FXR", isOn: $settings.winFXR).tint(Deck.accent)
+                    .padToggle("settings.toggle.Windows games: FXR", isOn: $settings.winFXR)
                 Text("Runs a 64-bit Windows game's x64 code with FXR (about 2-3× FXI's speed) instead of FXI. On by default; turn it off to compare with FXI or if a game misbehaves only with FXR (or choose Compatibility in that game's settings). Faults (x64 exceptions) are exact; a debugger or garbage collector reading another thread's registers sees its last call into Windows, as with FXI. Applies to the next game you start without JIT; with Play another game without restarting, the first 64-bit game's choice holds until MYIOSDECK closes.")
                     .font(.footnote).foregroundStyle(Deck.dim)
                 Toggle("Game audio", isOn: Binding(get: { !settings.noJITMuteAudio }, set: { settings.noJITMuteAudio = !$0 })).tint(Deck.accent)
+                    .padToggle("settings.toggle.Game audio", isOn: Binding(get: { !settings.noJITMuteAudio }, set: { settings.noJITMuteAudio = !$0 }))
                 Text("Without JIT a game's audio engine decodes and mixes sound in the interpreter, and that can take a whole CPU core (Stick Fight's menu music did). Off: games start with no audio device. Applies to the next game you start without JIT.")
                     .font(.footnote).foregroundStyle(Deck.dim)
                 Toggle("Play another game without restarting (experimental)", isOn: $settings.sessionReuse).tint(Deck.accent)
+                    .padToggle("settings.toggle.Play another game without restarting (experimental)", isOn: $settings.sessionReuse)
                 Text("When a game ends (its own Quit, or Quit game in the game menu, which asks it to close), Wine keeps running and the next game starts in it: no need to close and reopen MYIOSDECK, and 32-bit and 64-bit games can follow each other. A game that does not close can be force-quit from the game menu. The next game must use the same controller mode if that is a HID gamepad; otherwise MYIOSDECK asks for a restart. 64-bit games keep the x64 CPU (FXR or FXI) the first one used. A 32-bit game's memory comes back when the next 32-bit game starts; a 64-bit game's only when MYIOSDECK closes, so MYIOSDECK asks for a restart when memory runs low. Applies from the next game you start.")
                     .font(.footnote).foregroundStyle(Deck.dim)
                 Toggle("Use FXR for x86-64 Hello (experimental)", isOn: $settings.useFXR).tint(Deck.accent)
+                    .padToggle("settings.toggle.Use FXR for x86-64 Hello (experimental)", isOn: $settings.useFXR)
                 Text("FXR is FXI with the x86 registers kept in ARM registers (\(engine.fxrPinned ? "pinned in this build" : "NOT pinned in this build")), about 2-3× FXI's speed. The benchmark measures both.")
                     .font(.footnote).foregroundStyle(Deck.dim)
             }
 
             DeckCard(title: "With JIT (FEX)", icon: "dial.high.fill") {
-                GlassSegmented(options: FEXPreset.allCases, selection: $settings.fexPreset, compact: true) { $0.title }
+                GlassSegmented(options: FEXPreset.allCases, selection: $settings.fexPreset, compact: true, focusID: "settings.seg4") { $0.title }
                 Text(settings.fexPreset.detail).font(.footnote).foregroundStyle(Deck.dim)
                 Toggle("Multiblock compilation", isOn: $settings.multiblock).tint(Deck.accent)
+                    .padToggle("settings.toggle.Multiblock compilation", isOn: $settings.multiblock)
                 Stepper("Max instructions per block: \(settings.maxInst)", value: $settings.maxInst, in: 500...10000, step: 500)
+                    .padFocus("settings.maxInst", radius: 10, adjust: { d in settings.maxInst = min(max(settings.maxInst + d * 500, 500), 10000) }) {}
                 Button("Apply (restart engine)") { engine.start(settings: settings) }
                     .buttonStyle(DeckButtonStyle(prominent: false))
+                    .padFocus("settings.apply", radius: 20) { if jit.isReady { engine.start(settings: settings) } }
                     .disabled(!jit.isReady || engine.state == .starting)
                 Text("Each restart uses a little of the JIT pool; restart MYIOSDECK if it runs low.")
                     .font(.caption).foregroundStyle(Deck.dim)
                 Toggle("Verbose FEX log", isOn: $settings.verboseFEXLog).tint(Deck.accent)
+                    .padToggle("settings.toggle.Verbose FEX log", isOn: $settings.verboseFEXLog)
                 HStack {
                     Text("JIT pool")
                     Spacer()
-                    GlassSegmented(options: [256, 512, 1024], selection: $settings.jitPoolMB, compact: true) { $0 == 1024 ? "1 GB" : "\($0) MB" }
+                    GlassSegmented(options: [256, 512, 1024], selection: $settings.jitPoolMB, compact: true, focusID: "settings.seg5") { $0 == 1024 ? "1 GB" : "\($0) MB" }
                         .frame(maxWidth: 300)
                 }
                 Text("Memory the debugger makes executable at JIT time. Bigger fits bigger games' translated code; it applies the next time JIT is enabled.")
@@ -261,6 +276,7 @@ private struct PerformanceSettings: View {
                 .padding(16).glassPanel(cornerRadius: 18)
             }
             .buttonStyle(.plain)
+            .padFocus("settings.benchmarks", radius: 18) { ui.open(.benchmarks) }
         }
     }
 
@@ -320,15 +336,18 @@ private struct ControlsSettings: View {
                 HStack {
                     Text("Show")
                     Spacer()
-                    GlassSegmented(options: TouchPadMode.allCases, selection: padMode, compact: true) { $0.title }.frame(maxWidth: 330)
+                    GlassSegmented(options: TouchPadMode.allCases, selection: padMode, compact: true, focusID: "settings.seg6") { $0.title }.frame(maxWidth: 330)
                 }
                 Text("A gamepad drawn over the game, seen by the game as an Xbox controller (player 1, with a Bluetooth controller if one is connected). Automatic shows it while no controller is connected and hides it when one connects. Each game can choose its own in Game settings or the game menu.")
                     .font(.footnote).foregroundStyle(Deck.dim)
                 Toggle("Haptic tap on press", isOn: $settings.touchPadHaptics).tint(Deck.accent)
+                    .padToggle("settings.toggle.Haptic tap on press", isOn: $settings.touchPadHaptics)
                 HStack(spacing: 10) {
                     Button { editing = true } label: { Label("Edit default layout", systemImage: "square.and.pencil") }
                         .buttonStyle(DeckButtonStyle())
+                        .padFocus("settings.editLayout", radius: 20) { editing = true }
                     Button("Reset…") { confirmReset = true }.buttonStyle(DeckButtonStyle(prominent: false))
+                        .padFocus("settings.resetLayout", radius: 20) { confirmReset = true }
                 }
                 Text("Its buttons work with every touch mouse mode; touches beside them still reach the game, and a three-finger tap away from them opens the game menu.")
                     .font(.footnote).foregroundStyle(Deck.dim)
@@ -345,6 +364,15 @@ private struct ControlsSettings: View {
                     Text("Keyboard and mouse").tag("keyboard")
                 }
                 .pickerStyle(.menu)
+                .padFocus("settings.controllerAPI", radius: 10, adjust: { d in
+                    let all = GameSessionHost.controllerOrder
+                    let i = all.firstIndex(of: settings.controllerAPI) ?? 0
+                    settings.controllerAPI = all[min(max(i + d, 0), all.count - 1)]
+                }) {
+                    showActions("Controller API", GameSessionHost.controllerOrder.map { api in
+                        DialogButton(title: (api == settings.controllerAPI ? "✓ " : "") + (GameSessionHost.controllerNames[api] ?? api)) { settings.controllerAPI = api }
+                    })
+                }
                 Text("How Windows games see your controller, for games without their own choice; takes effect the next time a game starts. XInput suits most games. If a game ignores the controller, try DirectInput (older games), HID or DualSense (engines that look for devices, such as Unity's old input system), or Keyboard and mouse, which works with any game that takes keys: A Space, B Ctrl, X E, Y R, LB Q, RB F, L3 Shift, R3 C, Menu Esc, Options Enter, D-pad arrows, left stick WASD, RT left click, LT right click.")
                     .font(.footnote).foregroundStyle(Deck.dim)
             }
@@ -354,11 +382,9 @@ private struct ControlsSettings: View {
             }
         }
         .fullScreenCover(isPresented: $editing) { TouchLayoutEditor(gameKey: nil, title: "Default layout") }
-        .confirmationDialog("Reset the default layout?", isPresented: $confirmReset, titleVisibility: .visible) {
-            Button("Reset the default layout", role: .destructive) { TouchLayoutStore.resetDefault() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("The default layout goes back to MYIOSDECK's. Games with their own layout keep it.")
+        .glassDialog("Reset the default layout?", isPresented: $confirmReset,
+                     message: "The default layout goes back to MYIOSDECK's. Games with their own layout keep it.") {
+            [DialogButton(title: "Reset the default layout", role: .destructive) { TouchLayoutStore.resetDefault() }, .cancel()]
         }
     }
 }
@@ -381,16 +407,19 @@ private struct SteamSettings: View {
                     HStack(spacing: 10) {
                         Button("Refresh library") { Task { await steam.refresh() } }
                             .buttonStyle(DeckButtonStyle(prominent: false)).disabled(steam.refreshing)
+                            .padFocus("settings.refreshLibrary", radius: 20) { Task { await steam.refresh() } }
                         Button("Sign out") { signIn.signOut() }.buttonStyle(DeckButtonStyle(prominent: false))
+                            .padFocus("settings.signOut", radius: 20) { signIn.signOut() }
                     }
                 } else {
                     Text("Sign in with your Steam account name and password (Steam Guard supported) or a QR code from the Steam app. The sign-in token stays in this device's Keychain; the password is never stored.")
                         .font(.subheadline).foregroundStyle(Deck.dim)
                     Button("Sign in to Steam") { showSignIn = true }.buttonStyle(DeckButtonStyle())
+                        .padFocus("settings.signIn", radius: 20, preferred: true) { showSignIn = true }
                 }
             }
             DeckCard(title: "Starting Steam games", icon: "play.circle") {
-                GlassSegmented(options: ["ask", "dock", "direct"], selection: $settings.steamLaunchMode, compact: true) {
+                GlassSegmented(options: ["ask", "dock", "direct"], selection: $settings.steamLaunchMode, compact: true, focusID: "settings.seg7") {
                     $0 == "ask" ? "Ask each time" : $0 == "dock" ? "With Steam" : "Without Steam"
                 }
                 Text("With Steam: Valve's own Steam client (downloaded once from Valve, about 72 MB) signs in with your account, checks the licence and starts the game, so games that need Steam running work. Without JIT its sign-in takes several minutes. Without Steam: the game's program starts on its own, faster (for DRM-free games).")
@@ -398,6 +427,7 @@ private struct SteamSettings: View {
             }
             DeckCard(title: "Steam Cloud", icon: "icloud") {
                 Toggle("Steam Cloud saves", isOn: $settings.steamCloud).tint(Deck.accent)
+                    .padToggle("settings.toggle.Steam Cloud saves", isOn: $settings.steamCloud)
                 Text("Before a Steam game starts, its Steam Cloud saves come down to where the game reads them; when it ends (its own quit, Quit game, Force quit or a crash), the saves it changed go up. Nothing is replaced without a copy first: this iPhone's copies and the cloud's go to save-backups (Files › On My iPhone › MYIOSDECK). A save changed on both sides is never picked for you: the game's page asks which to keep. Off: nothing is synced. Each game's page has Sync now, Upload, Download and its backups.")
                     .font(.footnote).foregroundStyle(Deck.dim)
             }
@@ -444,6 +474,7 @@ private struct AboutSettings: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .padFocus("about.\(title)", radius: 12, activate: action)
     }
 }
 
@@ -523,6 +554,7 @@ struct DeveloperView: View {
             Button("Play", action: action)
                 .buttonStyle(PrimaryButtonStyle(compact: true))
                 .disabled(engine.busy != nil)
+                .padFocus("dev.\(name)", radius: 20) { if engine.busy == nil { action() } }
         }
     }
 }

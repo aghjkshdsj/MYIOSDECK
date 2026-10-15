@@ -243,9 +243,7 @@ final class GameLauncher: ObservableObject {
         }
     }
 
-    fileprivate func startPendingProgramWithJIT() {
-        guard let p = noJITProgram else { return }
-        noJITProgram = nil
+    fileprivate func startWithJIT(_ p: WineController.Program) {
         enableJIT { [weak self] in self?.startProgram(p) }
     }
 
@@ -267,64 +265,53 @@ final class GameLauncher: ObservableObject {
     }
 }
 
-/// The launcher's questions, on the root view so they show wherever Play was pressed.
+/// The launcher's questions, on the root view so they show wherever Play was pressed (glass dialogs:
+/// a controller can answer them).
 struct LaunchAlerts: ViewModifier {
     @ObservedObject private var launcher = GameLauncher.shared
 
     func body(content: Content) -> some View {
         content
-            .confirmationDialog(launcher.steamChoiceGame.map { "Start \($0.name)" } ?? "", isPresented: present(\.steamChoiceGame),
-                                titleVisibility: .visible, presenting: launcher.steamChoiceGame) { game in
-                Button("With Steam") { launcher.playSteam(game, viaDock: true) }
-                Button("Without Steam") { launcher.playSteam(game, viaDock: false) }
-                Button("Cancel", role: .cancel) {}
-            } message: { _ in
-                Text("With Steam: Valve's Steam client signs in and starts the game, for games that need Steam running (without JIT the sign-in takes several minutes). Without Steam: the game starts on its own, faster. Settings › Steam can make either the default.")
+            .glassDialog(item: $launcher.steamChoiceGame, title: { "Start \($0.name)" }, message: { _ in
+                "With Steam: Valve's Steam client signs in and starts the game, for games that need Steam running (without JIT the sign-in takes several minutes). Without Steam: the game starts on its own, faster. Settings › Steam can make either the default."
+            }) { game in
+                [DialogButton(title: "With Steam") { launcher.playSteam(game, viaDock: true) },
+                 DialogButton(title: "Without Steam") { launcher.playSteam(game, viaDock: false) },
+                 .cancel()]
             }
-            .alert("JIT is off", isPresented: present(\.steamNoJITGame), presenting: launcher.steamNoJITGame) { game in
-                Button("Play without JIT (experimental)") { launcher.playSteam(game, noJIT: true, viaDock: launcher.steamPendingDock) }
-                Button("Enable JIT") {
-                    let viaDock = launcher.steamPendingDock
-                    launcher.enableJIT { launcher.playSteam(game, viaDock: viaDock) }
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: { _ in
-                Text("Without JIT, Wine loads from signed app files and the game's x64 code runs in MYIOSDECK's interpreter (FXI), about 10× slower than native. Small 64-bit Direct3D 11/12 games may run; 32-bit games are experimental. If it stops, send myiosdeck-log.txt from Settings › Logs.")
+            .glassDialog(item: $launcher.steamNoJITGame, title: { _ in "JIT is off" }, message: { _ in
+                "Without JIT, Wine loads from signed app files and the game's x64 code runs in MYIOSDECK's interpreter (FXI), about 10× slower than native. Small 64-bit Direct3D 11/12 games may run; 32-bit games are experimental. If it stops, send myiosdeck-log.txt from Settings › Logs."
+            }) { game in
+                let viaDock = launcher.steamPendingDock
+                return [DialogButton(title: "Play without JIT (experimental)") { launcher.playSteam(game, noJIT: true, viaDock: viaDock) },
+                        DialogButton(title: "Enable JIT") { launcher.enableJIT { launcher.playSteam(game, viaDock: viaDock) } },
+                        .cancel()]
             }
-            .alert("JIT is off", isPresented: present(\.customNoJITGame), presenting: launcher.customNoJITGame) { game in
-                Button("Play without JIT (experimental)") { launcher.playCustom(game, noJIT: true) }
-                Button("Enable JIT") { launcher.enableJIT { launcher.playCustom(game) } }
-                Button("Cancel", role: .cancel) {}
-            } message: { _ in
-                Text("Without JIT the game's x86 code runs in MYIOSDECK's interpreter (FXI), about 10× slower than native. 32-bit games run through WoW64 (experimental, and slower still: their Windows libraries are interpreted too). With JIT (StikDebug) everything runs through FEX at full speed.")
+            .glassDialog(item: $launcher.customNoJITGame, title: { _ in "JIT is off" }, message: { _ in
+                "Without JIT the game's x86 code runs in MYIOSDECK's interpreter (FXI), about 10× slower than native. 32-bit games run through WoW64 (experimental, and slower still: their Windows libraries are interpreted too). With JIT (StikDebug) everything runs through FEX at full speed."
+            }) { game in
+                [DialogButton(title: "Play without JIT (experimental)") { launcher.playCustom(game, noJIT: true) },
+                 DialogButton(title: "Enable JIT") { launcher.enableJIT { launcher.playCustom(game) } },
+                 .cancel()]
             }
-            .alert("You are running this without JIT", isPresented: present(\.noJITProgram)) {
-                Button("Enable JIT") { launcher.startPendingProgramWithJIT() }
-                Button("Cancel", role: .cancel) { launcher.noJITProgram = nil }
-            } message: {
-                Text("This test program uses the JIT path (Wine code copied into JIT memory, x64 code through FEX). The entries marked \"no JIT\" and Steam games can run without JIT. Enable JIT and the program starts right after.")
+            .glassDialog(item: $launcher.noJITProgram, title: { _ in "You are running this without JIT" }, message: { _ in
+                "This test program uses the JIT path (Wine code copied into JIT memory, x64 code through FEX). The entries marked \"no JIT\" and Steam games can run without JIT. Enable JIT and the program starts right after."
+            }) { p in
+                [DialogButton(title: "Enable JIT") { launcher.startWithJIT(p) }, .cancel()]
             }
-            .alert(launcher.cloudHold.map { GameLauncher.holdTitle($0.hold) } ?? "", isPresented: present(\.cloudHold),
-                   presenting: launcher.cloudHold) { h in
+            .glassDialog(item: $launcher.cloudHold, title: { GameLauncher.holdTitle($0.hold) }, message: { GameLauncher.holdMessage($0.hold) }) { h in
+                var b: [DialogButton] = []
                 switch h.hold {
-                case .conflicts: Button("Choose…") { launcher.cloudPage = h.game }
-                case .failed: Button("Try again") { launcher.playSteam(h.game, noJIT: h.noJIT, viaDock: h.viaDock) }
+                case .conflicts: b.append(DialogButton(title: "Choose…") { launcher.cloudPage = h.game })
+                case .failed: b.append(DialogButton(title: "Try again") { launcher.playSteam(h.game, noJIT: h.noJIT, viaDock: h.viaDock) })
                 }
-                Button("Play without syncing") { launcher.playSteam(h.game, noJIT: h.noJIT, viaDock: h.viaDock, skipCloud: true) }
-                Button("Cancel", role: .cancel) {}
-            } message: { h in
-                Text(GameLauncher.holdMessage(h.hold))
+                b.append(DialogButton(title: "Play without syncing") { launcher.playSteam(h.game, noJIT: h.noJIT, viaDock: h.viaDock, skipCloud: true) })
+                b.append(.cancel())
+                return b
             }
-            .alert("Could not start the game", isPresented: present(\.playError)) {
-                Button("OK", role: .cancel) { launcher.playError = nil }
-            } message: {
-                Text(launcher.playError ?? "")
+            .glassDialog(item: $launcher.playError, title: { _ in "Could not start the game" }, message: { $0 }) { _ in
+                [DialogButton(title: "OK", role: .cancel)]
             }
             .sheet(item: $launcher.cloudPage) { game in SteamCloudPage(appID: game.id, name: game.name) }
-    }
-
-    /// A Bool binding for "this optional is set" (clearing it on dismiss).
-    private func present<T>(_ key: ReferenceWritableKeyPath<GameLauncher, T?>) -> Binding<Bool> {
-        Binding(get: { launcher[keyPath: key] != nil }, set: { if !$0 { launcher[keyPath: key] = nil } })
     }
 }

@@ -10,24 +10,24 @@ struct JITGate: ViewModifier {
     @EnvironmentObject private var settings: Settings
 
     func body(content: Content) -> some View {
-        content.alert("You are running this without JIT", isPresented: presented) {
-            Button("Enable JIT") {
+        content.glassDialog("You are running this without JIT", isPresented: presented,
+                            message: engine.interpreterLinked
+                                ? "Without JIT, MYIOSDECK interprets every x86 instruction instead of translating it to ARM64 once. It works, but expect it to be many times slower. The results are saved to the log so you can share them."
+                                : "This build has no interpreter, so x86 code needs JIT. Enable JIT with StikDebug to continue.") {
+            var b = [DialogButton(title: "Enable JIT") {
                 pending = nil
                 jit.enableWithStikDebug(poolMB: settings.jitPoolMB) { engine.start(settings: settings) }
-            }
+            }]
             if engine.interpreterLinked {
-                Button("Continue anyway") {
-                    let action = pending
+                let action = pending
+                b.append(DialogButton(title: "Continue anyway") {
                     pending = nil
                     dlog("[app] user chose to run without JIT (interpreter)")
                     action?()
-                }
+                })
             }
-            Button("Cancel", role: .cancel) { pending = nil }
-        } message: {
-            Text(engine.interpreterLinked
-                 ? "Without JIT, MYIOSDECK interprets every x86 instruction instead of translating it to ARM64 once. It works, but expect it to be many times slower. The results are saved to the log so you can share them."
-                 : "This build has no interpreter, so x86 code needs JIT. Enable JIT with StikDebug to continue.")
+            b.append(.cancel { pending = nil })
+            return b
         }
     }
 

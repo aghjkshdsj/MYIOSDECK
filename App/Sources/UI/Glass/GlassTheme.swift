@@ -189,6 +189,7 @@ struct GlassToggleRow: View {
             Toggle(title, isOn: $isOn).labelsHidden().tint(Glass.primary).disabled(disabled)
         }
         .opacity(disabled ? 0.55 : 1)
+        .padFocus("toggle.\(title)", radius: 12) { if !disabled { isOn.toggle() } }
     }
 }
 
@@ -340,11 +341,21 @@ struct GlassSegmented<T: Hashable>: View {
     @Binding var selection: T
     var style = Style.accent
     var compact = false
+    /// Set: the controller can focus it (left/right change the choice).
+    var focusID: String? = nil
     let title: (T) -> String
     @Namespace private var ns
     @ObservedObject private var look = Appearance.shared
 
-    var body: some View {
+    @ViewBuilder var body: some View {
+        if let focusID {
+            segments.padChoice(focusID, options: options, selection: $selection)
+        } else {
+            segments
+        }
+    }
+
+    private var segments: some View {
         HStack(spacing: 2) {
             ForEach(options, id: \.self) { option in
                 let selected = option == selection

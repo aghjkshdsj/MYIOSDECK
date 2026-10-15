@@ -29,8 +29,9 @@ struct SearchView: View {
                 }
                 .padding(.horizontal, 16).frame(height: 46).glassCapsule()
                 Button("Cancel") { dismiss() }.buttonStyle(.plain)
+                    .padFocus("search.cancel", radius: 10) { dismiss() }
             }
-            ScrollView {
+            PadScrollView {
                 LazyVStack(spacing: 8) {
                     ForEach(results) { game in
                         Button {
@@ -53,6 +54,11 @@ struct SearchView: View {
                             .glassPanel(cornerRadius: 14)
                         }
                         .buttonStyle(.plain)
+                        .padFocus("search.\(game.id)", radius: 14, preferred: game.id == results.first?.id,
+                                  secondary: { dismiss(); DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { UIState.shared.open(.gameSettings(game.id)) } }) {
+                            dismiss()
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { UIState.shared.open(.game(game.id)) }
+                        }
                     }
                     if results.isEmpty {
                         Text(query.isEmpty ? "Your library is empty." : "No game matches \"\(query)\".")
@@ -65,8 +71,9 @@ struct SearchView: View {
         .padding(16)
         .foregroundStyle(Glass.text)
         .background { ArtworkBackdrop(source: .blank) }
-        .onAppear { focused = true }
+        .onAppear { if !PadFocus.shared.ringVisible { focused = true } }
         .presentationBackground(.clear)
+        .padScope("search") { dismiss() }
     }
 }
 
@@ -82,12 +89,13 @@ struct ControllersSheet: View {
     }
 
     var body: some View {
-        ScrollView {
+        PadScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
                     Text("Controllers").font(.title2.weight(.bold))
                     Spacer()
                     Button("Done") { dismiss() }.buttonStyle(GlassButtonStyle(compact: true))
+                        .padFocus("controllers.done", radius: 18) { dismiss() }
                 }
                 GlassCard {
                     if device.controllers.isEmpty {
@@ -111,11 +119,12 @@ struct ControllersSheet: View {
                     }
                 }
                 Text("On-screen controller").font(.headline)
-                GlassSegmented(options: TouchPadMode.allCases, selection: padMode, compact: true) { $0.title }
+                GlassSegmented(options: TouchPadMode.allCases, selection: padMode, compact: true, focusID: "controllers.mode") { $0.title }
                 Text("Automatic shows it over games while no controller is connected. Games can choose their own in Game settings.")
                     .font(.footnote).foregroundStyle(Glass.secondary)
                 Button { editing = true } label: { Label("Edit default layout", systemImage: "square.and.pencil") }
                     .buttonStyle(GlassButtonStyle(compact: true))
+                    .padFocus("controllers.edit", radius: 18) { editing = true }
             }
             .padding(20)
         }
@@ -123,6 +132,7 @@ struct ControllersSheet: View {
         .background { ArtworkBackdrop(source: .blank) }
         .presentationDetents([.medium, .large])
         .presentationBackground(.clear)
+        .padScope("controllers") { dismiss() }
         .fullScreenCover(isPresented: $editing) { TouchLayoutEditor(gameKey: nil, title: "Default layout") }
     }
 }

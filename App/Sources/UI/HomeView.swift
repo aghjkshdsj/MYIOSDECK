@@ -33,6 +33,7 @@ struct HomeView: View {
         }
         .onAppear { ui.focusedGameID = hero?.id }
         .onChange(of: hero?.id) { _, id in ui.focusedGameID = id }
+        .padMenu { if let hero { showActions(hero.name, moreActions(hero)) } else { ui.show(.settings) } }
     }
 
     // MARK: landscape (mockup 1)
@@ -79,8 +80,21 @@ struct HomeView: View {
             .buttonStyle(PrimaryButtonStyle())
             .disabled(launcher.blocker(for: game) != nil || launcher.busyText != nil)
             .accessibilityHint(launcher.blocker(for: game) ?? "Starts \(game.name)")
+            .padFocus("home.play", radius: 28, preferred: true, secondary: { ui.open(.gameSettings(game.id)) }) { play(game) }
             moreMenu(game)
         }
+    }
+
+    private func play(_ game: LibraryGame) {
+        if launcher.blocker(for: game) == nil, launcher.busyText == nil { launcher.play(game) }
+    }
+
+    /// The "…" actions (the Menu, and the same list as a dialog for the controller).
+    private func moreActions(_ game: LibraryGame) -> [DialogButton] {
+        let fav = Favorites.shared.contains(game.id)
+        return [DialogButton(title: "Game details") { ui.open(.game(game.id)) },
+                DialogButton(title: "Game settings") { ui.open(.gameSettings(game.id)) },
+                DialogButton(title: fav ? "Remove from Favorites" : "Add to Favorites") { Favorites.shared.set(game.id, !fav) }]
     }
 
     private func moreMenu(_ game: LibraryGame) -> some View {
@@ -95,6 +109,7 @@ struct HomeView: View {
             GlassMoreLabel(size: landscape ? 52 : 56)
         }
         .accessibilityLabel("More for \(game.name)")
+        .padFocus("home.more", radius: 28) { showActions(game.name, moreActions(game)) }
     }
 
     /// Why Play waits (Steam Cloud, Valve's components), why the last start failed, or why Play is off.
@@ -118,8 +133,9 @@ struct HomeView: View {
                         .font(.subheadline).foregroundStyle(Glass.text)
                 }
                 .buttonStyle(.plain)
+                .padFocus("home.viewLibrary", radius: 10) { ui.show(.library) }
             }
-            ScrollView(.horizontal) {
+            PadScrollView(axes: .horizontal) {
                 LazyHStack(spacing: 14) {
                     ForEach(rowGames(wide: wide)) { game in
                         card(game, wide: wide)
@@ -164,12 +180,16 @@ struct HomeView: View {
         .accessibilityLabel(game.name)
         .accessibilityHint(wide && !selected ? "Shows it above" : "Opens its page")
         .accessibilityAddTraits(selected ? .isSelected : [])
+        .padFocus("home.card.\(game.id)", radius: 14, secondary: { ui.open(.gameSettings(game.id)) },
+                  onFocus: { if wide { withGlassAnimation { selectedID = game.id } } }) {
+            ui.open(.game(game.id))
+        }
     }
 
     // MARK: portrait (mockup 2)
 
     private func portraitHome(_ game: LibraryGame) -> some View {
-        ScrollView {
+        PadScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 Text(recent.started[game.id] == nil ? "Ready to play" : "Jump back in")
                     .font(.title2.weight(.semibold))
@@ -189,6 +209,7 @@ struct HomeView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("\(game.name), opens its page")
+                .padFocus("home.heroArt", radius: 22) { ui.open(.game(game.id)) }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(game.name).font(.title2.weight(.semibold))
                     Text(GameCatalog.lastPlayedText(game, recent: recent)).font(.body).foregroundStyle(Glass.secondary)
@@ -199,6 +220,7 @@ struct HomeView: View {
                     }
                     .buttonStyle(PrimaryButtonStyle())
                     .disabled(launcher.blocker(for: game) != nil || launcher.busyText != nil)
+                    .padFocus("home.play", radius: 28, preferred: true, secondary: { ui.open(.gameSettings(game.id)) }) { play(game) }
                     moreMenu(game)
                 }
                 .frame(maxWidth: .infinity)
@@ -225,12 +247,13 @@ struct HomeView: View {
         .onTapGesture { ui.showControllers = true }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
+        .padFocus("home.controllers", radius: 10) { ui.showControllers = true }
     }
 
     // MARK: nothing installed yet
 
     private var welcome: some View {
-        ScrollView {
+        PadScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 Eyebrow(text: "Welcome")
                 Text("Your games, here")
@@ -243,9 +266,11 @@ struct HomeView: View {
                 HStack(spacing: 12) {
                     Button { ui.show(.library) } label: { Label("Open library", systemImage: "square.grid.2x2.fill") }
                         .buttonStyle(PrimaryButtonStyle(compact: true))
+                        .padFocus("home.openLibrary", radius: 20, preferred: true) { ui.show(.library) }
                     if !steam.signedIn {
                         Button { ui.open(.settings(.steam)) } label: { Text("Sign in to Steam") }
                             .buttonStyle(GlassButtonStyle(compact: true))
+                            .padFocus("home.signIn", radius: 18) { ui.open(.settings(.steam)) }
                     }
                 }
                 .padding(.top, 6)

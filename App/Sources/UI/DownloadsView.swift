@@ -21,7 +21,7 @@ struct DownloadsView: View {
     }
 
     var body: some View {
-        ScrollView {
+        PadScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 if let dock = launcher.dockProgress {
                     other(icon: "cloud.fill", title: "Steam components", detail: dock)
@@ -36,6 +36,7 @@ struct DownloadsView: View {
                             .font(.footnote).foregroundStyle(Glass.secondary)
                         Button { ui.show(.library) } label: { Label("Browse your library", systemImage: "square.grid.2x2.fill") }
                             .buttonStyle(GlassButtonStyle(compact: true))
+                            .padFocus("downloads.browse", radius: 18, preferred: true) { ui.show(.library) }
                             .padding(.top, 4)
                     }
                     .padding(18)
@@ -63,6 +64,7 @@ struct DownloadsView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("\(name(id)) page")
+            .padFocus("downloads.art.\(id)", radius: 10) { ui.open(.game(RecentlyPlayed.steam(id))) }
             VStack(alignment: .leading, spacing: 6) {
                 Text(name(id)).font(.headline).lineLimit(1)
                 switch state {
@@ -79,8 +81,10 @@ struct DownloadsView: View {
             switch state {
             case .failed:
                 Button("Retry") { steam.install(id) }.buttonStyle(PrimaryButtonStyle(compact: true))
+                    .padFocus("downloads.retry.\(id)", radius: 20) { steam.install(id) }
             default:
                 Button("Cancel") { steam.cancel(id) }.buttonStyle(GlassButtonStyle(compact: true))
+                    .padFocus("downloads.cancel.\(id)", radius: 18) { steam.cancel(id) }
             }
         }
         .padding(14)

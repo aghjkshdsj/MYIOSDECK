@@ -113,12 +113,15 @@ struct CrashReportSheet: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(DeckButtonStyle())
+            .padFocus("crash.share", radius: 20, preferred: true) { presentShare(report.file) }
             Button("Not now") { dismiss() }
                 .frame(maxWidth: .infinity)
+                .padFocus("crash.dismiss", radius: 10) { dismiss() }
             Spacer()
         }
         .padding(24)
         .background(Deck.bg)
         .presentationDetents([.medium])
+        .padScope("crash") { dismiss() }
     }
 }

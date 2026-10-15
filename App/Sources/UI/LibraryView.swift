@@ -44,7 +44,7 @@ struct LibraryView: View {
     }
 
     var body: some View {
-        ScrollView {
+        PadScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 controls
                 steamStatus
@@ -103,8 +103,14 @@ struct LibraryView: View {
                         .frame(width: 44, height: 44).glassCircle()
                 }
                 .accessibilityLabel("Add or refresh games")
+                .padFocus("library.add", radius: 22) {
+                    var b = [DialogButton(title: "Add a game folder…") { showImporter = true },
+                             DialogButton(title: "Look for new game folders") { custom.refresh(prefix: wine.prefixURL) }]
+                    if steam.signedIn { b.append(DialogButton(title: "Refresh Steam library") { Task { await steam.refresh() } }) }
+                    showActions("Add or refresh games", b)
+                }
             }
-            ScrollView(.horizontal) {
+            PadScrollView(axes: .horizontal) {
                 HStack(spacing: 8) {
                     ForEach(Filter.allCases) { f in
                         Button { withGlassAnimation { filter = f } } label: {
@@ -114,6 +120,7 @@ struct LibraryView: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityAddTraits(filter == f ? .isSelected : [])
+                        .padFocus("library.filter.\(f.rawValue)", radius: 17) { withGlassAnimation { filter = f } }
                     }
                 }
                 .padding(.vertical, 2)
@@ -133,6 +140,7 @@ struct LibraryView: View {
                 }
                 Spacer(minLength: 8)
                 Button("Sign in") { showSignIn = true }.buttonStyle(PrimaryButtonStyle(compact: true))
+                    .padFocus("library.signIn", radius: 20, preferred: true) { showSignIn = true }
             }
             .padding(16)
             .glassPanel()
@@ -144,6 +152,7 @@ struct LibraryView: View {
                     Text("Could not load the library: \(error)").font(.footnote).foregroundStyle(Glass.secondary)
                     Spacer()
                     Button("Retry") { Task { await steam.refresh() } }.buttonStyle(GlassButtonStyle(compact: true))
+                        .padFocus("library.retry", radius: 18) { Task { await steam.refresh() } }
                 }
             }
             .padding(14)
@@ -196,6 +205,7 @@ struct LibraryView: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel([game.name, badgeText(game)].compactMap { $0 }.joined(separator: ", "))
         .accessibilityAddTraits(.isButton)
+        .padFocus("library.tile.\(game.id)", radius: 14, secondary: { ui.open(.gameSettings(game.id)) }) { ui.open(.game(game.id)) }
     }
 
     private func badgeText(_ game: LibraryGame) -> String? {

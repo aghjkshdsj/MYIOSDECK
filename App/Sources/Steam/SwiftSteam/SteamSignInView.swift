@@ -39,6 +39,7 @@ struct SteamSignInView: View {
                             Text("Password").tag(SteamSignInModel.SignInMethod.password)
                             Text("QR code").tag(SteamSignInModel.SignInMethod.qr)
                         }.pickerStyle(.segmented)
+                        .padChoice("signin.method", options: [SteamSignInModel.SignInMethod.password, .qr], selection: $method, radius: 8)
                     }
                     if method == .password { passwordSection } else { qrSection }
                 }
@@ -70,12 +71,14 @@ struct SteamSignInView: View {
             .onChange(of: steam.guardPrompt) { _, prompt in if prompt?.codeType != nil { focus = .code } }
             .onDisappear { if !steam.signedIn { steam.cancelSignIn() } }
         }
+        .padScope("signin") { steam.cancelSignIn(); dismiss() }
     }
 
     private func signedInSection(_ name: String) -> some View {
         Section {
             LabeledContent("Account", value: name)
             Button("Sign out", role: .destructive) { steam.signOut() }
+                .padFocus("signin.signOut", radius: 8) { steam.signOut() }
         } footer: {
             Text("Signing out removes the token from this device's Keychain.")
         }
@@ -132,6 +135,7 @@ struct SteamSignInView: View {
                 }
             }
             Button("Start over", role: .cancel) { code = ""; steam.cancelSignIn() }
+                .padFocus("signin.startOver", radius: 8) { code = ""; steam.cancelSignIn() }
         } header: { Text("Steam Guard") }
     }
 
@@ -154,6 +158,7 @@ struct SteamSignInView: View {
                 HStack(spacing: 12) { ProgressView(); Text("Getting a sign-in code…").foregroundStyle(.secondary) }
             } else {
                 Button("Get a new code") { steam.beginQR() }
+                    .padFocus("signin.newCode", radius: 8, preferred: true) { steam.beginQR() }
             }
         }
     }

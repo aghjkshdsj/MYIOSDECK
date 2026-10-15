@@ -46,6 +46,12 @@ struct StorageView: View {
                         .padding(.horizontal, 16).frame(height: 40).glassCapsule()
                 }
                 .accessibilityLabel("Sort: \(sort.rawValue)")
+                .padFocus("storage.sort", radius: 20, adjust: { d in
+                    let all = Sort.allCases, i = all.firstIndex(of: sort) ?? 0
+                    sort = all[min(max(i + d, 0), all.count - 1)]
+                }) {
+                    showActions("Sort installed games", Sort.allCases.map { s in DialogButton(title: (s == sort ? "✓ " : "") + s.rawValue) { sort = s } })
+                }
             }
             let list = games
             if list.isEmpty {
@@ -103,6 +109,7 @@ struct StorageView: View {
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
+        .padFocus("storage.game.\(game.id)", radius: 12) { ui.open(.game(game.id)) }
     }
 
     private var temporary: some View {
@@ -118,6 +125,9 @@ struct StorageView: View {
                 Button(clearing ? "Clearing…" : "Clear") { clear() }
                     .buttonStyle(PrimaryButtonStyle(compact: true))
                     .disabled(clearing || (tempBytes ?? 0) == 0 || wine.isPlaying || !steam.downloads.isEmpty || GameLauncher.shared.dockProgress != nil)
+                    .padFocus("storage.clear", radius: 20) {
+                        if !(clearing || (tempBytes ?? 0) == 0 || wine.isPlaying || !steam.downloads.isEmpty || GameLauncher.shared.dockProgress != nil) { clear() }
+                    }
             }
         }
         .padding(16)

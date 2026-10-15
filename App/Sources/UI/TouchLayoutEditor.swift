@@ -49,10 +49,45 @@ struct TouchLayoutEditor: View {
             .onChange(of: isLandscape) { _, l in load(l) }
         }
         .statusBarHidden()
-        .confirmationDialog("Discard your changes?", isPresented: $confirmDiscard, titleVisibility: .visible) {
-            Button("Discard changes", role: .destructive) { dismiss() }
-            Button("Keep editing", role: .cancel) {}
+        .glassDialog("Discard your changes?", isPresented: $confirmDiscard) {
+            [DialogButton(title: "Discard changes", role: .destructive) { dismiss() }, .cancel("Keep editing")]
         }
+        .padScope("editor") { close() }
+    }
+
+    private func close() {
+        if changed { confirmDiscard = true } else { dismiss() }
+    }
+
+    /// The controller picks a control to size: the next shown one.
+    private func selectNext() {
+        let shown = layout.controls.filter { !$0.hidden }.map(\.control)
+        guard !shown.isEmpty else { return }
+        let i = selected.flatMap { shown.firstIndex(of: $0) } ?? -1
+        selected = shown[(i + 1) % shown.count]
+    }
+
+    private func toggleActions() -> [DialogButton] {
+        PadControl.allCases.map { c in
+            let shown = !(layout.spec(c)?.hidden ?? true)
+            return DialogButton(title: (shown ? "✓ " : "") + c.title) {
+                undo.append(layout)
+                layout.update(c) { $0.hidden = shown }
+                if shown, selected == c { selected = nil }
+                changed = true
+            }
+        }
+    }
+
+    private func resetLayout() {
+        undo.append(layout)
+        layout = .standard(landscape: landscape ?? true)
+        selected = nil
+        changed = true
+    }
+
+    private func undoLast() {
+        if let last = undo.popLast() { layout = last; selected = nil; changed = !undo.isEmpty }
     }
 
     private func load(_ isLandscape: Bool) {
@@ -80,6 +115,7 @@ struct TouchLayoutEditor: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Close the editor")
+                .padFocus("editor.close", radius: 22) { close() }
                 Spacer()
                 Button {
                     if let last = undo.popLast() { layout = last; selected = nil; changed = !undo.isEmpty }
@@ -91,6 +127,7 @@ struct TouchLayoutEditor: View {
                 .disabled(undo.isEmpty)
                 .opacity(undo.isEmpty ? 0.5 : 1)
                 .accessibilityLabel("Undo")
+                .padFocus("editor.undo", radius: 22) { undoLast() }
                 saveButton
             }
             VStack(spacing: 4) {
@@ -117,9 +154,14 @@ struct TouchLayoutEditor: View {
                     .overlay(Capsule().strokeBorder(.white.opacity(0.35)))
                     .shadow(color: Glass.primary.opacity(0.6), radius: 10)
             }
+            .padFocus("editor.save", radius: 22, preferred: true) {
+                showActions("Save the layout", [DialogButton(title: "Save for \(title)") { save(scope: gameKey) },
+                                                DialogButton(title: "Save as the default for all games") { save(scope: TouchLayoutStore.defaultScope) }])
+            }
         } else {
             Button("Save") { save(scope: TouchLayoutStore.defaultScope) }
                 .buttonStyle(PrimaryButtonStyle(compact: true))
+                .padFocus("editor.save", radius: 22, preferred: true) { save(scope: TouchLayoutStore.defaultScope) }
         }
     }
 
@@ -158,10 +200,18 @@ struct TouchLayoutEditor: View {
                 .tint(Glass.primary).frame(minWidth: 90, maxWidth: 190)
                 .disabled(selected == nil)
                 .accessibilityLabel(selected.map { "Size of \($0.title)" } ?? "Size (select a control first)")
+                .padFocus("editor.size", radius: 12, adjust: { d in
+                    if selected == nil { selectNext() }
+                    guard let c = selected else { return }
+                    undo.append(layout)
+                    layout.update(c) { $0.scale += Double(d) * 0.1 }
+                    changed = true
+                }, secondary: { selectNext() }) { selectNext() }
             Text("Opacity").font(.subheadline)
             Slider(value: opacity, in: TouchLayout.opacityRange, onEditingChanged: { began in if began { undo.append(layout) } })
                 .tint(Glass.primary).frame(minWidth: 90, maxWidth: 170)
                 .accessibilityLabel("Opacity of the controller")
+                .padSlider("editor.opacity", value: opacity, range: TouchLayout.opacityRange, step: 0.05)
             Rectangle().fill(Glass.separator).frame(width: 1, height: 26)
             Menu {
                 ForEach(PadControl.allCases) { c in
@@ -179,6 +229,7 @@ struct TouchLayoutEditor: View {
                 Text("Controls").font(.subheadline).foregroundStyle(Glass.primary)
             }
             .accessibilityLabel("Show or hide controls")
+            .padFocus("editor.controls", radius: 10) { showActions("Show or hide controls", toggleActions()) }
             Button("Reset layout") {
                 undo.append(layout)
                 layout = .standard(landscape: landscape ?? true)
@@ -188,6 +239,7 @@ struct TouchLayoutEditor: View {
             .font(.subheadline)
             .foregroundStyle(Glass.primary)
             .buttonStyle(.plain)
+            .padFocus("editor.reset", radius: 10) { resetLayout() }
         }
         .foregroundStyle(.white)
         .padding(.horizontal, 20).frame(height: 58)

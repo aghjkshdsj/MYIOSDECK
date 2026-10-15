@@ -45,6 +45,19 @@ final class ControllerBridge: @unchecked Sendable {
         }
     }
 
+    /// The app's UI has the controller (no game on screen: the library, the game menu): the game
+    /// sees its pads connected with nothing pressed (PadUIInput).
+    private var uiOwns = false
+
+    func setUIOwnsPads(_ owns: Bool) {
+        queue.async { [self] in
+            guard owns != uiOwns else { return }
+            uiOwns = owns
+            dlog("[xinput] controller \(owns ? "drives the app's UI: the game sees it idle" : "back to the game")")
+            sample()
+        }
+    }
+
     /// Called before a Wine session starts; the mode holds for that session.
     func setMode(_ m: Mode) {
         queue.async { [self] in
@@ -210,7 +223,7 @@ final class ControllerBridge: @unchecked Sendable {
                 }
                 continue
             }
-            guard active else { publish(1, 0, 0, 0, 0, 0, 0, 0); continue }
+            guard active, !uiOwns else { publish(1, 0, 0, 0, 0, 0, 0, 0); continue }
             let map: [(GCControllerButtonInput?, UInt16)] = [
                 (pad.dpad.up, 0x0001), (pad.dpad.down, 0x0002), (pad.dpad.left, 0x0004), (pad.dpad.right, 0x0008),
                 (pad.buttonMenu, 0x0010), (pad.buttonOptions, 0x0020),

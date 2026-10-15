@@ -46,13 +46,16 @@ struct PerformanceView: View {
                    isOn: $settings.benchInterpreter)
                 .tint(Deck.accent).font(.subheadline)
                 .disabled(!engine.interpreterLinked)
+                .padToggle("bench.interp", isOn: $settings.benchInterpreter)
             HStack(spacing: 10) {
                 Button("Run benchmark", action: runBench)
                     .buttonStyle(DeckButtonStyle())
+                    .padFocus("bench.run", radius: 20, preferred: true) { if engine.busy == nil { runBench() } }
                     .disabled(engine.busy != nil)
                 if let url = engine.lastReportURL {
                     ShareLink(item: url) { Label("Share report", systemImage: "square.and.arrow.up") }
                         .buttonStyle(DeckButtonStyle(prominent: false))
+                        .padFocus("bench.share", radius: 20) { presentShare(url) }
                 }
             }
             if engine.state != .ready {
@@ -161,6 +164,7 @@ struct PerformanceView: View {
             HStack(spacing: 10) {
                 Button("Run DLL test", action: runPETest)
                     .buttonStyle(DeckButtonStyle())
+                    .padFocus("bench.dll", radius: 20) { if !peBusy { runPETest() } }
                     .disabled(peBusy)
                 if peBusy { ProgressView() }
             }
@@ -195,6 +199,7 @@ struct PerformanceView: View {
             Text("A full-screen Metal scene with adjustable per-pixel cost, presented the way game frames will be: triple buffered, paced with ProMotion. Watch frame time and GPU time as you raise the load.")
                 .font(.footnote).foregroundStyle(Deck.dim)
             Toggle("Run the stage", isOn: $stageOn).tint(Deck.accent)
+                .padToggle("bench.stage", isOn: $stageOn)
             if stageOn {
                 ZStack(alignment: .topLeading) {
                     MetalStage(iterations: UInt32(gpuLoad), frameCap: settings.frameCap) { stats = $0 }
@@ -205,6 +210,7 @@ struct PerformanceView: View {
                 HStack {
                     Text("GPU load").foregroundStyle(Deck.dim)
                     Slider(value: $gpuLoad, in: 4...256, step: 4).tint(Deck.accent)
+                        .padSlider("bench.load", value: $gpuLoad, range: 4...256, step: 8)
                     Text("\(Int(gpuLoad))").monospacedDigit().frame(width: 40)
                 }
             }

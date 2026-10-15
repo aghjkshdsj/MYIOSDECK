@@ -34,6 +34,7 @@ struct RootView: View {
             SteamLibrary.shared.start()
             CustomGames.shared.refresh(prefix: wine.prefixURL)
             look.applyTheme()
+            PadUIInput.shared.start()
         }
         .onChange(of: look.theme) { _, _ in look.applyTheme() }
     }
@@ -99,6 +100,8 @@ struct ShellHeader: View {
         GlassSegmented(options: [UIState.Tab.home, .library, .downloads],
                        selection: Binding(get: { ui.tab }, set: { ui.show($0) }),
                        style: .tabs, compact: landscape) { $0.rawValue }
+            .padChoice("shell.tabs", options: [UIState.Tab.home, .library, .downloads],
+                       selection: Binding(get: { ui.tab == .settings ? .home : ui.tab }, set: { ui.show($0) }))
     }
 
     var body: some View {
@@ -129,11 +132,14 @@ struct ShellHeader: View {
 
     @ViewBuilder private var buttons: some View {
         GlassIconButton(systemImage: "magnifyingglass", label: "Search") { ui.showSearch = true }
+            .padFocus("shell.search", radius: 22) { ui.showSearch = true }
         GlassIconButton(systemImage: "gearshape.fill", label: "Settings", highlighted: ui.tab == .settings) { ui.show(.settings) }
+            .padFocus("shell.settings", radius: 22) { ui.show(.settings) }
         if landscape {
             GlassIconButton(systemImage: "gamecontroller.fill", label: "Controllers", badge: !device.controllers.isEmpty) {
                 ui.showControllers = true
             }
+            .padFocus("shell.controllers", radius: 22) { ui.showControllers = true }
         }
     }
 }
@@ -183,14 +189,16 @@ struct GlassPage<Content: View>: View {
                 HStack {
                     switch back {
                     case .capsule(let t): GlassBackButton(style: .capsule(t)) { ui.back() }
+                        .padFocus("page.back", radius: 22) { ui.back() }
                     case .titled(let t): GlassBackButton(style: .titled(t)) { ui.back() }
+                        .padFocus("page.back", radius: 22) { ui.back() }
                     }
                     Spacer()
                     if let trailing { trailing }
                 }
                 ReturnToGameBar()
                 if scrolls {
-                    ScrollView {
+                    PadScrollView {
                         VStack(alignment: .leading, spacing: 16) {
                             if let title { Text(title).font(.largeTitle.weight(.bold)).foregroundStyle(Glass.text) }
                             content

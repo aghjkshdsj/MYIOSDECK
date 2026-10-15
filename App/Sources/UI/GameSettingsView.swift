@@ -35,7 +35,7 @@ struct GameSettingsView: View {
 
     var body: some View {
         GlassPage(titledBack: game?.name ?? "Game", artwork: game?.artwork ?? .blank, scrolls: false,
-                  trailing: AnyView(Button("Reset") { reset() }.buttonStyle(.plain).font(.body).accessibilityHint("Back to the app defaults; Save changes keeps it"))) {
+                  trailing: AnyView(Button("Reset") { reset() }.buttonStyle(.plain).font(.body).accessibilityHint("Back to the app defaults; Save changes keeps it").padFocus("gamesettings.reset", radius: 10) { reset() })) {
             Text("Game settings").font(.largeTitle.weight(.bold))
             if landscape {
                 HStack(alignment: .top, spacing: 22) {
@@ -47,14 +47,14 @@ struct GameSettingsView: View {
                     .frame(width: 230)
                     Rectangle().fill(Glass.separator).frame(width: 1)
                     VStack(alignment: .leading, spacing: 10) {
-                        ScrollView { panel.padding(.bottom, 8) }.scrollIndicators(.hidden)
+                        PadScrollView { panel.padding(.bottom, 8) }.scrollIndicators(.hidden)
                         HStack { Spacer(); saveButton }
                     }
                 }
                 .padding(.bottom, 8)
             } else {
-                GlassSegmented(options: Section.allCases, selection: $section, compact: true) { $0.rawValue }
-                ScrollView { panel.padding(.bottom, 8) }.scrollIndicators(.hidden)
+                GlassSegmented(options: Section.allCases, selection: $section, compact: true, focusID: "gamesettings.seg1") { $0.rawValue }
+                PadScrollView { panel.padding(.bottom, 8) }.scrollIndicators(.hidden)
                 VStack(spacing: 8) {
                     Text("Changes apply next time you play.").font(.footnote).foregroundStyle(Glass.secondary)
                     saveButton
@@ -71,6 +71,7 @@ struct GameSettingsView: View {
     private var saveButton: some View {
         Button(saved ? "Saved" : "Save changes") { save() }
             .buttonStyle(PrimaryButtonStyle(fullWidth: !landscape, compact: landscape))
+            .padFocus("gamesettings.save", radius: 24) { save() }
     }
 
     private func sidebarItem(_ s: Section) -> some View {
@@ -90,6 +91,8 @@ struct GameSettingsView: View {
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(section == s ? .isSelected : [])
+        .padFocus("gamesettings.side.\(s.rawValue)", radius: 14, preferred: s == section,
+                  onFocus: { withGlassAnimation { section = s } }) { withGlassAnimation { section = s } }
     }
 
     @ViewBuilder private var panel: some View {
@@ -142,12 +145,12 @@ struct GameSettingsView: View {
             GlassRow {
                 Text("Preset")
                 Spacer(minLength: 12)
-                GlassSegmented(options: CPUPreset.allCases, selection: cpu, compact: true) { $0.title }.frame(maxWidth: 330)
+                GlassSegmented(options: CPUPreset.allCases, selection: cpu, compact: true, focusID: "gamesettings.seg2") { $0.title }.frame(maxWidth: 330)
             }
             GlassRow(last: true) {
                 Text("Frame rate")
                 Spacer(minLength: 12)
-                GlassSegmented(options: [30, 40, 60, 0], selection: frameCap, compact: true) { $0 == 0 ? "Off" : "\($0)" }
+                GlassSegmented(options: [30, 40, 60, 0], selection: frameCap, compact: true, focusID: "gamesettings.seg3") { $0 == 0 ? "Off" : "\($0)" }
                     .frame(maxWidth: 330)
             }
         }
@@ -173,18 +176,26 @@ struct GameSettingsView: View {
                     ForEach(GameSessionHost.controllerOrder, id: \.self) { Text(GameSessionHost.controllerNames[$0] ?? $0).tag($0) }
                 }
                 .pickerStyle(.menu)
+                .padFocus("gamesettings.controller", radius: 10, adjust: { d in
+                    let all = GameSessionHost.controllerOrder, i = all.firstIndex(of: api) ?? 0
+                    api = all[min(max(i + d, 0), all.count - 1)]; saved = false
+                }) {
+                    showActions("Controller", GameSessionHost.controllerOrder.map { a in
+                        DialogButton(title: (a == api ? "✓ " : "") + (GameSessionHost.controllerNames[a] ?? a)) { api = a; saved = false }
+                    })
+                }
             }
             GlassRow {
                 Text("Touch mouse")
                 Spacer(minLength: 12)
                 GlassSegmented(options: GameInput.TouchMode.allCases, selection: Binding(get: { touch }, set: { touch = $0; saved = false }),
-                               compact: true) { $0 == .off ? "Off" : $0 == .trackpad ? "Trackpad" : "Tap" }
+                               compact: true, focusID: "gamesettings.seg4") { $0 == .off ? "Off" : $0 == .trackpad ? "Trackpad" : "Tap" }
                     .frame(maxWidth: 330)
             }
             GlassRow(last: true) {
                 Text("On-screen controller")
                 Spacer(minLength: 12)
-                GlassSegmented(options: TouchPadMode.allCases, selection: touchPad, compact: true) { $0.title }.frame(maxWidth: 330)
+                GlassSegmented(options: TouchPadMode.allCases, selection: touchPad, compact: true, focusID: "gamesettings.seg5") { $0.title }.frame(maxWidth: 330)
             }
         }
         Text("Controller: how the game sees a controller (XInput suits most games; DirectInput and HID start with the game). Touch mouse: Trackpad moves a cursor, Tap clicks where you touch; a three-finger tap opens the game menu in every mode. On-screen controller: Automatic hides it while a controller is connected.")
@@ -192,9 +203,11 @@ struct GameSettingsView: View {
         HStack(spacing: 12) {
             Button { editingLayout = true } label: { Label("Edit on-screen layout", systemImage: "square.and.pencil") }
                 .buttonStyle(GlassButtonStyle(compact: true))
+                .padFocus("gamesettings.editLayout", radius: 18) { editingLayout = true }
             if TouchLayoutStore.hasOwnLayout(gameID) {
                 Button { TouchLayoutStore.removeOwnLayout(gameID); saved = false } label: { Text("Use the default layout") }
                     .buttonStyle(GlassButtonStyle(compact: true))
+                    .padFocus("gamesettings.defaultLayout", radius: 18) { TouchLayoutStore.removeOwnLayout(gameID); saved = false }
             }
         }
         Text(TouchLayoutStore.hasOwnLayout(gameID) ? "This game has its own on-screen layout." : "This game uses the default on-screen layout (Settings › Controls).")
@@ -208,7 +221,7 @@ struct GameSettingsView: View {
             GlassRow(last: true) {
                 Text("Resolution")
                 Spacer(minLength: 12)
-                GlassSegmented(options: LaunchOverrides.resolutions, selection: resolution, compact: true) { "\($0)p" }.frame(maxWidth: 360)
+                GlassSegmented(options: LaunchOverrides.resolutions, selection: resolution, compact: true, focusID: "gamesettings.seg6") { "\($0)p" }.frame(maxWidth: 360)
             }
         }
         Text("The height of the screen Windows sees (its width follows this iPhone's shape). Lower is lighter for the GPU, higher is sharper. Wine reads it once per session: with Play another game without restarting, the first game's size stays until MYIOSDECK closes.")

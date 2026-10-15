@@ -17,7 +17,9 @@ struct LogView: View {
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
                 ShareLink(item: logs.fileURL) { Image(systemName: "square.and.arrow.up") }
+                    .padFocus("logs.share", radius: 8, preferred: true) { presentShare(logs.fileURL) }
                 Button { logs.clear() } label: { Image(systemName: "trash") }
+                    .padFocus("logs.clear", radius: 8) { logs.clear() }
             }
             .padding(.horizontal, 16).padding(.top, 10)
 
