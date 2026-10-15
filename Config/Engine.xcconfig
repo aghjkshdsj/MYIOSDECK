@@ -5,3 +5,4 @@
 #include "Blink.xcconfig"
 #include "Wine.xcconfig"
 #include "DXMT.xcconfig"
+#include "Inno.xcconfig"

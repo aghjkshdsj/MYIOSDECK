@@ -1,0 +1,2 @@
+// Default: no GOG installer unpacker. engine/innoextract/build.sh overwrites this in CI.
+MYIOSDECK_INNO_LIBS =

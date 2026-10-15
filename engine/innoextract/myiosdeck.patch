@@ -1,0 +1,106 @@
+diff --git a/src/util/console.cpp b/src/util/console.cpp
+index 0398a20..f849705 100644
+--- a/src/util/console.cpp
++++ b/src/util/console.cpp
+@@ -27,6 +27,7 @@
+ #include <cstdlib>
+ #include <cstdio>
+ #include <cstring>
++#include <stdexcept>
+ 
+ #include "configure.hpp"
+ 
+@@ -346,8 +347,18 @@ progress::progress(boost::uint64_t max_value, bool show_value_rate)
+ 	  start_time(boost::posix_time::microsec_clock::universal_time()),
+ 	  last_status(-1.f), last_time(0), last_rate(0.f) { }
+ 
++bool (*progress::hook)(boost::uint64_t value, boost::uint64_t max) = NULL;
++
+ bool progress::update(boost::uint64_t delta, bool force) {
+-	
++
++	if(hook) {
++		value += delta;
++		if(!hook(value, max)) {
++			throw std::runtime_error("Cancelled");
++		}
++		return false;
++	}
++
+ 	if(!show_progress) {
+ 		return false;
+ 	}
+diff --git a/src/util/console.hpp b/src/util/console.hpp
+index b6e946f..9751727 100644
+--- a/src/util/console.hpp
++++ b/src/util/console.hpp
+@@ -158,6 +158,12 @@ public:
+ 	static void set_enabled(bool enable);
+ 	
+ 	static bool is_enabled();
++
++	/*!
++	 * MYIOSDECK: when set, every update reports (value, max) here instead of drawing a bar.
++	 * Returning false cancels: update() then throws std::runtime_error("Cancelled").
++	 */
++	static bool (*hook)(boost::uint64_t value, boost::uint64_t max);
+ 	
+ };
+ 
+diff --git a/src/util/log.cpp b/src/util/log.cpp
+index 497eda1..41d8d1c 100644
+--- a/src/util/log.cpp
++++ b/src/util/log.cpp
+@@ -26,12 +26,23 @@
+ 
+ bool logger::debug = false;
+ bool logger::quiet = false;
++void (*logger::sink)(log_level level, const std::string & message) = NULL;
+ 
+ size_t logger::total_errors = 0;
+ size_t logger::total_warnings = 0;
+ 
+ logger::~logger() {
+-	
++
++	if(sink) {
++		if(level == Warning) {
++			total_warnings++;
++		} else if(level == Error) {
++			total_errors++;
++		}
++		sink(level, buffer.str());
++		return;
++	}
++
+ 	color::shell_command previous = color::current;
+ 	progress::clear();
+ 	
+diff --git a/src/util/log.hpp b/src/util/log.hpp
+index 37b113d..fc372cc 100644
+--- a/src/util/log.hpp
++++ b/src/util/log.hpp
+@@ -72,6 +72,9 @@ public:
+ 	
+ 	static bool debug; //! Is \ref debug output enabled?
+ 	static bool quiet; //! Is \ref log_info disabled?
++
++	//! MYIOSDECK: when set, log lines go here instead of stdout/stderr (an app has no terminal).
++	static void (*sink)(log_level level, const std::string & message);
+ 	
+ 	/*!
+ 	 * Construct a log line output stream.
+diff --git a/src/util/process.cpp b/src/util/process.cpp
+index 4ce48ec..90477e6 100644
+--- a/src/util/process.cpp
++++ b/src/util/process.cpp
+@@ -180,6 +180,9 @@ int run(const char * const args[]) {
+ 	
+ 	return 0;
+ 	
++#elif defined(MYIOSDECK_NO_PROCESSES)
++	(void)args;
++	return -1; // MYIOSDECK: an iOS app cannot start other programs
+ #else
+ 	return std::system(format_command_line(args).c_str());
+ #endif

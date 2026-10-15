@@ -1,0 +1,103 @@
+name: GOG installer unpacker
+
+# The app unpacks GOG offline installers with innoextract (engine/innoextract). This builds small
+# Inno Setup installers with Inno Setup itself, checks the app's unpacker (built natively)
+# against upstream innoextract's command line on them, and checks the iOS library links.
+# No GOG installer is downloaded or stored anywhere.
+
+on:
+  push:
+    paths: ["engine/innoextract/**", "App/Sources/Native/inno_unpack.h", ".github/workflows/innoextract.yml"]
+  pull_request:
+    paths: ["engine/innoextract/**", "App/Sources/Native/inno_unpack.h", ".github/workflows/innoextract.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: innoextract-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  installers:
+    name: Test installers (Inno Setup ${{ matrix.inno }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        inno: ["5.6.1", "6.2.2", "6.3.3"]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Inno Setup ${{ matrix.inno }}
+        shell: pwsh
+        run: choco install innosetup --version ${{ matrix.inno }} -y --no-progress --allow-downgrade --force
+      - name: Build the installers
+        shell: bash
+        run: |
+          ISCC="/c/Program Files (x86)/Inno Setup ${{ startsWith(matrix.inno, '5') && '5' || '6' }}/ISCC.exe"
+          ls -la "$ISCC"
+          bash engine/innoextract/test/make-installers.sh "$ISCC" "$RUNNER_TEMP/installers"
+      - uses: actions/upload-artifact@v5
+        with:
+          name: test-installers-${{ matrix.inno }}
+          path: ${{ runner.temp }}/installers
+          retention-days: 7
+
+  compare:
+    name: App unpacker vs. innoextract (Linux)
+    needs: installers
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake ninja-build jq liblzma-dev libbz2-dev zlib1g-dev \
+            libboost-iostreams-dev libboost-filesystem-dev libboost-date-time-dev \
+            libboost-system-dev libboost-program-options-dev > /dev/null
+      - name: Cache downloads
+        uses: actions/cache@v4
+        with:
+          path: engine/innoextract/deps
+          key: innoextract-deps-${{ hashFiles('engine/innoextract/PIN') }}-${{ runner.os }}
+      - name: Upstream innoextract (same commit, unpatched)
+        run: |
+          source engine/innoextract/PIN
+          git init -q "$RUNNER_TEMP/upstream"
+          git -C "$RUNNER_TEMP/upstream" fetch -q --depth 1 "$REPO" "$SHA"
+          git -C "$RUNNER_TEMP/upstream" checkout -q FETCH_HEAD
+          cmake -S "$RUNNER_TEMP/upstream" -B "$RUNNER_TEMP/upstream/build" -G Ninja -DCMAKE_BUILD_TYPE=Release > /dev/null
+          cmake --build "$RUNNER_TEMP/upstream/build" > /dev/null
+          "$RUNNER_TEMP/upstream/build/innoextract" --version | head -1
+      - name: App unpacker (engine/innoextract/build.sh host)
+        run: bash engine/innoextract/build.sh host "$RUNNER_TEMP/ours"
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: test-installers-*
+          path: ${{ runner.temp }}/installers
+      - name: Compare
+        run: |
+          set -o pipefail
+          bash engine/innoextract/test/compare.sh "$RUNNER_TEMP/installers" \
+            "$RUNNER_TEMP/upstream/build/innoextract" "$RUNNER_TEMP/ours/unpack_test" | tee "$RUNNER_TEMP/compare.txt"
+          { echo '```'; grep -E '^(PASS|FAIL|==|All|Some)' "$RUNNER_TEMP/compare.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+  ios:
+    name: iOS library + link check
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v5
+      - name: Toolchain
+        run: brew install ninja || true
+      - name: Cache downloads
+        uses: actions/cache@v4
+        with:
+          path: engine/innoextract/deps
+          key: innoextract-deps-${{ hashFiles('engine/innoextract/PIN') }}-${{ runner.os }}
+      - name: Build for iOS arm64
+        run: bash engine/innoextract/build.sh ios
+      - name: Exported API
+        run: |
+          nm -gU engine/innoextract/build-ios/libinno_ios.a 2>/dev/null | grep ' _mid_inno_' | sort -u
+          lipo -info engine/innoextract/build-ios/libinno_ios.a
