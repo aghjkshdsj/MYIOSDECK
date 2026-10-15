@@ -978,7 +978,7 @@ final class SteamCloudSync: ObservableObject {
             }
             return out.sorted { $0.2 > $1.2 }
         }.value
-        SteamLog.event("[steam-cloud] app=\(appID) files written under C:\users during the session: \(found.count)")
+        SteamLog.event("[steam-cloud] app=\(appID) files written under C:\\users during the session: \(found.count)")
         for (path, size, _) in found.prefix(30) { SteamLog.event("[steam-cloud] app=\(appID) wrote: \(path) \(size) B") }
     }
 
