@@ -31,6 +31,12 @@ struct SteamCloudSection: View {
                         .disabled(working || gameRunning || cloud.isBusy(appID))
                     if working || cloud.isBusy(appID) { ProgressView() }
                 }
+                HStack(spacing: 10) {
+                    Button("Upload saves…") { prepare(upload: true) }
+                    Button("Download saves…") { prepare(upload: false) }
+                }
+                .buttonStyle(.bordered)
+                .disabled(working || gameRunning || cloud.isBusy(appID))
                 if gameRunning {
                     Text("The game is running: its saves sync when it ends.").font(.caption).foregroundStyle(Deck.dim)
                 }
@@ -44,6 +50,12 @@ struct SteamCloudSection: View {
             if SteamCloudSync.enabled, !gameRunning { await cloud.check(appID) }
             reloadBackups()
         }
+        .sheet(item: $manual) { t in
+            ManualTransferSheet(transfer: t) {
+                manual = nil
+                run { message = await cloud.runManual(t) }
+            }
+        }
         .confirmationDialog(restoring.map { "Restore the backup of \(Self.date($0.created))?" } ?? "",
                             isPresented: Binding(get: { restoring != nil }, set: { if !$0 { restoring = nil } }),
                             titleVisibility: .visible, presenting: restoring) { backup in
@@ -53,6 +65,25 @@ struct SteamCloudSection: View {
             Button("Cancel", role: .cancel) {}
         } message: { _ in
             Text("The saved copies go back where the game reads them. This iPhone's current copies are backed up first, so this can be undone. Then the usual sync runs: the restored saves go up to Steam Cloud unless the cloud changed meanwhile (then you choose), and the cloud's copies they replace are backed up too.")
+        }
+    }
+
+    /// A manual upload or download waiting for the user's confirmation.
+    @State private var manual: SteamCloudSync.ManualTransfer?
+
+    private func prepare(upload: Bool) {
+        run {
+            switch await cloud.prepareManual(appID, upload: upload) {
+            case .success(let t):
+                if t.entries.isEmpty {
+                    message = upload ? "Nothing to upload: Steam Cloud already has every save this iPhone has."
+                                     : "Nothing to download: this iPhone already has every save Steam Cloud has."
+                } else {
+                    manual = t
+                }
+            case .failure(let e):
+                message = e.localizedDescription
+            }
         }
     }
 
@@ -256,6 +287,66 @@ struct SteamCloudPage: View {
             }
             .background(Deck.bg)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+    }
+}
+
+/// The confirmation of a manual upload or download: every save it copies with both sides' size
+/// and date, the ones that replace a copy changed since the last sync marked, and what happens to
+/// the replaced copies.
+struct ManualTransferSheet: View {
+    let transfer: SteamCloudSync.ManualTransfer
+    let confirm: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    private var upload: Bool { transfer.upload }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    ForEach(transfer.entries) { e in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(e.name).font(.subheadline.weight(.semibold)).lineLimit(1)
+                            Text(SteamCloudSection.folder(e.path)).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                            HStack {
+                                side("This iPhone", present: e.kind != .cloudOnly, size: e.localSize, time: e.localTime)
+                                Spacer()
+                                side("Steam Cloud", present: e.kind != .localOnly, size: e.cloudSize, time: e.cloudTime)
+                            }
+                            if transfer.replacesNewer.contains(e.key) {
+                                Text(upload ? "The cloud's copy changed since the last sync on this iPhone (another device, or never synced here): it will be replaced; a copy is kept in save-backups."
+                                            : "This iPhone's copy changed since the last sync: it will be replaced; a copy is kept in save-backups.")
+                                    .font(.caption).foregroundStyle(.orange)
+                            }
+                        }
+                    }
+                } footer: {
+                    Text(upload
+                         ? "These saves on this iPhone go up to Steam Cloud, where every device signed in to this account (a PC too) gets them. The cloud's copies they replace are downloaded into save-backups first. Nothing is deleted in the cloud."
+                         : "These saves come down from Steam Cloud to where the game reads them. This iPhone's copies they replace go to save-backups first. Nothing is deleted on this iPhone.")
+                }
+            }
+            .navigationTitle(upload ? "Upload to Steam Cloud" : "Download from Steam Cloud")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(upload ? "Upload \(transfer.entries.count)" : "Download \(transfer.entries.count)") { confirm() }
+                }
+            }
+        }
+    }
+
+    private func side(_ title: String, present: Bool, size: UInt64, time: UInt64) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.caption.weight(.semibold))
+            if present {
+                Text(ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)).font(.caption2)
+                Text(time > 0 ? SteamCloudSection.date(Date(timeIntervalSince1970: TimeInterval(time))) : "no date").font(.caption2)
+            } else {
+                Text("not there").font(.caption2).foregroundStyle(.secondary)
+            }
         }
     }
 }

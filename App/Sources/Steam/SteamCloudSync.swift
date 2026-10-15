@@ -508,24 +508,48 @@ final class SteamCloudSync: ObservableObject {
     }
 
     /// The Windows user folder games write to. A prefix can hold several folders under users; Wine
-    /// names the live one after $USER, else the passwd name, so those are tried first, then the
-    /// most recently changed. nil when the prefix has none yet. (Madeira's SteamCloudPaths.userFolder.)
-    static func userFolder(drive: URL) -> URL? {
+    /// names the live one after $USER, else the passwd name, so those come first, then the most
+    /// recently changed, then the rest. Among them, the first that already holds one of the game's
+    /// save folders (its `ufs` rules) wins: that is where this game writes. nil when the prefix has
+    /// none yet. (After Madeira's SteamCloudPaths.userFolder.)
+    static func userFolder(drive: URL, rules: [SteamCloudSaveRule] = []) -> URL? {
         let users = drive.appendingPathComponent("users", isDirectory: true)
         guard let names = try? FileManager.default.contentsOfDirectory(atPath: users.path) else { return nil }
         let own = names.filter { !$0.hasPrefix(".") && $0.caseInsensitiveCompare("Public") != .orderedSame }
-        func find(_ name: String?) -> URL? {
-            guard let name, let match = own.first(where: { $0.caseInsensitiveCompare(name) == .orderedSame }) else { return nil }
-            return users.appendingPathComponent(match, isDirectory: true)
+        var ordered: [String] = []
+        func add(_ name: String?) {
+            guard let name, let match = own.first(where: { $0.caseInsensitiveCompare(name) == .orderedSame }),
+                  !ordered.contains(match) else { return }
+            ordered.append(match)
         }
-        if let url = find(getenv("USER").map { String(cString: $0) }) { return url }
-        if let entry = getpwuid(getuid()), let url = find(String(cString: entry.pointee.pw_name)) { return url }
+        add(getenv("USER").map { String(cString: $0) })
+        if let entry = getpwuid(getuid()) { add(String(cString: entry.pointee.pw_name)) }
         func changed(_ name: String) -> Date {
             let appData = users.appendingPathComponent(name + "/AppData", isDirectory: true)
             return (try? appData.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
         }
-        guard let newest = own.max(by: { changed($0) < changed($1) }) else { return nil }
-        return users.appendingPathComponent(newest, isDirectory: true)
+        for name in own.sorted(by: { changed($0) > changed($1) }) { add(name) }
+        let ruleFolders: [[String]] = rules.compactMap { rule in
+            let base: [String]
+            switch rule.root.lowercased() {
+            case "winappdatalocal": base = ["AppData", "Local"]
+            case "winappdatalocallow": base = ["AppData", "LocalLow"]
+            case "winappdataroaming": base = ["AppData", "Roaming"]
+            case "winmydocuments": base = ["Documents"]
+            case "winsavedgames": base = ["Saved Games"]
+            default: return nil
+            }
+            let sub = rule.path.replacingOccurrences(of: "\\", with: "/").split(separator: "/").map(String.init)
+            guard !sub.contains(where: { $0 == ".." || $0.contains("{") }) else { return nil }
+            return base + sub.filter { !$0.isEmpty && $0 != "." }
+        }
+        for name in ordered {
+            let folder = users.appendingPathComponent(name, isDirectory: true)
+            for parts in ruleFolders where parts.count > 2 || parts.first == "Documents" || parts.first == "Saved Games" {
+                if FileManager.default.fileExists(atPath: SteamCloudPaths.resolve(base: folder, parts: parts).path) { return folder }
+            }
+        }
+        return ordered.first.map { users.appendingPathComponent($0, isDirectory: true) }
     }
 
     private static let noFolders = "This game's save folders were not found (it has not been installed or started yet)."
@@ -534,7 +558,6 @@ final class SteamCloudSync: ObservableObject {
     /// for offline use).
     private func context(_ appID: Int, online: Bool) async throws -> Context {
         let drive = SteamLibrary.drive
-        guard let user = Self.userFolder(drive: drive) else { throw SteamFileError.invalid(Self.noFolders) }
         let library = SteamLibrary.shared
         let install: URL
         if let game = library.installed.first(where: { $0.id == appID }) {
@@ -559,6 +582,7 @@ final class SteamCloudSync: ObservableObject {
             }
             update(appID) { $0.steamID = steamID; $0.rules = rules; $0.overrides = overrides; $0.buildID = buildID }
         }
+        guard let user = Self.userFolder(drive: drive, rules: rules ?? []) else { throw SteamFileError.invalid(Self.noFolders) }
         guard let steamID, steamID != 0 else { throw SteamFileError.invalid("Steam Cloud needs a connection to Steam first.") }
         let remote = MadeiraDock.clientRoot.appendingPathComponent("userdata/\(steamID & 0xFFFF_FFFF)/\(appID)/remote", isDirectory: true)
         let paths = SteamCloudPaths(userFolder: user, installFolder: install, remoteFolder: remote,
@@ -881,6 +905,7 @@ final class SteamCloudSync: ObservableObject {
     /// own connection must stay off: no Steam Cloud request is made meanwhile.
     func gameStarting(_ appID: Int, synced: Bool, dock: Bool) {
         activeApp = appID
+        sessionStarted = Date()
         dockRunning = dock
         guard Self.enabled, account != nil else { return }
         update(appID) { r in
@@ -896,6 +921,8 @@ final class SteamCloudSync: ObservableObject {
     func gameEnded() {
         guard let appID = activeApp else { return }
         activeApp = nil
+        let started = sessionStarted ?? Date()
+        sessionStarted = nil
         dockRunning = false
         guard Self.enabled, account != nil else { return }
         // Other games whose end-of-game sync waited for the account (a Dock session held it).
@@ -908,6 +935,7 @@ final class SteamCloudSync: ObservableObject {
                 await self.sync(id, reason: id == appID ? "end of game" : "end of an earlier game")
                 self.pending.remove(id)
             }
+            await self.logSessionWrites(appID, since: started)
         }
     }
 
@@ -916,6 +944,43 @@ final class SteamCloudSync: ObservableObject {
     /// `releaseDock()` when it never started.
     func holdForDock() { dockRunning = true }
     func releaseDock() { if activeApp == nil { dockRunning = false } }
+
+    /// When the running game's session started (logSessionWrites).
+    private var sessionStarted: Date?
+
+    /// Where the game wrote files during its session: every file under the prefix's user folders
+    /// changed since it started (Valve's client's own folders and caches left out), newest first,
+    /// as `[steam-cloud] app=N wrote: <user>/<path> <bytes>` (the user folder's name is not
+    /// logged). A save Steam Cloud does not see (a game that writes outside its `ufs` rules, or a
+    /// user folder that is not the one the rules point at) shows up here.
+    func logSessionWrites(_ appID: Int, since: Date) async {
+        let drive = SteamLibrary.drive
+        let found = await Task.detached(priority: .utility) { () -> [(String, Int, Date)] in
+            let users = drive.appendingPathComponent("users", isDirectory: true)
+            let skipped: Set<String> = ["steam", "htmlcache", "temp", "inetcache", "microsoft", "packages", "d3dscache",
+                                        "shadercache", "nvidia", "crashdumps", "webcache", "madeira"]
+            var out: [(String, Int, Date)] = []
+            let names = ((try? FileManager.default.contentsOfDirectory(atPath: users.path)) ?? []).sorted()
+            for (index, name) in names.enumerated() where !name.hasPrefix(".") {
+                let root = users.appendingPathComponent(name, isDirectory: true)
+                guard let walk = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey, .fileSizeKey]) else { continue }
+                let base = root.resolvingSymlinksInPath().path
+                var visited = 0
+                for case let url as URL in walk {
+                    visited += 1
+                    if visited > 40_000 { break }
+                    if skipped.contains(url.lastPathComponent.lowercased()) { walk.skipDescendants(); continue }
+                    guard let v = try? url.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey, .fileSizeKey]),
+                          v.isRegularFile == true, let t = v.contentModificationDate, t >= since.addingTimeInterval(-5) else { continue }
+                    let rel = url.resolvingSymlinksInPath().path.dropFirst(base.count).drop { $0 == "/" }
+                    out.append(("<user \(index)>/" + rel, v.fileSize ?? 0, t))
+                }
+            }
+            return out.sorted { $0.2 > $1.2 }
+        }.value
+        SteamLog.event("[steam-cloud] app=\(appID) files written under C:\users during the session: \(found.count)")
+        for (path, size, _) in found.prefix(30) { SteamLog.event("[steam-cloud] app=\(appID) wrote: \(path) \(size) B") }
+    }
 
     /// Games whose end-of-game sync is about to run.
     private var pending: Set<Int> = []
@@ -1015,6 +1080,95 @@ final class SteamCloudSync: ObservableObject {
         busy.remove(appID)
         if account != nil { await sync(appID, reason: "after a restore") }
         return "Restored \(restored) file\(restored == 1 ? "" : "s")."
+    }
+
+    // MARK: Upload or download on request
+
+    /// What a manual upload or download would copy, for the confirmation: every save that differs
+    /// in that direction, and which of them replace a copy that changed since the last sync.
+    struct ManualTransfer: Identifiable {
+        var appID: Int
+        var upload: Bool
+        var entries: [SteamCloudEntry]
+        /// Keys of the entries whose other side changed since the last sync (or that were never
+        /// synced): copying them replaces newer work there, which is backed up first.
+        var replacesNewer: Set<String>
+        var id: String { "\(appID)-\(upload)" }
+    }
+
+    /// Compares and lists what Upload (this iPhone's saves into the cloud) or Download (the cloud's
+    /// saves onto this iPhone) would copy. Changes nothing.
+    func prepareManual(_ appID: Int, upload: Bool) async -> Result<ManualTransfer, SteamFileError> {
+        guard Self.enabled, account != nil else { return .failure(.invalid("Sign in to Steam to use Steam Cloud.")) }
+        guard !dockRunning, activeApp != appID, !busy.contains(appID) else {
+            return .failure(.invalid("Wait until the game and its sync have ended."))
+        }
+        busy.insert(appID); defer { busy.remove(appID) }
+        setPhase(appID, .checking)
+        do {
+            let context = try await context(appID, online: true)
+            let (_, audit, _) = try await compare(appID, context)
+            setPhase(appID, .idle)
+            let r = record(appID)
+            var entries: [SteamCloudEntry] = []
+            var newer = Set<String>()
+            for e in audit.entries {
+                let known = r.files[e.key].flatMap { $0.state == .synced ? $0.sha : nil }
+                if upload {
+                    guard (e.kind == .differ || e.kind == .localOnly), !e.localSHA.isEmpty else { continue }
+                    entries.append(e)
+                    if e.kind == .differ, known != SteamCloudRecord.hex(e.cloudSHA) { newer.insert(e.key) }
+                } else {
+                    guard e.kind == .differ || e.kind == .cloudOnly else { continue }
+                    entries.append(e)
+                    if e.kind == .differ, known != SteamCloudRecord.hex(e.localSHA) { newer.insert(e.key) }
+                }
+            }
+            SteamLog.event("[steam-cloud] app=\(appID) manual \(upload ? "upload" : "download") prepared files=\(entries.count) replacing-newer=\(newer.count)")
+            return .success(ManualTransfer(appID: appID, upload: upload, entries: entries, replacesNewer: newer))
+        } catch {
+            setPhase(appID, .failed(SteamSignIn.message(error)))
+            return .failure(.invalid(SteamSignIn.message(error)))
+        }
+    }
+
+    /// Runs a confirmed manual transfer. The saves must still be as the confirmation showed them;
+    /// the copies they replace are backed up first (save-backups), nothing is deleted on either side,
+    /// and the usual sync follows. Returns what happened, in words.
+    func runManual(_ transfer: ManualTransfer) async -> String {
+        let appID = transfer.appID
+        guard !transfer.entries.isEmpty else { return "Nothing to copy." }
+        guard Self.enabled, account != nil, !dockRunning, activeApp != appID, !busy.contains(appID) else {
+            return "Not done: wait until the game and its sync have ended."
+        }
+        busy.insert(appID)
+        let verb = transfer.upload ? "upload" : "download"
+        SteamLog.event("[steam-cloud] app=\(appID) manual \(verb) confirmed files=\(transfer.entries.count)")
+        var message: String
+        do {
+            let context = try await context(appID, online: true)
+            let (_, audit, _) = try await compare(appID, context)
+            let now = Dictionary(audit.entries.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
+            let same = transfer.entries.allSatisfy { e in
+                guard let n = now[e.key] else { return false }
+                return n.localSHA == e.localSHA && n.cloudSHA == e.cloudSHA
+            }
+            guard same else { throw SteamFileError.invalid("Saves changed since they were shown. Look again and confirm.") }
+            let n: Int
+            if transfer.upload { n = try await upload(appID, transfer.entries, context) }
+            else { n = try await download(appID, transfer.entries, context, reason: "before a manual download") }
+            message = transfer.upload ? "Uploaded \(n) save\(n == 1 ? "" : "s") to Steam Cloud." : "Downloaded \(n) save\(n == 1 ? "" : "s") from Steam Cloud."
+            if transfer.entries.contains(where: { !(transfer.upload ? $0.cloudSHA : $0.localSHA).isEmpty }) {
+                message += " The copies they replaced are in save-backups."
+            }
+            SteamLog.event("[steam-cloud] app=\(appID) manual \(verb) done files=\(n)")
+        } catch {
+            message = "Not done: \(SteamSignIn.message(error)) Nothing else was changed."
+            SteamLog.event("[steam-cloud] app=\(appID) manual \(verb) stopped reason=\(SteamSignIn.reason(error))")
+        }
+        busy.remove(appID)
+        _ = await sync(appID, reason: "after a manual \(verb)")
+        return message
     }
 
     func isBusy(_ appID: Int) -> Bool { busy.contains(appID) }

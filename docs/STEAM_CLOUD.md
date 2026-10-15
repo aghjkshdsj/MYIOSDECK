@@ -127,3 +127,28 @@ finds the saves identical and has no conflict to ask about (it could not show on
 placeholders, refused paths, case), the comparison over real files in a temporary prefix, every
 row of the table above, the unsynced-session rule, implausible answers, the record's JSON, and
 backup retention.
+
+## Upload and download on request (build 186)
+
+The game's Steam Cloud section has **Upload saves…** and **Download saves…**. Each first compares
+and shows every save it would copy, with both sides' size and date; a save whose other side changed
+since the last sync on this iPhone (another device's progress, or never synced here) is marked, and
+copying it replaces that copy, which is backed up first (the cloud's copies an upload replaces are
+downloaded into save-backups; this iPhone's copies a download replaces are copied there). Nothing is
+deleted on either side. The copy runs only after **Upload N** / **Download N**, only if the saves are
+still as shown, and the usual sync follows. Log: `[steam-cloud] app=N manual upload|download ...`.
+
+## Which Windows user folder (build 186)
+
+A prefix can hold several folders under `C:\users`. The sync now takes the first of them (Wine's
+own user first) that already holds one of the game's save folders from its `ufs` rules, so a game
+that saved under another user folder is still found.
+
+## Where a game wrote (build 186)
+
+After every game the log lists the files written under `C:\users` during the session
+(`[steam-cloud] app=N wrote: <user 0>/AppData/Local/... size`, newest first, up to 30; Valve's
+client's folders and caches left out, user folder names not logged). A save the cloud rules do not
+cover shows up there. Dokimon (2019300): its rule is `%WinAppDataLocal%\dokimon\*.sav`. In build 183
+neither Valve's client (at the game's start: `AutoCloud ... empty vector`) nor MYIOSDECK (after it)
+found a `.sav` there; the next log says where the game wrote.
