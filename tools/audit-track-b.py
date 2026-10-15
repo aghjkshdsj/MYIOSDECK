@@ -16,7 +16,7 @@ expected=[]
 for spec in ['01-input','02-wine-bridge','03-steam-client','04-steam-client-host']:
     expected += [p.name for p in (root/'replacements/track-b'/spec).iterdir() if p.suffix in ['.swift','.c','.m']]
 for name in expected: assert names.count(name)==1, f'Replacement membership mismatch: {name}'
-for name in ['WineProcessBridge.m','WineServerBridge.m','IOSDisplayShim.m','PadOutput.m','PrefixExtractor.c','wine_stubs.c','Winios.m','WiniosGamepad.c','WiniosCursor.c','wine_host.c','lzma_shim.c','zstd_edu.c','zstd_decompress.c','SteamRuntime.swift','MadeiraDock.swift','DockCMCache.swift','SteamHarness.swift','HostHarness.swift','test_logic.c','test_stores.c']:
+for name in ['WineProcessBridge.m','WineServerBridge.m','IOSDisplayShim.m','PadOutput.m','PrefixExtractor.c','wine_stubs.c','Winios.m','WiniosGamepad.c','WiniosCursor.c','wine_host.c','lzma_shim.c','zstd_edu.c','zstd_decompress.c','SteamRuntime.swift','MadeiraDock.swift','DockCMCache.swift','SteamCMList.swift','SteamHarness.swift','HostHarness.swift','test_logic.c','test_stores.c']:
     assert name not in names, f'Excluded source was compiled: {name}'
 assert all(not name.endswith('Tests.swift') for name in names)
 baseline=json.loads((root/'replacements/track-b/PACKAGE-SHA256.json').read_text())

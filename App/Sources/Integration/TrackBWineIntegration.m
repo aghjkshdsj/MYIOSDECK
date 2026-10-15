@@ -9,16 +9,24 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include "wine_version.h"
 
 static _Atomic int integration_booted;
 extern void wineserver_kill_programs(int status);
+extern void mid_track_b_start_log_tail(const char *path);
 int64_t fex_get_jit_write_offset(void) { return mid_jit_pool_write_offset(); }
 // The replacement writes the shared log directly, so no stdout pipe is needed.
 void mid_capture_stdio(void) {}
 bool mid_wine_linked(void) { return true; }
 int mid_wine_running(void) { return wb_process_is_running(); }
 int mid_wine_session_reusable(void) { return 0; }
-int mid_hidpad_gate(void) { return 1; }
+int mid_hidpad_gate(void) {
+#ifdef MYIOSDECK_HIDPAD_GATE
+    return 1;
+#else
+    return 0;
+#endif
+}
 int mid_wine_force_quit(void) {
     if (!wb_process_is_running()) return 0;
     wineserver_kill_programs(1);
@@ -56,6 +64,7 @@ bool mid_wine_boot(const char *prefix, const char *exe, const char *args, char *
     if (!wb_server_is_ready() || wb_process_start(prefix)) {
         wb_server_stop(); snprintf(error, capacity, "The Windows program could not start."); return false;
     }
+    mid_track_b_start_log_tail(wb_log_path());
     return true;
 }
 void mid_display_set_layer(void *layer) { wb_display_set_layer(layer); }

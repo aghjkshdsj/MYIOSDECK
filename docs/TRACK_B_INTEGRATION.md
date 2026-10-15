@@ -74,3 +74,11 @@ Steam sign-in, live downloads, Wine gameplay or sanitizer results.
   instead stops the server after a launch, so this integration explicitly requires restarting
   the app before another session; it does not bypass cleanup or silently keep a stopped session.
 - Build 205: made the input test NaN explicitly CGFloat for the current SDK overloads; simulator tests run serially because some tests exercise UserDefaults.
+
+- Build 206: all 18 simulator tests passed; both replacement C programs and the source
+  membership audit passed. Release compilation then identified host declaration, actor
+  isolation and optional-setting errors, corrected in separate integration glue/host files.
+  Log capture and crash-tail paths now follow the replacement log location. The obsolete
+  session-reuse toggle is replaced with the runtime limitation text. Unchanged generated
+  no-JIT runtime dylibs are cached by dependency/content hashes to avoid relinking them
+  during further source-only retries.

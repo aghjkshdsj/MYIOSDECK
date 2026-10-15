@@ -46,13 +46,13 @@ final class CrashReporter: ObservableObject {
         // follower, whose last lines die with the app. The file keeps them until the next Wine
         // session starts, which is after this (wine_host.c follow_wine_log). Builds 163-165: the
         // app ended while a second game started and the reason never reached the app's log.
-        let wineLog = docs.appendingPathComponent("madeira-log.txt")
+        let wineLog = docs.appendingPathComponent("wine-log.txt")
         if let tail = try? FileHandle(forReadingFrom: wineLog), let h = try? FileHandle(forWritingTo: crashLogURL) {
             let size = (try? tail.seekToEnd()) ?? 0
             try? tail.seek(toOffset: size > 262_144 ? size - 262_144 : 0)
             let data = (try? tail.readToEnd()) ?? Data()
             h.seekToEndOfFile()
-            h.write(Data("==== Wine log tail (madeira-log.txt, last \(data.count) bytes) ====\n".utf8))
+            h.write(Data("==== Wine log tail (wine-log.txt, last \(data.count) bytes) ====\n".utf8))
             h.write(data)
             try? h.close()
             try? tail.close()

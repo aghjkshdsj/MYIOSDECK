@@ -269,7 +269,15 @@ jobs:
           git checkout -- Config/DXMT.xcconfig
           rm -f App/Generated/dxmt_version.h
 
+      - name: Restore unchanged no-JIT runtime dylibs
+        id: pe-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: App/Generated/PE
+          key: track-b-pe-${{ runner.arch }}-${{ hashFiles('engine/wine/PIN', 'engine/dxmt/PIN', 'engine/wine/out/*.a', 'engine/dxmt/out/*.a', 'engine/pedylib/**', 'App/Generated/pedylib/**/*.S') }}
+
       - name: Link no-JIT spike dylibs
+        if: steps.pe-cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p App/Generated/PE
           bash engine/pedylib/link-dylibs.sh App/Generated/pedylib ||
@@ -285,6 +293,13 @@ jobs:
             # The WoW64 CPU module (FXI32's front end): the app links system32\xtajit.dll to this file.
             cp App/Generated/pedylib/winepe-a64/xtajit.dll App/Generated/PE/wine-a64/ 2>/dev/null || true
           fi
+
+      - name: Save unchanged no-JIT runtime dylibs
+        if: steps.pe-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: App/Generated/PE
+          key: ${{ steps.pe-cache.outputs.cache-primary-key }}
 
       - name: Track B C behavior tests
         run: |

@@ -3,6 +3,11 @@
 import Foundation
 import SwiftUI
 
+enum TrackBPaths {
+    static var prefix: URL { FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("wine-prefix") }
+    static var drive: URL { prefix.appendingPathComponent("drive_c", isDirectory: true) }
+}
+
 @MainActor enum TrackBSessionGate {
     static var reserved = false
 }
@@ -48,7 +53,13 @@ import SwiftUI
         UserDefaults.standard.removeObject(forKey: "steamhost.noticeText")
         wine.runSteamHost(descriptor, title: title)
         guard case .booting = wine.state else { throw SteamError.files("Steam could not start. Restart MYIOSDECK and try again.") }
-        if let notice { GameHostView.shared.setStatus(notice) }
+        if let notice {
+            GameHostView.shared.setStatus(notice)
+            Task {
+                try? await Task.sleep(nanoseconds: 20_000_000_000)
+                if mid_wine_running() != 0 { GameHostView.shared.setStatus(nil) }
+            }
+        }
         started = true
         Task {
             while true {
@@ -82,7 +93,7 @@ struct DockGame: Identifiable, Equatable, Sendable {
 }
 enum MadeiraDock {
     static var bundled: Bool { mid_wine_linked() }
-    static var clientRoot: URL { SteamLibrary.drive.appendingPathComponent("Program Files (x86)/Steam") }
+    static var clientRoot: URL { TrackBPaths.drive.appendingPathComponent("Program Files (x86)/Steam") }
     static func games(drive: URL) -> [DockGame] {
         let apps = SteamInstallPaths.steamApps(drive: drive)
         let names = (try? FileManager.default.contentsOfDirectory(atPath: apps.path)) ?? []

@@ -45,6 +45,7 @@ targets:
           - "Steam/SteamRuntime.swift"
           - "Steam/MadeiraDock.swift"
           - "Steam/DockCMCache.swift"
+          - "Steam/SteamCMList.swift"
       - path: replacements/track-b/01-input
         excludes: ["tests", "*.md"]
       - path: replacements/track-b/02-wine-bridge

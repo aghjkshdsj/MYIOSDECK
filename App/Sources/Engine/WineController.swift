@@ -196,7 +196,7 @@ final class WineController: ObservableObject, @unchecked Sendable {
     private enum Launch { case program, steam, custom, dock }
     private var nextLaunch = Launch.program
     private let queue = DispatchQueue(label: "myiosdeck.wine", qos: .userInitiated)
-    var prefixURL: URL { SteamLibrary.prefix }
+    var prefixURL: URL { TrackBPaths.prefix }
 
     /// Stage 4d: a Steam game started as its own program (no Steam client). The
     /// bridge publishes its identity (SteamAppId / SteamGameId / SteamAppPath)
@@ -392,7 +392,7 @@ final class WineController: ObservableObject, @unchecked Sendable {
         sessionGameKey = overrides?.gameKey ?? ""
         sessionOverrides = overrides
         let touchProgram = program.id, touchGame = overrides?.gameKey
-        Task { @MainActor in GameInput.shared.load(for: touchGame.isEmpty ? touchProgram : touchGame) }   // its touch mode: off unless chosen
+        Task { @MainActor in GameInput.shared.load(for: touchGame ?? touchProgram) }   // its touch mode: off unless chosen
         // Game settings › Frame rate: DXMT paces a Direct3D 10/11 game's presents to it.
         if let line = overrides?.dxmtConfig {
             setenv("DXMT_CONFIG", line, 1)
