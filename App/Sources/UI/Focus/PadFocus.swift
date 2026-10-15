@@ -253,6 +253,18 @@ private struct PadFocusModifier: ViewModifier {
                 frame = f
                 PadFocus.shared.register(id, scope: scope, frame: f, actions: actions)
             }
+            .background {
+                // The first frame, in case the geometry callback only reports changes.
+                GeometryReader { g in
+                    Color.clear.onAppear {
+                        let f = g.frame(in: .global)
+                        if frame == .zero, f.width > 0 {
+                            frame = f
+                            PadFocus.shared.register(id, scope: scope, frame: f, actions: actions)
+                        }
+                    }
+                }
+            }
             .onAppear { if frame != .zero { PadFocus.shared.register(id, scope: scope, frame: frame, actions: actions) } }
             .onDisappear { PadFocus.shared.unregister(id, actions: actions) }
             .id(id)

@@ -80,6 +80,8 @@ check(FocusMath.first([("a", r(0, 100, 10, 10), false), ("b", r(0, 10, 10, 10), 
 check(FocusMath.first([("a", r(50, 10, 10, 10), false), ("b", r(0, 12, 10, 10), false)]) == "b", "same row: left-most")
 check(FocusMath.first([("a", r(0, 10, 10, 10), false), ("play", r(0, 300, 10, 10), true)]) == "play", "the preferred item wins")
 check(FocusMath.first([]) == nil, "nothing to focus")
+check(FocusMath.first([("b", r(0, 300, 10, 10), true), ("x", r(0, 0, 10, 10), false), ("a", r(0, 100, 10, 10), true)]) == "a",
+      "several preferred: the top-most of them")
 
 // MARK: - Stick
 

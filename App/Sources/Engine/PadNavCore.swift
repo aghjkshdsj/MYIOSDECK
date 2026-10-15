@@ -37,19 +37,19 @@ enum FocusMath {
             let primary: Double, along: (Double, Double, Double, Double)
             switch direction {
             case .right:
-                guard Double(f.midX) > Double(from.midX) + 1, Double(f.minX) > Double(from.minX) + 1 else { continue }
+                guard f.midX >= from.maxX, Double(f.minX) > Double(from.minX) + 1 else { continue }
                 primary = max(0, Double(f.minX - from.maxX))
                 along = (Double(f.minY), Double(f.maxY), Double(from.minY), Double(from.maxY))
             case .left:
-                guard Double(f.midX) < Double(from.midX) - 1, Double(f.maxX) < Double(from.maxX) - 1 else { continue }
+                guard f.midX <= from.minX, Double(f.maxX) < Double(from.maxX) - 1 else { continue }
                 primary = max(0, Double(from.minX - f.maxX))
                 along = (Double(f.minY), Double(f.maxY), Double(from.minY), Double(from.maxY))
             case .down:
-                guard Double(f.midY) > Double(from.midY) + 1, Double(f.minY) > Double(from.minY) + 1 else { continue }
+                guard f.midY >= from.maxY, Double(f.minY) > Double(from.minY) + 1 else { continue }
                 primary = max(0, Double(f.minY - from.maxY))
                 along = (Double(f.minX), Double(f.maxX), Double(from.minX), Double(from.maxX))
             case .up:
-                guard Double(f.midY) < Double(from.midY) - 1, Double(f.maxY) < Double(from.maxY) - 1 else { continue }
+                guard f.midY <= from.minY, Double(f.maxY) < Double(from.maxY) - 1 else { continue }
                 primary = max(0, Double(from.minY - f.maxY))
                 along = (Double(f.minX), Double(f.maxX), Double(from.minX), Double(from.maxX))
             }
@@ -65,8 +65,8 @@ enum FocusMath {
 
     /// Where focus starts in a scope: the preferred item, else the top-most (then left-most).
     static func first(_ candidates: [(id: String, frame: CGRect, preferred: Bool)]) -> String? {
-        if let p = candidates.first(where: { $0.preferred }) { return p.id }
-        return candidates.min { a, b in
+        let preferred = candidates.filter { $0.preferred }
+        return (preferred.isEmpty ? candidates : preferred).min { a, b in
             abs(Double(a.frame.minY - b.frame.minY)) > 8 ? a.frame.minY < b.frame.minY : a.frame.minX < b.frame.minX
         }?.id
     }

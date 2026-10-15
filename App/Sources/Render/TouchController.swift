@@ -324,7 +324,7 @@ final class PadControlView: UIView {
             Self.glow.withAlphaComponent(0.9).setStroke()
             let ring = UIBezierPath(ovalIn: b.insetBy(dx: 3, dy: 3)); ring.lineWidth = 3; ring.stroke()
         }
-        let r = b.width * 0.27, travel = b.width * 0.42 - r * 0.3
+        let r = b.width * 0.27, travel = b.width / 2 - r - 1   // the knob stays inside the base (drawing stops at the view's edge)
         let c = CGPoint(x: b.midX + knob.x * travel, y: b.midY + knob.y * travel)
         let k = UIBezierPath(ovalIn: CGRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r))
         stroked(k, fill: knob == .zero ? UIColor(white: 0.55, alpha: 0.55) : UIColor(white: 0.85, alpha: 0.7))
