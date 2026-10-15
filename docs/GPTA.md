@@ -77,6 +77,8 @@ row below. Interrupted or defective trials are recorded separately.
 | 38b402d | [38748996922](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38748996922) | 31.24% | 29.83% | 8.12% | 13.96% |
 | 3af903a | [38750048972](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38750048972) | 31.09% | 30.84% | 8.33% | 13.99% |
 | 1326359 | [38751887410](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38751887410) | 31.87% | 30.39% | 8.46% | 14.00% |
+| 7a6d8d9 | [38753156568](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38753156568) | 31.86% | 31.10% | 8.42% | 13.99% |
+| a1a1485 | [38754318289](https://github.com/aghjkshdsj/MYIOSDECK/actions/runs/38754318289) | 31.21% | 30.51% | 8.20% | 14.02% |
 
 The third trial (result-width branches and simplified floating comparisons)
 regressed. Its ARM64, x86 and iOS gates passed. That trial is rolled back in
@@ -635,6 +637,17 @@ lowering. A native unsigned reference checks every static entry, and guest
 differential cases verify count masking, aliases and live-flag fallbacks.
 The replica table grows to retain all static entries without filling its
 open-addressed map. Speed is not measured yet. The held-out source is untouched.
+
+The floating static trial passed every gate in run 38753156568; both means
+remain below 50%. Run 38754318289 also passed every gate and adds only perf
+annotations, so its timing variation is not attributed to execution changes.
+The float adapter annotation shows actual spills and reloads on map changes.
+The following allocation trial reuses the widest already compiled child
+region's immutable map when compiling an enclosing loop. This addresses
+inner-first translation without rewriting old blocks or inspecting guest
+identity. An added differential path enters an inner loop before its outer
+head and keeps every vector observable. Trace diagnostics identify the
+allocation source. Speed is not measured yet; Windows lowering is unchanged.
 
 Profile standard workloads with perf stat and perf record. Choose any new
 instruction-pair families from the independent corpus in engine/gpta/corpus.sh.

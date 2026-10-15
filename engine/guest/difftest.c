@@ -1390,6 +1390,13 @@ static void gpta_xmap_transitions(void) {
             "5: pxor %%xmm9, %%xmm10\n\tpsubq %%xmm11, %%xmm12\n\t"
             "6: movl $3, %%edx\n\t7: paddq %%xmm5, %%xmm14\n\t"
             "decl %%edx\n\tjne 7b\n\tdecl %%ecx\n\tjne 4b\n\t"
+            // Enter the inner loop before its enclosing head is first
+            // translated; all vector values remain observable afterwards.
+            "movl $5, %%ecx\n\tjmp 12f\n\t"
+            "11: pxor %%xmm1, %%xmm2\n\tpaddq %%xmm3, %%xmm4\n\t"
+            "12: movl $7, %%edx\n\t13: paddq %%xmm9, %%xmm8\n\t"
+            "pxor %%xmm11, %%xmm10\n\tdecl %%edx\n\tjne 13b\n\t"
+            "paddq %%xmm5, %%xmm6\n\tdecl %%ecx\n\tjne 11b\n\t"
             // The same map-free direct jump is reached under different maps.
             "jmp 10f\n\t8: jmp 9f\n\t9: pxor %%xmm0, %%xmm15\n\tret\n\t10:\n\t"
             "movdqu %%xmm0, 0(%[p])\n\t"

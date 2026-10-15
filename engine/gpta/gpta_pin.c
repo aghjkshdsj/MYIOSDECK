@@ -1584,6 +1584,29 @@ static uint64_t region_vector_map(struct Fxi *vm, uint64_t rip,
     return key;
 }
 
+// An inner loop may have been translated before its enclosing loop head.
+// Reuse the widest established child region's allocation rather than force
+// a map transition on every trip between the two loops. Existing blocks and
+// their maps remain immutable. Interval ties have a stable ordering.
+static uint64_t enclosed_vector_map(struct Fxi *vm, uint64_t start, uint64_t end) {
+    if (!vm || g_win || end <= start) return 0;
+    uint64_t key = 0, span = 0, best_start = UINT64_MAX;
+    BlockTable *t = __atomic_load_n(&vm->table, __ATOMIC_ACQUIRE);
+    for (uint64_t i = 0; i <= t->mask; i++) {
+        const Block *b = __atomic_load_n(&t->slot[i], __ATOMIC_ACQUIRE);
+        if (!b || !b->n || b->u[0].p != p_xentry) continue;
+        const Uop *u = &b->u[0];
+        uint64_t lo = (uint64_t)u->disp, hi = u->aux;
+        if (lo < start || hi > end || hi <= lo || !u->imm) continue;
+        uint64_t length = hi-lo;
+        if (length > span || (length == span && (lo < best_start ||
+            (lo == best_start && u->imm < key)))) {
+            key = u->imm; span = length; best_start = lo;
+        }
+    }
+    return key;
+}
+
 Block *gpta_lower(struct Fxi *vm, Block *b) {
     pthread_once(&g_once, init_desc);
     g_win = (vm && vm->windows) || g_win_force;
@@ -1593,15 +1616,20 @@ Block *gpta_lower(struct Fxi *vm, Block *b) {
     if (!ns) seg[0] = b;
     uint64_t xmap = vector_map(seg, nseg);
     uint64_t xstart = b->rip, xend = 0;
+    unsigned map_source = 0;   // diagnostic only: own / enclosing / child / identity
     if (xmap && !g_win) {
         uint64_t inherited = region_vector_map(vm, b->rip, &xstart, &xend);
-        if (inherited) xmap = inherited;
+        if (inherited) { xmap = inherited; map_source = 1; }
         else {
             xend = loop_end(vm, b->rip);
             // Transient vector blocks use the common identity layout. A
             // different allocation is reserved for a loop region, where it
             // can be reused across iterations and separately decoded blocks.
-            if (!xend) xmap = GPTA_XIDENTITY;
+            if (!xend) { xmap = GPTA_XIDENTITY; map_source = 3; }
+            else {
+                uint64_t child = enclosed_vector_map(vm,xstart,xend);
+                if (child) { xmap = child; map_source = 2; }
+            }
         }
     }
     if (xmap && g_win && !g_xmap_windows) xmap = GPTA_XIDENTITY;
@@ -1714,6 +1742,7 @@ Block *gpta_lower(struct Fxi *vm, Block *b) {
         uint64_t rip = b->rip >= base && b->rip-base < vm->image_size ? b->rip-base : b->rip;
         fprintf(stderr,"[gpta-trace] rip=%#llx candidate=%d active=%d body=%d copies=%d reject=%s",
             (unsigned long long)rip,trace_candidate,ns,M,copies,reasons[trace_reject]);
+        fprintf(stderr," xmap=%#llx map-source=%u",(unsigned long long)xmap,map_source);
         for (int i = 0; i < nseg; i++) {
             uint64_t targets[2]; int count = trace_succ(seg[i],targets);
             for (int j = 0; j < count; j++)
