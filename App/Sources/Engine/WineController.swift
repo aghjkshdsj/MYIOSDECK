@@ -99,7 +99,7 @@ final class WineController: ObservableObject, @unchecked Sendable {
     @Published private(set) var padKeyboard = false
 
     static func bridgeMode(style: PadStyle, keyboard: Bool) -> ControllerBridge.Mode {
-        keyboard ? .keyboard : style == .playstation ? .playstation : .xbox
+        keyboard ? .keyboard : style == .playstation ? .hid : .xinput
     }
 
     /// The program this session started (its controller choice is remembered per program).
@@ -146,7 +146,7 @@ final class WineController: ObservableObject, @unchecked Sendable {
 
     /// Settings › Without JIT › Play another game without restarting (experimental): when a game
     /// ends, its Wine session stays, and the next game starts in it as a new Windows process.
-    static var reuseEnabled: Bool { UserDefaults.standard.bool(forKey: "sessionReuse") }
+    static var reuseEnabled: Bool { false }
 
     /// What Wine sets up once, for the session's first program: a later game can start in the
     /// session only when it needs the same.
@@ -178,7 +178,7 @@ final class WineController: ObservableObject, @unchecked Sendable {
     /// terminates the session's programs as TerminateProcess does, and the session stays for the
     /// next game (docs/SESSION_REUSE.md). False when there is nothing to end.
     func forceQuit() -> Bool {
-        guard sessionKept, mid_wine_running() != 0 else { return false }
+        guard mid_wine_running() != 0 else { return false }
         forceQuitAsked.withLock { $0 = true }
         return mid_wine_force_quit() != 0
     }
@@ -271,40 +271,17 @@ final class WineController: ObservableObject, @unchecked Sendable {
     /// Set while an added game runs (no Steam identity for it).
     private(set) var customActive = false
 
-    /// A Steam game started through Madeira Dock (App/Sources/Steam/MadeiraDock.swift): Wine runs
-    /// dockhost.exe, which loads Valve's own steamclient64.dll, signs in with the user's token
-    /// (the one-use transfer the caller wrote), asks Valve's client whether the account owns the
-    /// game and has it start the game with Valve's LaunchApp. The game then finds a running,
-    /// signed-in Steam client, as on a PC. Without JIT the host, Valve's client and the game are
-    /// x64 code in FXI; the game is the host's child process.
-    func runDockGame(_ game: DockGame, launchOption: UInt32, title: String) {
+    // Track B integration: the descriptor contains no native sign-in material.
+    func runSteamHost(_ descriptor: SteamHostLaunch, title: String) {
         let noJIT = !mid_jit_pool_ready()
-        for k in ["MADEIRA_STEAM_APPID", "MADEIRA_STEAM_APPPATH", "MADEIRA_WORKDIR"] { unsetenv(k) }   // no direct start
-        MadeiraDock.configure(game, launchOption: launchOption)
-        // Without JIT Valve's client runs interpreted: in build 105 it was still in its HTTPS
-        // setup (OpenSSL in CHTTPClientThreadPool) when the host's 90 s sign-in wait ran out.
-        // Our dockhost (engine/pedylib/madeira-dock-signin-wait.patch) reads a longer wait here.
-        if noJIT { setenv("MADEIRA_DOCK_SIGNIN_MS", "480000", 1) } else { unsetenv("MADEIRA_DOCK_SIGNIN_MS") }
-        // Without JIT Valve's client never finished a TLS handshake in time (build 178: its CM
-        // pings over WebSocket have 1 s each and failed at once, the HTTPS CM directory timed out
-        // after 27 s and its second try never returned, with the client's HTTP thread in OpenSSL's
-        // bignum code throughout). Its other transport to Steam, UDP/TCP with Valve's own channel
-        // encryption, needs no TLS: the host has the client prefer it
-        // (engine/pedylib/madeira-dock-cm-transport.patch). With JIT the client decides as usual.
-        if noJIT { setenv("MADEIRA_DOCK_CM_TRANSPORT", "netfilter", 1) } else { unsetenv("MADEIRA_DOCK_CM_TRANSPORT") }
-        // Build 181: the client still asks its HTTPS CM directory first and waited on it for over
-        // 4 minutes. Its address then resolves to nothing at once (engine/wine/patches/dns_refuse.py),
-        // so the request fails and the client takes the UDP/TCP servers MYIOSDECK wrote into its
-        // config.vdf (DockCMCache). Cleared for every other launch (run()).
-        if noJIT { setenv("MYIOSDECK_DNS_REFUSE", "api.steampowered.com", 1) } else { unsetenv("MYIOSDECK_DNS_REFUSE") }
-        dlog("[dock-launch] app=\(game.id) launch-option=\(launchOption) noJIT=\(noJIT ? 1 : 0) signin-wait=\(noJIT ? 480 : 90)s cm-transport=\(noJIT ? "netfilter" : "client's choice")")
+        let is32 = peMachine(windowsPath: descriptor.exe) == 0x14c
+        for key in ["MADEIRA_STEAM_APPID", "MADEIRA_STEAM_APPPATH", "MYIOSDECK_DNS_REFUSE"] { unsetenv(key) }
+        for (key, value) in descriptor.environment { setenv(key, value, 1) }
+        setenv("MADEIRA_WORKDIR", descriptor.workingFolder, 1)
         nextLaunch = .dock
-        run(Program(id: MadeiraDock.executable, title: title, detail: "", graphics: true, noJIT: noJIT))
+        run(Program(id: descriptor.exe, title: title, detail: "", graphics: true, noJIT: noJIT, aarch64: is32), args: descriptor.arguments)
     }
-
-    /// Set while a Dock game runs: watch() polls the host's report (C:\madeira-dock.txt).
     private(set) var dockActive = false
-    /// The host's failure, in words, when its report ended with a nonzero result.
     @Published private(set) var dockFailure: String?
 
     /// IMAGE_FILE_HEADER.Machine of a C:\ path in the prefix (0x8664 x64, 0x14c i386; 0 unreadable).
@@ -437,7 +414,7 @@ final class WineController: ObservableObject, @unchecked Sendable {
         sessionGameKey = overrides?.gameKey ?? ""
         sessionOverrides = overrides
         let touchProgram = program.id, touchGame = overrides?.gameKey
-        Task { @MainActor in GameInput.shared.load(for: touchProgram, gameKey: touchGame) }   // its touch mode: off unless chosen
+        Task { @MainActor in GameInput.shared.load(for: touchGame.isEmpty ? touchProgram : touchGame) }   // its touch mode: off unless chosen
         // Game settings › Frame rate: DXMT paces a Direct3D 10/11 game's presents to it.
         if let line = overrides?.dxmtConfig {
             setenv("DXMT_CONFIG", line, 1)
@@ -531,34 +508,8 @@ final class WineController: ObservableObject, @unchecked Sendable {
         while mid_wine_running() != 0 {
             usleep(250_000)
             ticks += 1
-            // Madeira Dock: log the host's report fields as they change ([dock-report]), and
-            // show its progress over the (still black) game surface.
-            if dockActive, ticks % 4 == 0 {
-                let seconds = Int(Date().timeIntervalSince(started))
-                // Valve's client logs once about 4 min in too, in case the session is cut short.
-                let dumpLogs = !clientLogsDumped && seconds >= 240
-                if dumpLogs { clientLogsDumped = true }
-                Task { @MainActor in
-                    let report = MadeiraDock.pollReport()
-                    GameHostView.shared.setStatus(MadeiraDock.progressText(report, seconds: seconds))
-                    if dumpLogs { MadeiraDock.logClientLogs() }
-                }
-            }
         }
         if dockActive { Task { @MainActor in GameHostView.shared.setStatus(nil) } }
-        if dockActive {
-            let done = DispatchSemaphore(value: 0)
-            Task { @MainActor in
-                let report = MadeiraDock.pollReport()
-                self.dockFailure = report.failure
-                if let failure = report.failure { dlog("[dock-launch] result=\(report.result ?? -1): \(failure)") }
-                MadeiraDock.logClientLogs()
-                MadeiraDock.cleanup()
-                unsetenv("MYIOSDECK_DNS_REFUSE")   // the Dock session ended: names resolve again
-                done.signal()
-            }
-            done.wait()
-        }
         var status: UInt32 = 0
         let forced = forceQuitAsked.withLock { $0 }
         let crashed = !forced && wine_crash_exit_status(&status) != 0

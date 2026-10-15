@@ -1,0 +1,5 @@
+replacements/track-b/** -text
+replacements/track-b/03-steam-client/vendor/* -text
+replacements/track-b/02-wine-bridge/COPYING.LIB -text
+App/Resources/TrackBLicenses/* -text
+*.sh text eol=lf

@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 the MYIOSDECK author
+03-steam-client/vendor/* -text
+02-wine-bridge/COPYING.LIB -text

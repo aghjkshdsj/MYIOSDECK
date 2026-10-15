@@ -162,7 +162,7 @@ final class GameLauncher: ObservableObject {
                 }
             }
             do {
-                let plan = try await steamLibrary.launchPlan(game.id)
+                let plan = viaDock ? SteamLaunchPlan(exe: "", arguments: "", workingFolder: "", appPath: "") : try await steamLibrary.launchPlan(game.id)
                 let dock = MadeiraDock.bundled && viaDock
                 GameSettingsStore.prepareLaunch(RecentlyPlayed.steam(game.id), wine: wine)
                 if dock {
@@ -184,41 +184,9 @@ final class GameLauncher: ObservableObject {
         }
     }
 
-    /// Madeira Dock: Valve's own Steam client starts the game (MadeiraDock.swift). The first
-    /// time, Valve's client components come from Valve's update servers (pinned sizes and
-    /// SHA-256, about 72 MB); then the one-use sign-in transfer is written, MYIOSDECK's own
-    /// Steam connection logs off (Dock becomes this account's client) and the host starts.
+    // Integration coordination lives in TrackBSteamHostIntegration.swift.
     private func startThroughDock(_ game: OwnedSteamGame, plan: SteamLaunchPlan) async throws {
-        if !MadeiraDock.clientInstalled {
-            dockProgress = "Downloading Steam components from Valve…"
-            defer { dockProgress = nil }
-            try await SteamRuntimeInstaller.shared.prepare(prefix: wine.prefixURL) { text in
-                await MainActor.run { GameLauncher.shared.dockProgress = text }
-            }
-            dlog("[dock-setup] Valve's client components installed")
-        }
-        guard let dockGame = MadeiraDock.games(drive: MadeiraDock.drive).first(where: { $0.id == game.id }) else {
-            throw DockError.message("Steam's install record for this game was not found. Reinstall the game from the Steam library.")
-        }
-        try MadeiraDock.validate(dockGame, drive: MadeiraDock.drive)
-        guard let sign = SteamSignIn.credentialsForDock() else {
-            throw DockError.message("Your Steam sign-in has expired. Sign in to Steam again.")
-        }
-        // Steam's UDP/TCP servers into Valve's client's cache: without JIT it cannot fetch them itself.
-        await DockCMCache.prepare(drive: MadeiraDock.drive)
-        // Steam Cloud makes no request while Valve's client holds the account (until the game ends).
-        SteamCloudSync.shared.holdForDock()
-        await steamLibrary.endSessionForDock()
-        do {
-            try MadeiraDock.writeHandoff(account: sign.accountName, token: sign.refreshToken, appID: game.id)
-        } catch {
-            SteamCloudSync.shared.releaseDock()
-            throw error
-        }
-        wine.runDockGame(dockGame, launchOption: plan.launchIndex, title: game.name)
-        if case .booting = wine.state { return }
-        MadeiraDock.cleanup()
-        SteamCloudSync.shared.releaseDock()
+        try await TrackBSteamHostIntegration.play(game.id, title: game.name, wine: wine) { self.dockProgress = $0 }
     }
 
     /// A Windows test program (Settings › About › Test programs): JIT-path ones ask for JIT first.

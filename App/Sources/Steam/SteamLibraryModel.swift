@@ -24,7 +24,7 @@ struct OwnedSteamGame: Codable, Identifiable, Hashable, Sendable {
         installDir = info.installDir
         buildID = Int(info.buildID)
         libraryCapsule = info.libraryCapsule
-        libraryHero = info.libraryHero
+        libraryHero = nil
         headerImage = info.headerImage
         parentID = info.parentID.map(Int.init)
         launches = info.launches
@@ -53,7 +53,7 @@ final class SteamLibrary: ObservableObject {
     @Published private(set) var updated: Date?
     @Published var error: String?
 
-    private let session = SteamSession()
+    let session = SteamSession()
     private lazy var fetcher = SteamLibraryFetcher(session: session)
     private var account: String?
     private var started = false
@@ -152,7 +152,7 @@ final class SteamLibrary: ObservableObject {
         installed = MadeiraDock.games(drive: Self.drive)
     }
     private var queue: [Int] = []
-    private var active: (id: Int, task: Task<Void, Never>)?
+    var active: (id: Int, task: Task<Void, Never>)?
     private lazy var downloader = DepotDownloader(session: session)
 
     static var prefix: URL {
@@ -172,7 +172,7 @@ final class SteamLibrary: ObservableObject {
     }
 
     func install(_ appID: Int) {
-        guard account != nil else { return }
+        guard account != nil, !TrackBSessionGate.reserved else { error = "Close the Windows session before downloading."; return }
         switch downloads[appID] {
         case nil, .failed: break        // new, or a retry
         default: return                 // already queued or running
@@ -187,8 +187,9 @@ final class SteamLibrary: ObservableObject {
     /// game page's Install card), or nil when Steam does not say or cannot be asked.
     func installSizes(_ appID: Int) async -> (download: UInt64, disk: UInt64)? {
         guard account != nil, let info = try? await fetcher.fetchInstallInfo(appID: UInt32(appID)) else { return nil }
-        let disk = info.installDepots().reduce(UInt64(0)) { t, d in t &+ (d.publicSizeBytes > 0 ? d.publicSizeBytes : d.maxSize) }
-        let download = info.downloadSize(for: "windows")
+        let selected = BSteamDepotSelection.select(info.bDepots)
+        let disk = selected.reduce(UInt64(0)) { $0 &+ max($1.size, $1.maxSize) }
+        let download = selected.reduce(UInt64(0)) { $0 &+ $1.download }
         guard download > 0 || disk > 0 else { return nil }
         return (download, max(disk, download))
     }
@@ -245,7 +246,7 @@ final class SteamLibrary: ObservableObject {
     }
 
     func uninstall(_ appID: Int) {
-        guard downloads[appID] == nil, let game = game(appID) else { return }
+        guard !TrackBSessionGate.reserved, downloads[appID] == nil, let game = game(appID) else { return }
         let folder = game.folderName, apps = Self.steamApps
         Task.detached(priority: .utility) {
             SteamInstallFiles.delete(appID: appID, folderName: folder, steamApps: apps)
@@ -257,7 +258,7 @@ final class SteamLibrary: ObservableObject {
     /// Deletes an installed game, owned by this account or not: its folder under its library's
     /// `common`, its install record and its resume journal (SteamInstallFiles.delete).
     func delete(_ game: DockGame) {
-        guard downloads[game.id] == nil else { return }
+        guard !TrackBSessionGate.reserved, downloads[game.id] == nil else { return }
         let id = game.id, folder = game.installDir
         let apps = Self.drive.appendingPathComponent(game.library, isDirectory: true)
         installed.removeAll { $0.id == id }
@@ -269,8 +270,8 @@ final class SteamLibrary: ObservableObject {
         dlog("[steam-depot] deleted app=\(id) from \(game.library)")
     }
 
-    private func pump() {
-        guard active == nil, !queue.isEmpty else { return }
+    func pump() {
+        guard !TrackBSessionGate.reserved, active == nil, !queue.isEmpty else { return }
         let appID = queue.removeFirst()
         let task = Task { @MainActor [weak self] in
             guard let self else { return }

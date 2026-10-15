@@ -10,4 +10,5 @@
 #import "Native/fxr_bridge.h"
 #import "Native/pe_dylib.h"
 // Steam content decoders (liblzma shim, zstd decoder, zip chunks) for SwiftSteam's downloads.
-#import "Steam/SwiftSteam/lzma_shim.h"
+#import "BSteamCodecs.h"
+#import "Integration/TrackBWineIntegration.h"

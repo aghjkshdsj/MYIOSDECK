@@ -120,7 +120,6 @@ jobs:
 
       - name: Stage Wine (stage 2) from the latest Wine unix build
         id: wine
-        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -258,8 +257,26 @@ jobs:
             cp App/Generated/pedylib/winepe-a64/xtajit.dll App/Generated/PE/wine-a64/ 2>/dev/null || true
           fi
 
+      - name: Track B C behavior tests
+        run: |
+          B=replacements/track-b/02-wine-bridge
+          mkdir -p build/track-b-tests
+          clang -std=gnu11 -Wall -Wextra -Werror -I"$B" "$B/b_logic.c" "$B/b_archive.c" "$B/tests/test_logic.c" -lz -o build/track-b-tests/logic
+          build/track-b-tests/logic
+          clang -std=gnu11 -Wall -Wextra -Werror -I"$B" "$B/b_input.c" "$B/tests/test_stores.c" -pthread -o build/track-b-tests/stores
+          build/track-b-tests/stores
+
       - name: Generate Xcode project
         run: xcodegen generate
+
+      - name: Track B XCTest on iOS Simulator
+        run: |
+          DEVICE=$(xcrun simctl list devices available -j | python3 -c 'import sys,json; d=json.load(sys.stdin)["devices"]; print(next(x["udid"] for v in d.values() for x in v if "iPhone" in x["name"]))')
+          xcodebuild test -project MYIOSDECK.xcodeproj -scheme TrackBTests -configuration Debug -destination "platform=iOS Simulator,id=$DEVICE" -derivedDataPath build/test-dd CODE_SIGNING_ALLOWED=NO > build/track-b-tests.log 2>&1 || { grep -E '(error:|failed|Executed)' build/track-b-tests.log | head -100; exit 1; }
+          grep -E '(Executed|Test Suite.*passed)' build/track-b-tests.log | tail -10
+
+      - name: Audit replacement source membership
+        run: python3 tools/audit-track-b.py
 
       - name: Build app
         run: |
@@ -270,6 +287,14 @@ jobs:
             CODE_SIGNING_ALLOWED=NO build > build/xcodebuild.log 2>&1 || true
           grep -E '(error:|\*\* BUILD)' build/xcodebuild.log | head -100 || true
           grep -q '\*\* BUILD SUCCEEDED \*\*' build/xcodebuild.log
+
+      - name: Verify replacement release exports
+        run: |
+          xcrun dyld_info -exports build/dd/Build/Products/Release-iphoneos/MYIOSDECK.app/MYIOSDECK > build/track-b-exports.txt
+          for name in macdrv_functions get_win_data release_win_data macdrv_view_create_metal_view macdrv_view_get_metal_layer macdrv_view_release_metal_view; do
+            grep -q "_$name" build/track-b-exports.txt || { echo "Missing required release export: $name"; exit 1; }
+          done
+          cp build/track-b-membership.json build/dd/Build/Products/Release-iphoneos/MYIOSDECK.app/track-b-membership.json
 
       - name: Package IPA
         id: pkg
@@ -334,10 +359,13 @@ jobs:
           path: |
             build/xcodebuild.log
             build/pe-audit.json
+            build/track-b-membership.json
+            build/track-b-exports.txt
+            build/track-b-tests.log
           if-no-files-found: ignore
 
       - name: Publish release
-        if: github.event_name != 'pull_request'
+        if: false  # Integration test artifact only; no release publication
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

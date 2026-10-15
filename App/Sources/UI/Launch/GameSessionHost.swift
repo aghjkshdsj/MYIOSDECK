@@ -77,6 +77,9 @@ struct GameSessionHost: ViewModifier {
                     },
                     DialogButton(title: "Hide game (keeps running)") { session.shown = false },
                 ]
+                if wine.dockActive {
+                    b.append(DialogButton(title: "End Steam session", role: .destructive) { forceQuit() })
+                }
                 if wine.sessionKept {
                     b.append(DialogButton(title: "Quit game") { requestQuit() })
                     if quitStuck { b.append(DialogButton(title: "Force quit", role: .destructive) { forceQuit() }) }

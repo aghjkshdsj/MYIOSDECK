@@ -35,6 +35,24 @@ targets:
         excludes:
           - "Native/bench.c"
           - "Native/heldout.c"
+          - "Engine/GameInput.swift"
+          - "Engine/ControllerBridge.swift"
+          - "Native/wine_host.c"
+          - "Steam/SwiftSteam"
+          - "Steam/SteamInstall.swift"
+          - "Steam/SteamKeyValues.swift"
+          - "Steam/SteamDirectStart.swift"
+          - "Steam/SteamRuntime.swift"
+          - "Steam/MadeiraDock.swift"
+          - "Steam/DockCMCache.swift"
+      - path: replacements/track-b/01-input
+        excludes: ["tests", "*.md"]
+      - path: replacements/track-b/02-wine-bridge
+        excludes: ["tests", "*.md", "COPYING.LIB"]
+      - path: replacements/track-b/03-steam-client
+        excludes: ["tests", "vendor", "*.md"]
+      - path: replacements/track-b/04-steam-client-host
+        excludes: ["tests", "*.md"]
       - path: App/Sources/Native/bench.c
         # Same math as the x86-64 guest (no FMA contraction) so checksums compare exactly.
         compilerFlags: ["-O2", "-ffp-contract=off"]
@@ -76,6 +94,8 @@ targets:
         buildPhase: none
     settings:
       base:
+        CLANG_ENABLE_OBJC_ARC: YES
+        GCC_C_LANGUAGE_STANDARD: gnu11
         PRODUCT_NAME: MYIOSDECK
         PRODUCT_BUNDLE_IDENTIFIER: com.myiosdeck.app
         INFOPLIST_FILE: App/Info.plist
@@ -87,6 +107,8 @@ targets:
         HEADER_SEARCH_PATHS:
           - "$(inherited)"
           - "$(SRCROOT)/App/Generated"
+          - "$(SRCROOT)/replacements/track-b/02-wine-bridge"
+          - "$(SRCROOT)/replacements/track-b/03-steam-client"
           - "$(SRCROOT)/engine/guest"
           - "$(SRCROOT)/engine/fxi"
           - "$(SRCROOT)/engine/fxi32"
@@ -101,9 +123,43 @@ targets:
           - "-lc++"
           - "-lz"
           - "-llzma"
+          - "-lcompression"
+          - "-Wl,-export_dynamic"
         # Signing happens at sideload time (iloader / SideStore / AltStore).
         CODE_SIGN_STYLE: Manual
         CODE_SIGN_IDENTITY: ""
         CODE_SIGNING_REQUIRED: NO
         CODE_SIGNING_ALLOWED: NO
         DEVELOPMENT_TEAM: ""
+
+  TrackBTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: replacements/track-b/01-input
+        excludes: ["*.md"]
+      - path: replacements/track-b/03-steam-client
+        excludes: ["vendor", "*.md"]
+      - path: replacements/track-b/04-steam-client-host
+        excludes: ["*.md"]
+      - path: tests/track-b
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.myiosdeck.trackbtests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_OBJC_BRIDGING_HEADER: tests/track-b/Bridging.h
+        HEADER_SEARCH_PATHS:
+          - "$(SRCROOT)/App/Sources/Native"
+          - "$(SRCROOT)/replacements/track-b/03-steam-client"
+          - "$(SRCROOT)/replacements/track-b/03-steam-client/tests"
+        OTHER_LDFLAGS: ["-lz", "-llzma", "-lcompression"]
+        CODE_SIGNING_ALLOWED: NO
+schemes:
+  TrackBTests:
+    build:
+      targets:
+        TrackBTests: all
+    test:
+      targets: [TrackBTests]
+      gatherCoverageData: false

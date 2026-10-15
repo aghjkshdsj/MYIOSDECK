@@ -148,6 +148,6 @@ build_dock() {
     sha256sum "$OUT/winepe/dockhost.exe"
     llvm-readobj --file-headers "$OUT/winepe/dockhost.exe" | grep -E 'Machine' || true
 }
-( set -e; build_dock ) || echo "::warning::Madeira Dock (dockhost.exe) did not build: games start without Steam"
+echo "Track B uses Valve SteamSetup.exe; no legacy client host is built."
 ls -la "$OUT"
 exit $fail
