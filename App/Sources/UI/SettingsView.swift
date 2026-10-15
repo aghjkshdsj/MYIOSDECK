@@ -245,7 +245,12 @@ private struct PerformanceSettings: View {
                 Toggle("Multiblock compilation", isOn: $settings.multiblock).tint(Deck.accent)
                     .padToggle("settings.toggle.Multiblock compilation", isOn: $settings.multiblock)
                 Stepper("Max instructions per block: \(settings.maxInst)", value: $settings.maxInst, in: 500...10000, step: 500)
-                    .padFocus("settings.maxInst", radius: 10, adjust: { d in settings.maxInst = min(max(settings.maxInst + d * 500, 500), 10000) }) {}
+                    .padFocus("settings.maxInst", radius: 10, adjust: { d in
+                        let v = settings.maxInst + d * 500
+                        guard (500...10000).contains(v) else { return false }
+                        settings.maxInst = v
+                        return true
+                    }) {}
                 Button("Apply (restart engine)") { engine.start(settings: settings) }
                     .buttonStyle(DeckButtonStyle(prominent: false))
                     .padFocus("settings.apply", radius: 20) { if jit.isReady { engine.start(settings: settings) } }
@@ -369,7 +374,9 @@ private struct ControlsSettings: View {
                 .padFocus("settings.controllerAPI", radius: 10, adjust: { d in
                     let all = GameSessionHost.controllerOrder
                     let i = all.firstIndex(of: settings.controllerAPI) ?? 0
-                    settings.controllerAPI = all[min(max(i + d, 0), all.count - 1)]
+                    guard let n = ChoiceStep.index(i, count: all.count, delta: d) else { return false }
+                    settings.controllerAPI = all[n]
+                    return true
                 }) {
                     showActions("Controller API", GameSessionHost.controllerOrder.map { api in
                         DialogButton(title: (api == settings.controllerAPI ? "✓ " : "") + (GameSessionHost.controllerNames[api] ?? api)) { settings.controllerAPI = api }

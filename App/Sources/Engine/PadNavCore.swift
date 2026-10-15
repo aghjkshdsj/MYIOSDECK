@@ -78,14 +78,17 @@ enum FocusMath {
         func best(_ list: [Scored]) -> FocusCandidate? { list.min { $0.score < $1.score }?.c }
         let horizontal = direction == .left || direction == .right
         var pick = best(all.filter { $0.inline })
-            ?? best(all.filter { $0.c.section == section })
+            ?? (horizontal ? nil : best(all.filter { $0.c.section == section }))
             ?? (horizontal ? nil : best(all.filter { $0.c.section == "header" || section == "header" }))
         if let p = pick, p.section != section,
            let current = best(all.filter { $0.c.section == p.section && $0.c.preferred }) {
             pick = current
         }
         if pick == nil, horizontal {
+            // Into another section beside: its current item, else its nearest one that way (a
+            // sidebar row level with nothing in the panel still enters the panel).
             pick = best(all.filter { $0.c.section != section && $0.c.preferred })
+                ?? best(all.filter { $0.c.section != section && $0.c.section != "header" })
         }
         return pick?.id
     }
@@ -197,5 +200,15 @@ enum TopDestination: CaseIterable {
         let i = all.firstIndex(of: self) ?? 0
         let n = all.count
         return all[((i + step) % n + n) % n]
+    }
+}
+
+/// Left / right on a choice (segmented options, a picker, a stepper): the next index, or nil at the
+/// first / last one, where the press moves focus out instead (so a control never traps the focus).
+enum ChoiceStep {
+    static func index(_ i: Int, count: Int, delta: Int) -> Int? {
+        let n = i + delta
+        guard count > 0, n >= 0, n < count, n != i else { return nil }
+        return n
     }
 }

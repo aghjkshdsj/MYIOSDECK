@@ -207,5 +207,40 @@ var s6 = StickDirections()
 check(s6.update(x: -0.65, y: 0.6) == nil, "a 45-degree push from rest: no direction")
 check(s6.update(x: -0.9, y: 0.4) == .left, "then mostly left: Left")
 
+// MARK: - Build 194 reports
+
+// 2. Right from a sidebar row level with nothing in the panel (Controls: the panel's rows are above
+//    and below it) still enters the panel.
+let controls: [FocusCandidate] = [
+    FocusCandidate(id: "side.appearance", frame: r(75, 118, 255, 52), section: "sidebar"),
+    FocusCandidate(id: "side.controls", frame: r(75, 238, 255, 52), section: "sidebar", preferred: true),
+    FocusCandidate(id: "pill", frame: r(300, 10, 400, 44), section: "header"),
+    FocusCandidate(id: "show", frame: r(556, 172, 352, 44), section: "panel"),
+    FocusCandidate(id: "haptics", frame: r(375, 325, 535, 32), section: "panel"),
+    FocusCandidate(id: "edit", frame: r(375, 370, 260, 40), section: "panel"),
+]
+check(st("side.controls", .right, controls) == "show" || st("side.controls", .right, controls) == "haptics",
+      "Right from Controls enters its panel: \(st("side.controls", .right, controls) ?? "nil")")
+check(st("haptics", .left, controls) == "side.controls", "and Left comes back to Controls")
+check(st("edit", .right, controls) == nil, "nothing beside the panel's last button: stays (not the top bar)")
+
+// 3. A choice never traps the focus: past its first / last value the press moves on.
+check(ChoiceStep.index(0, count: 4, delta: -1) == nil, "Left at the first value: move on")
+check(ChoiceStep.index(0, count: 4, delta: 1) == 1, "Right from the first value: the next value")
+check(ChoiceStep.index(3, count: 4, delta: 1) == nil, "Right at the last value: move on")
+check(ChoiceStep.index(2, count: 4, delta: -1) == 1, "Left in the middle: the value before")
+check(ChoiceStep.index(0, count: 0, delta: 1) == nil, "no values")
+check(ChoiceStep.index(0, count: 1, delta: 1) == nil && ChoiceStep.index(0, count: 1, delta: -1) == nil, "a single value never takes the press")
+// The Resolution control (540p selected) in a game's Display panel: Left leaves it for the sidebar.
+let display: [FocusCandidate] = [
+    FocusCandidate(id: "side.performance", frame: r(72, 125, 245, 52), section: "sidebar"),
+    FocusCandidate(id: "side.controls", frame: r(72, 193, 245, 52), section: "sidebar"),
+    FocusCandidate(id: "side.display", frame: r(72, 261, 245, 52), section: "sidebar", preferred: true),
+    FocusCandidate(id: "resolution", frame: r(515, 212, 405, 52), section: "panel"),
+    FocusCandidate(id: "save", frame: r(785, 390, 142, 40), section: "panel"),
+]
+check(st("resolution", .left, display) == "side.display", "Left from the resolution control (after its first value): the sidebar's Display")
+check(st("resolution", .down, display) == "save", "Down from it: Save changes")
+
 print("pad-nav tests: \(checks - failures)/\(checks) passed")
 exit(failures == 0 ? 0 : 1)

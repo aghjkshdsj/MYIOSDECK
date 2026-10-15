@@ -73,7 +73,9 @@ iOS gives SwiftUI no controller-driven focus on iPhone, so the app has its own
   go through the top bar in its order: Home, Library, Downloads, Search, Settings, Controllers (LB the
   reverse), Y opens Search, X is the focused game's Game
   settings, Menu opens the game's "…" on Home, its Game settings on a game page, else Settings.
-  Left / right change segmented choices, sliders and pickers instead of moving.
+  Left / right change segmented choices, sliders, pickers and steppers; at the first or last value
+  the next press in that direction moves focus out (a control never traps the focus). A hint bar at
+  the bottom shows the buttons while the ring is visible.
 - Sections (`.padSection`: the top bar, a settings sidebar and its panel): a move takes the item in
   line first, then one of its own section; Left from a panel lands on the sidebar's current section;
   the end of a panel stays put. The stick counts only when one axis clearly dominates (no diagonal

@@ -202,10 +202,14 @@ struct TouchLayoutEditor: View {
                 .accessibilityLabel(selected.map { "Size of \($0.title)" } ?? "Size (select a control first)")
                 .padFocus("editor.size", radius: 12, adjust: { d in
                     if selected == nil { selectNext() }
-                    guard let c = selected else { return }
+                    guard let c = selected, let before = layout.spec(c)?.scale else { return false }
+                    var next = layout
+                    next.update(c) { $0.scale += Double(d) * 0.1 }
+                    guard next.spec(c)?.scale != before else { return false }   // at its smallest or largest: focus moves on
                     undo.append(layout)
-                    layout.update(c) { $0.scale += Double(d) * 0.1 }
+                    layout = next
                     changed = true
+                    return true
                 }, secondary: { selectNext() }) { selectNext() }
             Text("Opacity").font(.subheadline)
             Slider(value: opacity, in: TouchLayout.opacityRange, onEditingChanged: { began in if began { undo.append(layout) } })

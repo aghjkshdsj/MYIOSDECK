@@ -26,6 +26,7 @@ struct RootView: View {
         .tint(Glass.primary)
         .foregroundStyle(Glass.text)
         .modifier(LaunchAlerts())
+        .overlay(alignment: .bottom) { PadHintBar() }
         .modifier(GameSessionHost())
         .sheet(isPresented: $ui.showSearch) { SearchView() }
         .sheet(isPresented: $ui.showControllers) { ControllersSheet() }

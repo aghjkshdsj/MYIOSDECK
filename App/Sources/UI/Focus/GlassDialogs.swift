@@ -105,6 +105,7 @@ private struct DialogHost: View {
             }
         }
         .animation(Appearance.shared.animation(.spring(response: 0.3, dampingFraction: 0.85)), value: dialogs.stack.last?.id)
+        .overlay(alignment: .bottom) { PadHintBar(dialogWindow: true) }
         .tint(Glass.primary)
     }
 }

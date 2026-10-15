@@ -180,7 +180,9 @@ struct GameSettingsView: View {
                 .pickerStyle(.menu)
                 .padFocus("gamesettings.controller", radius: 10, adjust: { d in
                     let all = GameSessionHost.controllerOrder, i = all.firstIndex(of: api) ?? 0
-                    api = all[min(max(i + d, 0), all.count - 1)]; saved = false
+                    guard let n = ChoiceStep.index(i, count: all.count, delta: d) else { return false }
+                    api = all[n]; saved = false
+                    return true
                 }) {
                     showActions("Controller", GameSessionHost.controllerOrder.map { a in
                         DialogButton(title: (a == api ? "✓ " : "") + (GameSessionHost.controllerNames[a] ?? a)) { api = a; saved = false }

@@ -21,7 +21,8 @@ final class PadFocus: ObservableObject {
     /// An item's live actions (updated by its view on every update, so they never go stale).
     final class Actions {
         var activate: () -> Void = {}
-        var adjust: ((Int) -> Void)?
+        /// Left / right change the value; false at the first / last value (focus then moves on).
+        var adjust: ((Int) -> Bool)?
         var secondary: (() -> Void)?
         var onFocus: (() -> Void)?
         var preferred = false
@@ -110,8 +111,7 @@ final class PadFocus: ObservableObject {
 
     private func move(_ d: PadDirection) {
         guard let id = focusedID, let current = items[id], current.scope == topScope else { ensureFocus(); return }
-        if let a = current.actions.adjust, d == .left || d == .right {
-            a(d == .left ? -1 : 1)
+        if let a = current.actions.adjust, d == .left || d == .right, a(d == .left ? -1 : 1) {
             UISelectionFeedbackGenerator().selectionChanged()
             return
         }
@@ -210,6 +210,11 @@ final class PadFocus: ObservableObject {
     }
 
     func isFocused(_ id: String) -> Bool { ringVisible && focusedID == id }
+
+    /// What the hint bar says about the focused item.
+    var focusedAdjustable: Bool { focusedID.flatMap { items[$0]?.actions.adjust } != nil }
+    var focusedHasSecondary: Bool { focusedID.flatMap { items[$0]?.actions.secondary } != nil }
+    var inDialog: Bool { topScope.hasPrefix("dialog.") }
 }
 
 /// Brings an item into view by scrolling the UIKit scroll views that hold it (a page, a sidebar, a
@@ -283,7 +288,7 @@ private struct PadFocusModifier: ViewModifier {
     let radius: CGFloat
     let preferred: Bool
     let activate: () -> Void
-    let adjust: ((Int) -> Void)?
+    let adjust: ((Int) -> Bool)?
     let secondary: (() -> Void)?
     let onFocus: (() -> Void)?
     @Environment(\.padScope) private var scope
@@ -353,7 +358,7 @@ private struct PadMenuModifier: ViewModifier {
 extension View {
     /// A controller-focusable item. `adjust` takes left/right (-1 / +1) instead of moving focus
     /// (segmented choices, sliders); `secondary` is X; `onFocus` runs when focus arrives.
-    func padFocus(_ id: String, radius: CGFloat = 14, preferred: Bool = false, adjust: ((Int) -> Void)? = nil,
+    func padFocus(_ id: String, radius: CGFloat = 14, preferred: Bool = false, adjust: ((Int) -> Bool)? = nil,
                   secondary: (() -> Void)? = nil, onFocus: (() -> Void)? = nil, activate: @escaping () -> Void) -> some View {
         modifier(PadFocusModifier(id: id, radius: radius, preferred: preferred, activate: activate, adjust: adjust,
                                   secondary: secondary, onFocus: onFocus))
@@ -366,11 +371,11 @@ extension View {
 
     /// A choice among options: left/right step through them, A takes the next one.
     func padChoice<T: Hashable>(_ id: String, options: [T], selection: Binding<T>, radius: CGFloat = 22) -> some View {
-        func step(_ d: Int) {
-            guard !options.isEmpty else { return }
+        func step(_ d: Int) -> Bool {
             let i = options.firstIndex(of: selection.wrappedValue) ?? 0
-            let n = min(max(i + d, 0), options.count - 1)
-            if n != i { withGlassAnimation { selection.wrappedValue = options[n] } }
+            guard let n = ChoiceStep.index(i, count: options.count, delta: d) else { return false }
+            withGlassAnimation { selection.wrappedValue = options[n] }
+            return true
         }
         return padFocus(id, radius: radius, adjust: step) {
             guard !options.isEmpty else { return }
@@ -382,7 +387,10 @@ extension View {
     /// A slider: left/right move it by `step`.
     func padSlider(_ id: String, value: Binding<Double>, range: ClosedRange<Double>, step: Double, radius: CGFloat = 12) -> some View {
         padFocus(id, radius: radius, adjust: { d in
-            value.wrappedValue = min(max(value.wrappedValue + Double(d) * step, range.lowerBound), range.upperBound)
+            let v = min(max(value.wrappedValue + Double(d) * step, range.lowerBound), range.upperBound)
+            guard abs(v - value.wrappedValue) > 1e-9 else { return false }   // at an end: focus moves on
+            value.wrappedValue = v
+            return true
         }) {}
     }
 
@@ -404,8 +412,13 @@ struct PadScrollView<Content: View>: View {
     var axes: Axis.Set = .vertical
     @ViewBuilder var content: Content
 
+    /// Room for the focus ring and its glow: the scroll view reaches this far past its place and
+    /// its content starts as far in, so the ring of an item at an edge is not clipped.
+    static var ringRoom: CGFloat { 12 }
+
     var body: some View {
-        ScrollView(axes) { content }
+        ScrollView(axes) { content.padding(Self.ringRoom) }
+            .padding(-Self.ringRoom)
     }
 }
 
@@ -553,4 +566,44 @@ final class TouchWatcher: UIGestureRecognizer, UIGestureRecognizerDelegate {
     }
 
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+}
+
+/// What the controller's buttons do here, shown while the focus ring is (bottom of the screen).
+struct PadHintBar: View {
+    @ObservedObject private var focus = PadFocus.shared
+    /// The one in the dialogs' window shows while a dialog is up, the app's otherwise.
+    var dialogWindow = false
+
+    private var hints: [(String, String)] {
+        if focus.inDialog { return [("A", "Choose"), ("B", "Cancel")] }
+        var h: [(String, String)] = []
+        if focus.focusedAdjustable { h.append(("◀ ▶", "Change · past the end: move on")) }
+        h.append(("A", "Select"))
+        h.append(("B", "Back"))
+        if focus.focusedHasSecondary { h.append(("X", "Game settings")) }
+        if focus.topScope == "root" { h.append(("LB RB", "Switch")); h.append(("Y", "Search")) }
+        return h
+    }
+
+    var body: some View {
+        if focus.ringVisible, focus.inDialog == dialogWindow {
+            HStack(spacing: 14) {
+                ForEach(hints, id: \.0) { key, text in
+                    HStack(spacing: 5) {
+                        Text(key).font(.caption2.weight(.bold))
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(Glass.text.opacity(0.85), in: Capsule())
+                            .foregroundStyle(Glass.base)
+                        Text(text).font(.caption).foregroundStyle(Glass.text)
+                    }
+                }
+            }
+            .padding(.horizontal, 14).padding(.vertical, 7)
+            .glassCapsule()
+            .padding(.bottom, 6)
+            .allowsHitTesting(false)
+            .transition(.opacity)
+            .accessibilityHidden(true)
+        }
+    }
 }

@@ -48,7 +48,9 @@ struct StorageView: View {
                 .accessibilityLabel("Sort: \(sort.rawValue)")
                 .padFocus("storage.sort", radius: 20, adjust: { d in
                     let all = Sort.allCases, i = all.firstIndex(of: sort) ?? 0
-                    sort = all[min(max(i + d, 0), all.count - 1)]
+                    guard let n = ChoiceStep.index(i, count: all.count, delta: d) else { return false }
+                    sort = all[n]
+                    return true
                 }) {
                     showActions("Sort installed games", Sort.allCases.map { s in DialogButton(title: (s == sort ? "✓ " : "") + s.rawValue) { sort = s } })
                 }
