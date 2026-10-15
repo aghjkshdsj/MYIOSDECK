@@ -29,8 +29,24 @@
 #define AF_C20(M,E) C16(M,E) M(16,E) M(17,E) M(18,E) M(19,E)
 // The translator marks only actual adjacency in each individual trace copy.
 // The final backedge and unproved links keep the ordinary chained dispatch.
+#if defined(__aarch64__)
+// Start the adjacent dispatch load before FP work, without another ABI
+// argument. Tied vector outputs enforce that ordering even for pure FP
+// instructions, while leaving their actual values unchanged. The load is
+// from immutable interpreter-owned uop storage, not guest memory.
+#define AF_PRELOAD(EDGE) \
+    Uop *af_next_ = u+1; PFn af_fn_ = 0; \
+    if ((EDGE) != 0) { \
+        __asm__ volatile("ldr %0, [%9, #%c10]" \
+            : "=&r"(af_fn_), "+w"(x0), "+w"(x1), "+w"(x2), "+w"(x3), \
+              "+w"(x4), "+w"(x5), "+w"(x6), "+w"(x7) \
+            : "r"(u), "i"(sizeof(Uop)) : "memory"); \
+    }
+#else
+#define AF_PRELOAD(EDGE) Uop *af_next_ = u+1; PFn af_fn_ = (EDGE) ? af_next_->p : 0
+#endif
 #define AF_CHAIN(LINK,MISS,ADJ) do { \
-    if (ADJ) PNEXT(); \
+    if (ADJ) { GPTA_COUNT(af_next_); __attribute__((musttail)) return af_fn_ GPTA_CALL(af_next_); } \
     PCHAIN(LINK,MISS); \
 } while (0)
 #if defined(__aarch64__)
@@ -53,6 +69,7 @@
 #define AF_DEF_EXPAND(C,S,D,CC,E,N) AF_DEF2(C,S,D,CC,E,N)
 #define AF_DEF2(C,S,D,CC,E,N) \
     PH p_af_##N##_##CC##_##D##_##S##_##C##_##E(GPTA_PARAMS) { \
+        AF_PRELOAD(E); \
         GptaV result = AF_RESULT(XD_##D,XS_##S), other = AF_C_##C; \
         if (AF_ID_##C == AF_ID_##D && (AF_ID_##D != 8 || u->base == u->dst)) other = result; \
         XW_##D(result); double a = AF_LOW(result), b = AF_LOW(other); \

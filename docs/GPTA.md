@@ -649,6 +649,17 @@ identity. An added differential path enters an inner loop before its outer
 head and keeps every vector observable. Trace diagnostics identify the
 allocation source. Speed is not measured yet; Windows lowering is unchanged.
 
+A following isolated dispatch trial preloads the successor handler inside
+adjacent scalar arithmetic/compare/branch handlers before FP work. The
+instruction-level float annotation from run 38754318289 motivates testing
+the successor load's placement. Tied vector operands enforce load ordering,
+and the existing calling convention and all guest state arguments stay the
+same. Only proven adjacent layouts preload; final nonadjacent copies keep
+their ordinary links. The pointer comes from immutable interpreter storage,
+and its architectural uop stride is already asserted. All existing trace,
+NaN, alias, exit-flag, suspend and fault gates remain required. Speed is not
+measured yet; this is a scheduling hypothesis, not a performance claim.
+
 Profile standard workloads with perf stat and perf record. Choose any new
 instruction-pair families from the independent corpus in engine/gpta/corpus.sh.
 Never replace a recognized guest loop with a host loop.
