@@ -608,6 +608,11 @@ infinities, aliases and unchanged state; guest differential cases also
 cover distinct low-register pairs. All fault and iOS gates remain required.
 Its speed is not measured yet. No held-out code was inspected.
 
+Standard-only profiling also saves instruction-level perf annotations for
+the mechanically selected hottest symbol and the vector-map adapter. This
+diagnostic-only change leaves engine execution and measured samples
+unchanged; it distinguishes dispatch cost from actual map transitions.
+
 Profile standard workloads with perf stat and perf record. Choose any new
 instruction-pair families from the independent corpus in engine/gpta/corpus.sh.
 Never replace a recognized guest loop with a host loop.

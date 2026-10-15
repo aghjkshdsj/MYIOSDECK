@@ -18,6 +18,17 @@ for spec in integer:3 float:16 memory:50 branch:6 simd:150; do
     sudo "$PERF" record -q -o "$OUT/$k.data" -e cycles:u \
         taskset -c 1 "$ENG" "$G/bench_sse2.elf" "$k" "$ps"
     sudo "$PERF" report -i "$OUT/$k.data" --stdio --sort symbol > "$OUT/$k.report"
+    # Attribute samples to actual instructions as well as symbols. In
+    # particular, distinguish the vector-map adapter's equal-map dispatch
+    # from spilling/reloading a changed map. The hottest symbol is selected
+    # mechanically from this diagnostic profile, never by guest identity.
+    hot=$(awk '$2 == "[.]" { print $3; exit }' "$OUT/$k.report")
+    if [ -n "$hot" ]; then
+        sudo "$PERF" annotate -i "$OUT/$k.data" --stdio --symbol="$hot" \
+            > "$OUT/$k.hot.annotate" 2> "$OUT/$k.hot.annotate.err" || true
+    fi
+    sudo "$PERF" annotate -i "$OUT/$k.data" --stdio --symbol=p_xentry \
+        > "$OUT/$k.xentry.annotate" 2> "$OUT/$k.xentry.annotate.err" || true
     cat "$OUT/$k.stat"
     head -45 "$OUT/$k.report"
     # Separate diagnostic execution, never enabled in measured samples.
