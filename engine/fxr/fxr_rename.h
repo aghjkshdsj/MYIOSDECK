@@ -61,6 +61,7 @@
 #define fxi_win_sample fxr_win_sample
 #define fxi_win_op_name fxr_win_op_name
 #define fxi_win_counters fxr_win_counters
+#define fxi_win_invalidate_all fxr_win_invalidate_all
 #define fxi_x87_fxrstor fxr_x87_fxrstor
 #define fxi_x87_fxsave fxr_x87_fxsave
 #define fxi_x87_init fxr_x87_init

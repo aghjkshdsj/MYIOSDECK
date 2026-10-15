@@ -43,6 +43,9 @@ int mid_fxr_win_sample(void *c, uint64_t pc, uint64_t x21, int (*rd)(uint64_t, v
 }
 void mid_fxr_win_counters(void *c, uint64_t out[4]) { fxr_win_counters(c, out); }
 const char *mid_fxr_win_op_name(const void *fn, char *buf, size_t n) { return fxr_win_op_name(fn, buf, n); }
+// Another program starts in the running Wine session (wine_host.c): FXR's x64 blocks are dropped
+// as FXI's are. Returns how many (0 before FXR ran).
+unsigned mid_fxr_win_invalidate_all(void) { return fxr_win_invalidate_all(); }
 
 // The x64 state from the host's registers of the thread running c (x0-x30, sp, pc, q0-q7):
 // fault = 1 at a host fault, 0 at a stop. 1 = exact, the CPU loaded and *rip set; *pc may move.

@@ -43,7 +43,8 @@ final class Settings: ObservableObject {
     /// Without JIT, start Windows games with no audio device (Wine's mmdevapi disabled), so the
     /// game's audio engine does not decode and mix in the interpreter. Read at launch.
     @Published var noJITMuteAudio: Bool { didSet { d.set(noJITMuteAudio, forKey: "noJITMuteAudio") } }
-    /// Without JIT, run Windows games' x64 code with FXR instead of FXI (experimental). Read at launch.
+    /// Without JIT, run Windows games' x64 code with FXR (on by default since it can run every 64-bit
+    /// game of a kept session, docs/FXR.md) instead of FXI. Read when a game starts.
     @Published var winFXR: Bool { didSet { d.set(winFXR, forKey: "winFXR") } }
     /// Without JIT, keep the Wine session when a game ends, so the next game starts without
     /// closing MYIOSDECK (experimental, docs/SESSION_REUSE.md). Read at launch (WineController).
@@ -62,7 +63,7 @@ final class Settings: ObservableObject {
         // Wine copies every loaded DLL's code into the pool: give it room by default.
         d.register(defaults: ["jitPoolMB": mid_wine_linked() ? 1024 : 512, "fexPreset": FEXPreset.fast.rawValue, "multiblock": true,
                               "maxInst": 5000, "showHUD": true, "frameCap": 120, "verboseFEXLog": false,
-                              "benchInterpreter": true, "useFXR": false, "noJITMuteAudio": false, "winFXR": false, "sessionReuse": false,
+                              "benchInterpreter": true, "useFXR": false, "noJITMuteAudio": false, "winFXR": true, "sessionReuse": false,
                               "steamLaunchMode": "ask", "steamCloud": true, "controllerAPI": "xinput"])
         jitPoolMB = d.integer(forKey: "jitPoolMB")
         fexPreset = FEXPreset(rawValue: d.integer(forKey: "fexPreset")) ?? .fast

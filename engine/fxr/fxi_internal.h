@@ -106,7 +106,9 @@ struct FxiCpu {
     struct Fxi *vm;
     // FXR: indirect branch target cache (per thread, so no races): target rip -> first uop of its
     // block, direct-mapped. Returns, indirect jumps and calls look here before the block table.
+    // fxr_gen: the block generation it was filled in (Fxi.fxr_gen; fxr_ibtc_sync empties it).
     int fxr_ready;
+    unsigned fxr_gen;
     struct { uint64_t rip; struct Uop *u; } fxr_ibtc[1024];
     // FXR: for the Windows profiler (fxi_win_sample, fxi_win_counters): what the thread does
     // outside the pinned handlers (FXR_PH_*; they never write it), and counters: uops run by FXI's
@@ -168,6 +170,7 @@ struct Fxi {
     FxiCpu cpu;
     BlockTable *table;
     int windows;             // Windows mode: no image bounds, native ARM64EC code ends a run
+    unsigned fxr_gen;        // FXR: bumped each time every block is dropped (fxr_invalidate_all)
     unsigned long long blocks, syscalls;
     fxi_result *out;
     // Guest image
@@ -228,6 +231,9 @@ void fxr_profile_dump(struct Fxi *vm);          // FXR diagnostic build: the hot
 void fxr_init_stop(Block *b);                   // FXR: the stop block's pinned handler
 void fxr_init_slow(Block *b);                   // FXR: every uop of a block built outside the lowering runs FXI's handler (p_slow)
 void fxr_init_native(Block *b, int kind);       // FXR: an exit block whose native function FXR runs itself (fxr_pin.c, p_nat_*)
+void fxr_drop_block(Block *b);                  // FXR: b's first uop becomes a re-lookup (fxr_invalidate_all)
+unsigned fxr_invalidate_all(struct Fxi *vm);   // FXR: drop every block (another program starts in the Wine session)
+void fxr_ibtc_sync(FxiCpu *c);                  // FXR: empty the thread's indirect-branch cache if new or blocks were dropped
 #define FXI_GOTO_BLOCK(c, b) do { Block *fxi_gb_ = (b); __attribute__((musttail)) return fxi_gb_->u[0].fn((c), fxi_gb_->u); } while (0)
 
 extern Block *fxi_stop;                         // one "stop" uop: leaves the dispatch chain

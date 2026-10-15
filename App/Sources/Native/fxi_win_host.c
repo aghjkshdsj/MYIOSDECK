@@ -43,7 +43,7 @@ void fxi_win_ret_to_entry_thunk(void);
 void fxi_win_begin_simulation(void);
 void __attribute__((noreturn)) fxi_win_jump_stack(void *sp, uint64_t pc);   // fxi_win_glue.S
 
-// ---- The x64 CPU: FXI, or FXR (experimental) when MYIOSDECK_WIN_CPU=fxr ----
+// ---- The x64 CPU: FXI, or FXR when MYIOSDECK_WIN_CPU=fxr (the app's default) ----
 // Settings › Without JIT › "Windows games: FXR". The CPU is opaque here (the glue relies only on
 // the layout both share: GPRs at 0x00, rip at 0x98, xmm at 0xa0), so one table serves both.
 typedef struct {

@@ -208,6 +208,8 @@ static int reuse_requested(void) {
     return reuse && *reuse == '1';
 }
 
+unsigned mid_fxr_win_invalidate_all(void);   /* fxr_win_shim.c */
+
 /* Another program in the running session: a new top-level Windows process (the bridge boots it
  * like a child of no one). Nothing of the session's own start runs again: the JIT pool, the
  * wineserver, the log (it goes on in the same file). */
@@ -220,9 +222,9 @@ static bool boot_next(const char *prefix, const char *exe, const char *args, cha
     wine_exit_status_reset();   /* the last program's error is not this one's */
     setenv("MADEIRA_EXE", exe, 1);
     if (args && *args) setenv("MADEIRA_ARGS", args, 1); else unsetenv("MADEIRA_ARGS");
-    /* FXI's x64 blocks are shared by the session's processes: an earlier program's code may be
-     * gone and its addresses reused by this one. */
-    unsigned dropped = fxi_win_invalidate_all();
+    /* The x64 blocks (FXI's, and FXR's: fxr_win_shim.c) are shared by the session's processes: an
+     * earlier program's code may be gone and its addresses reused by this one. */
+    unsigned dropped = fxi_win_invalidate_all() + mid_fxr_win_invalidate_all();
     g_reuse_armed = reuse_requested();   /* what the bridge does when this program ends */
     if (wine_process_start(prefix) != 0) {
         snprintf(err, errlen, "Wine process failed to start");
