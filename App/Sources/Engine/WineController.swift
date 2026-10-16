@@ -176,29 +176,33 @@ final class WineController: ObservableObject, @unchecked Sendable {
     /// Set while an added game's session runs (no Steam identity for it).
     private(set) var customActive = false
 
-    /// A Steam game started through Madeira Dock (App/Sources/Steam/MadeiraDock.swift): Wine runs
-    /// dockhost.exe, which loads Valve's own steamclient64.dll, signs in with the user's token
-    /// (the one-use transfer the caller wrote), asks Valve's client whether the account owns the
-    /// game and has it start the game with Valve's LaunchApp. The game then finds a running,
-    /// signed-in Steam client, as on a PC. Without JIT the host, Valve's client and the game are
-    /// x64 code in FXI; the game is the host's child process.
-    func runDockGame(_ game: DockGame, launchOption: UInt32, title: String) {
+    /// Valve's own Steam client in the prefix (SteamHost, App/Sources/Steam/SteamHost.swift):
+    /// its installer (`install`), or steam.exe opening a game with -applaunch. The user signs in
+    /// in Steam's own window; Steam checks the licence and starts the game, as on a PC. steam.exe
+    /// is a 32-bit program: without JIT it runs as WoW64 with FXI32 (experimental).
+    func runSteamHost(_ launch: SteamHostLaunch, title: String, install: Bool = false) {
         let noJIT = !mid_jit_pool_ready()
-        for k in ["MADEIRA_STEAM_APPID", "MADEIRA_STEAM_APPPATH", "MADEIRA_WORKDIR"] { unsetenv(k) }   // no direct start
-        MadeiraDock.configure(game, launchOption: launchOption)
-        // Without JIT Valve's client runs interpreted: in build 105 it was still in its HTTPS
-        // setup (OpenSSL in CHTTPClientThreadPool) when the host's 90 s sign-in wait ran out.
-        // Our dockhost (engine/pedylib/madeira-dock-signin-wait.patch) reads a longer wait here.
-        if noJIT { setenv("MADEIRA_DOCK_SIGNIN_MS", "480000", 1) } else { unsetenv("MADEIRA_DOCK_SIGNIN_MS") }
-        dlog("[dock-launch] app=\(game.id) launch-option=\(launchOption) noJIT=\(noJIT ? 1 : 0) signin-wait=\(noJIT ? 480 : 90)s")
-        dockActive = true
-        run(Program(id: MadeiraDock.executable, title: title, detail: "", graphics: true, noJIT: noJIT))
+        let machine = peMachine(windowsPath: launch.exe)
+        let is32 = noJIT && machine == 0x14c
+        dlog("[steam-host] start \(install ? "installer" : "client"): \(launch.exe) machine=0x\(String(machine, radix: 16)) noJIT=\(noJIT ? 1 : 0)")
+        if is32 && !Self.wow64NoJITAvailable {
+            state = .failed(Self.wow64Refusal)
+            return
+        }
+        for k in ["MADEIRA_STEAM_APPID", "MADEIRA_STEAM_APPPATH"] { unsetenv(k) }   // Steam gives each game its identity
+        setenv("MADEIRA_WORKDIR", launch.workingFolder, 1)
+        for (key, value) in launch.environment { setenv(key, value, 1) }
+        steamHostActive = true
+        steamHostInstall = install
+        steamHostMessage = nil
+        run(Program(id: launch.exe, title: title, detail: "", graphics: true, noJIT: noJIT, aarch64: is32), args: launch.arguments)
     }
 
-    /// Set while a Dock session runs: watch() polls the host's report (C:\madeira-dock.txt).
-    private(set) var dockActive = false
-    /// The host's failure, in words, when its report ended with a nonzero result.
-    @Published private(set) var dockFailure: String?
+    /// Set while a session of Valve's Steam client (or its installer) runs.
+    private(set) var steamHostActive = false
+    private var steamHostInstall = false
+    /// What the last Steam client session left to say (its installer's result), or nil.
+    @Published private(set) var steamHostMessage: String?
 
     /// IMAGE_FILE_HEADER.Machine of a C:\ path in the prefix (0x8664 x64, 0x14c i386; 0 unreadable).
     func peMachine(windowsPath: String) -> UInt16 {
@@ -281,12 +285,10 @@ final class WineController: ObservableObject, @unchecked Sendable {
         // child that ends from a worker thread can keep the session waiting, which the game menu's
         // Quit ends). 64-bit sessions keep Madeira's default.
         if program.aarch64 { setenv("MADEIRA_WAIT_CHILDREN", "1", 1) } else { unsetenv("MADEIRA_WAIT_CHILDREN") }
-        // A Dock session publishes no fixed Steam game identity: Madeira's bridge otherwise sets
-        // SteamAppId/SteamGameId/SteamAppPath (its Thumper fallback) for every launch, and in
-        // build 105 that reached Valve's client inside the host, which then never finished
-        // signing in (result 34). Valve's client gives the game it starts its own identity.
+        // A session of Valve's Steam client publishes no Steam game identity of its own (the
+        // bridge reads MADEIRA_DOCK_SESSION): Valve's client gives the game it starts its own.
         // An added (non-Steam) game gets none either.
-        if dockActive || customActive { setenv("MADEIRA_DOCK_SESSION", "1", 1) } else { unsetenv("MADEIRA_DOCK_SESSION") }
+        if steamHostActive || customActive { setenv("MADEIRA_DOCK_SESSION", "1", 1) } else { unsetenv("MADEIRA_DOCK_SESSION") }
         state = .booting(program.title)
         // Controller API for this session (Settings › Controller). Must be in the
         // environment before the wineserver starts: the HID device and the
@@ -346,36 +348,22 @@ final class WineController: ObservableObject, @unchecked Sendable {
     /// Poll until the Windows program exits, then report how it ended.
     private func watch(_ title: String) {
         let started = Date()
-        var ticks = 0, clientLogsDumped = false
         while mid_wine_running() != 0 {
             usleep(250_000)
-            ticks += 1
-            // Madeira Dock: log the host's report fields as they change ([dock-report]), and
-            // show its progress over the (still black) game surface.
-            if dockActive, ticks % 4 == 0 {
-                let seconds = Int(Date().timeIntervalSince(started))
-                // Valve's client logs once about 4 min in too, in case the session is cut short.
-                let dumpLogs = !clientLogsDumped && seconds >= 240
-                if dumpLogs { clientLogsDumped = true }
-                Task { @MainActor in
-                    let report = MadeiraDock.pollReport()
-                    GameHostView.shared.setStatus(MadeiraDock.progressText(report, seconds: seconds))
-                    if dumpLogs { MadeiraDock.logClientLogs() }
-                }
-            }
         }
-        if dockActive { Task { @MainActor in GameHostView.shared.setStatus(nil) } }
-        if dockActive {
-            let done = DispatchSemaphore(value: 0)
-            Task { @MainActor in
-                let report = MadeiraDock.pollReport()
-                self.dockFailure = report.failure
-                if let failure = report.failure { dlog("[dock-launch] result=\(report.result ?? -1): \(failure)") }
-                MadeiraDock.logClientLogs()
-                MadeiraDock.cleanup()
-                done.signal()
+        // Valve's installer ended: steam.exe must now be in the prefix. One Windows session per
+        // app run, so Steam itself starts the next time the app is opened.
+        if steamHostActive && steamHostInstall {
+            let message: String
+            do {
+                try SteamHost.finishInstall(prefix: prefixURL)
+                message = "Valve's Steam client is installed. Swipe MYIOSDECK away in the app switcher, open it again and press Play."
+                dlog("[steam-host] Valve's Steam client installed")
+            } catch {
+                message = error.localizedDescription
+                dlog("[steam-host] install failed: \(error.localizedDescription)")
             }
-            done.wait()
+            DispatchQueue.main.async { self.steamHostMessage = message }
         }
         var status: UInt32 = 0
         let crashed = wine_crash_exit_status(&status) != 0

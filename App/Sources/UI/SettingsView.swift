@@ -44,7 +44,7 @@ struct SettingsView: View {
                         Text("Without Steam").tag("direct")
                     }
                     .pickerStyle(.segmented)
-                    Text("With Steam: Valve's own Steam client (downloaded once from Valve, about 72 MB) signs in with your account, checks the licence and starts the game, so games that need Steam running work. Without JIT its sign-in takes several minutes. Without Steam: the game's program starts on its own, faster (for DRM-free games).")
+                    Text("With Steam: Valve's own Steam client (installed once from Valve's installer, then it updates itself, a few hundred MB) opens; you sign in in its window, and it checks the licence and starts the game, so games that need Steam running work. Without JIT it is slow. Without Steam: the game's program starts on its own, faster (for DRM-free games).")
                         .font(.footnote).foregroundStyle(Deck.dim)
                 }
 

@@ -183,7 +183,7 @@ struct LibraryView: View {
         .off: "Off", .trackpad: "Trackpad with cursor", .direct: "Tap where you click",
     ]
 
-    /// Stage 4: Steam account (SwiftSteam, from Madeira). The owned library and
+    /// Stage 4: Steam account (the Steam client in Steam/Client). The owned library and
     /// downloads build on this sign-in.
     private var steamCard: some View {
         DeckCard(title: "Steam", icon: "gamecontroller.fill") {
@@ -196,14 +196,17 @@ struct LibraryView: View {
                 }
                 Divider().overlay(Deck.panelHi)
                 SteamGamesGrid(library: steamLibrary, playBlocker: steamPlayBlocker, onPlay: { chooseSteamLaunch($0) })
-                if let dockProgress {
-                    HStack { ProgressView(); Text(dockProgress).font(.subheadline).foregroundStyle(Deck.dim) }
+                if let steamHostProgress {
+                    HStack { ProgressView(); Text(steamHostProgress).font(.subheadline).foregroundStyle(Deck.dim) }
                 }
                 if let playError {
                     StatusRow(label: "Could not start the game", detail: playError, level: .bad)
                 }
-                if let failure = wine.dockFailure {
-                    StatusRow(label: "Steam (Madeira Dock) did not start the game", detail: failure, level: .bad)
+                if let message = wine.steamHostMessage {
+                    StatusRow(label: "Steam", detail: message, level: .good)
+                }
+                if let steamHostNote {
+                    StatusRow(label: "Steam", detail: steamHostNote, level: .good)
                 }
             } else {
                 Text("Sign in with your Steam account name and password (Steam Guard supported) or a QR code from the Steam app. The sign-in token stays in this device's Keychain; the password is never stored.")
@@ -220,7 +223,7 @@ struct LibraryView: View {
             Button("Without Steam") { playSteam(game, viaDock: false) }
             Button("Cancel", role: .cancel) {}
         } message: { _ in
-            Text("With Steam: Valve's Steam client signs in and starts the game, for games that need Steam running (without JIT the sign-in takes several minutes). Without Steam: the game starts on its own, faster. Settings › Steam can make either the default.")
+            Text("With Steam: Valve's own Steam client opens; sign in in its window, and it checks the licence and starts the game, for games that need Steam running. The first time, Steam's installer runs, and Steam starts the next time you open MYIOSDECK. Without Steam: the game starts on its own, faster. Settings › Steam can make either the default.")
         }
         .alert("JIT is off", isPresented: steamNoJITPresented, presenting: steamNoJITGame) { game in
             Button("Play without JIT (experimental)") { playSteam(game, noJIT: true, viaDock: steamPendingDock) }
@@ -296,9 +299,8 @@ struct LibraryView: View {
         }
     }
 
-    /// Play: with Steam (Madeira Dock) or without, as Settings › Steam says, or asked each time.
+    /// Play: with Steam (Valve's own client) or without, as Settings › Steam says, or asked each time.
     private func chooseSteamLaunch(_ game: OwnedSteamGame) {
-        guard MadeiraDock.bundled else { playSteam(game, viaDock: false); return }
         switch settings.steamLaunchMode {
         case "dock": playSteam(game, viaDock: true)
         case "direct": playSteam(game, viaDock: false)
@@ -320,10 +322,10 @@ struct LibraryView: View {
         }
         Task { @MainActor in
             do {
-                let plan = try await steamLibrary.launchPlan(game.id)
-                if MadeiraDock.bundled && viaDock {
-                    try await startThroughDock(game, plan: plan)
+                if viaDock {
+                    try await startWithSteam(game)
                 } else {
+                    let plan = try await steamLibrary.launchPlan(game.id)
                     wine.runSteamGame(appID: game.id, title: game.name, plan: plan)
                 }
                 if case .failed(let why) = wine.state { playError = why; return }
@@ -338,34 +340,32 @@ struct LibraryView: View {
         }
     }
 
-    /// Progress of the one-time download of Valve's client components (Madeira Dock).
-    @State private var dockProgress: String?
+    /// Progress of the one-time download of Valve's Steam installer.
+    @State private var steamHostProgress: String?
+    /// Steam's note about its first-run self-update, shown once after an install.
+    @State private var steamHostNote: String?
 
-    /// Madeira Dock: Valve's own Steam client starts the game (MadeiraDock.swift). The first
-    /// time, Valve's client components come from Valve's update servers (pinned sizes and
-    /// SHA-256, about 72 MB); then the one-use sign-in transfer is written, MYIOSDECK's own
-    /// Steam connection logs off (Dock becomes this account's client) and the host starts.
-    @MainActor private func startThroughDock(_ game: OwnedSteamGame, plan: SteamLaunchPlan) async throws {
-        if !MadeiraDock.clientInstalled {
-            dockProgress = "Downloading Steam components from Valve…"
-            defer { dockProgress = nil }
-            try await SteamRuntimeInstaller.shared.prepare(prefix: wine.prefixURL) { text in
-                await MainActor.run { dockProgress = text }
+    /// With Steam: Valve's own Windows Steam client starts the game (SteamHost.swift). The first
+    /// time, the app downloads Valve's installer and runs it as this app run's Windows session;
+    /// Steam itself starts on the next launch of the app (one Windows session per app run). Then
+    /// MYIOSDECK's own Steam connection logs off (the same account would otherwise be signed in
+    /// twice), and steam.exe -applaunch starts the game; the user signs in in Steam's window.
+    @MainActor private func startWithSteam(_ game: OwnedSteamGame) async throws {
+        let prefix = wine.prefixURL
+        if !SteamHost.clientInstalled(prefix: prefix) {
+            mid_wine_seed_prefix(prefix.path)
+            steamHostProgress = "Downloading Steam's installer from Valve…"
+            defer { steamHostProgress = nil }
+            let installer = try await SteamHost.prepareInstall(prefix: prefix) { text in
+                Task { @MainActor in steamHostProgress = text }
             }
-            dlog("[dock-setup] Valve's client components installed")
+            wine.runSteamHost(installer, title: "Steam setup", install: true)
+            return
         }
-        guard let dockGame = MadeiraDock.games(drive: MadeiraDock.drive).first(where: { $0.id == game.id }) else {
-            throw DockError.message("Steam's install record for this game was not found. Reinstall the game from the Steam library.")
-        }
-        try MadeiraDock.validate(dockGame, drive: MadeiraDock.drive)
-        guard let sign = SteamSignIn.credentialsForDock() else {
-            throw DockError.message("Your Steam sign-in has expired. Sign in to Steam again.")
-        }
-        await steamLibrary.endSessionForDock()
-        try MadeiraDock.writeHandoff(account: sign.accountName, token: sign.refreshToken, appID: game.id)
-        wine.runDockGame(dockGame, launchOption: plan.launchIndex, title: game.name)
-        if case .booting = wine.state { return }
-        MadeiraDock.cleanup()
+        let launch = try SteamHost.playLaunch(appID: game.id, prefix: prefix)
+        steamHostNote = SteamHost.takeFirstRunNote()
+        await steamLibrary.endSessionForSteamClient()
+        wine.runSteamHost(launch, title: game.name)
     }
 
     private var windowsCard: some View {

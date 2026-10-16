@@ -50,13 +50,13 @@ void mid_capture_stdio(void) {
     done = 1;
 }
 
-/* Madeira's Wine bridge publishes this to xtajit64.dll (FEX inside Wine) so its
+/* The Wine bridge (engine/wine/bridge) publishes this to xtajit64.dll (FEX inside Wine) so its
  * own FEXCore copy writes code through the pool's RW alias. */
 int64_t fex_get_jit_write_offset(void) { return mid_jit_pool_write_offset(); }
 
-/* Madeira's bridge points Wine's stdout/stderr (and wineserver's log) at
- * Documents/madeira-log.txt. Follow that file and copy its lines into the
- * MYIOSDECK log so one log has everything. */
+/* The bridge points Wine's stdout/stderr (and wineserver's log) at Documents/wine-log.txt
+ * (wb_log_path). Follow that file and copy its lines into the MYIOSDECK log so one log has
+ * everything. */
 static void *wine_log_follower(void *arg) {
     char *path = arg;
     int fd = -1;
@@ -101,7 +101,7 @@ static void follow_wine_log(const char *prefix) {
     snprintf(path, 1024, "%s", prefix);
     char *slash = strrchr(path, '/');
     if (!slash) { free(path); return; }
-    snprintf(slash, 1024 - (size_t)(slash - path), "/madeira-log.txt");
+    snprintf(slash, 1024 - (size_t)(slash - path), "/wine-log.txt");
     unlink(path); /* start fresh for this session */
     pthread_t t;
     if (pthread_create(&t, NULL, wine_log_follower, path) == 0) pthread_detach(t);
@@ -110,18 +110,23 @@ static void follow_wine_log(const char *prefix) {
 
 #if MYIOSDECK_WITH_WINE
 
-#include "WineProcessBridge.h"
-#include "WineServerBridge.h"
+/* The app-side Wine bridge and display driver (engine/wine/bridge, staged by
+ * engine/wine/stage-app.sh): its API and the structures it shares with Wine's unix side.
+ * The contract's prototypes use these Wine types (see the top of wine_unix_contract.h). */
+typedef void *HWND;
+typedef void *HCURSOR;
+typedef unsigned int UINT;
+typedef int INT;
+typedef unsigned long DWORD;
+typedef long WINELONG;
+typedef struct { WINELONG left, top, right, bottom; } RECT;
+typedef int BOOL;
+struct window_rects;
+struct window_surface;
+#include "wine_bridge.h"
+#include "wine_unix_contract.h"
 
 static int g_booted;
-
-/* Madeira's IOSDisplayShim.m and Winios.m (staged app sources). */
-extern void madeira_display_set_layer(void *layer);
-extern void winios_screen_size(int *w, int *h);
-extern void winios_set_compositor_frame(double x, double y, double w, double h);
-extern void winios_set_desktop_rect(double x, double y, double w, double h, int set);
-
-#include "Winios/WiniosGamepad.h"
 
 void mid_pad_set(int slot, int connected, uint16_t buttons, uint8_t lt, uint8_t rt,
                  int16_t lx, int16_t ly, int16_t rx, int16_t ry) {
@@ -149,37 +154,25 @@ void mid_hidpad_set(int connected, uint16_t buttons, uint8_t lt, uint8_t rt,
     winios_hidpad_set_state(&h);
 }
 
-extern void winios_post_key(int vk, int down);
-extern void winios_pointer(int x, int y, unsigned int flags, unsigned int data);
-void mid_post_key(int vk, int down) { winios_post_key(vk, down); }
-void mid_post_mouse_button(unsigned int flags) { winios_pointer(0, 0, flags, 0); }
-void mid_post_pointer(int x, int y, unsigned int flags, int data) { winios_pointer(x, y, flags, (unsigned int)data); }
-extern void winios_post_touch_down(int x, int y);
-extern void winios_post_touch_move(int x, int y);
-extern void winios_post_touch_up(int x, int y);
-void mid_post_touch(int phase, int x, int y) {
-    if (phase == 0) winios_post_touch_down(x, y);
-    else if (phase == 1) winios_post_touch_move(x, y);
-    else winios_post_touch_up(x, y);
-}
-extern void winios_game_overlay_show(int shown, void *window);   /* Winios.m, engine/wine/stage-app.sh */
-void mid_game_overlay_show(int shown, void *window) { winios_game_overlay_show(shown, window); }
-extern int winios_game_picture_rect(int dw, int dh, int *x, int *y, int *w, int *h);   /* Winios.m, engine/wine/stage-app.sh */
-int mid_game_picture_rect(int dw, int dh, int *x, int *y, int *w, int *h) { return winios_game_picture_rect(dw, dh, x, y, w, h); }
+void mid_post_key(int vk, int down) { wb_input_key(vk, down); }
+void mid_post_mouse_button(unsigned int flags) { wb_input_pointer(0, 0, flags, 0); }
+void mid_post_pointer(int x, int y, unsigned int flags, int data) { wb_input_pointer(x, y, flags, (unsigned int)data); }
+void mid_post_touch(int phase, int x, int y) { wb_input_touch(phase, x, y); }
+void mid_game_overlay_show(int shown, void *window) { wb_overlay_show(shown, window); }
+int mid_game_picture_rect(int dw, int dh, int *x, int *y, int *w, int *h) { return wb_game_picture_rect(dw, dh, x, y, w, h); }
 
-extern void madeira_seed_prefix_if_needed(const char *prefix_path);
-void mid_wine_seed_prefix(const char *prefix) { madeira_seed_prefix_if_needed(prefix); }
+void mid_wine_seed_prefix(const char *prefix) { wb_seed_prefix(prefix); }
 
-void mid_display_set_layer(void *metal_layer) { madeira_display_set_layer(metal_layer); }
-void mid_display_screen_size(int *w, int *h) { winios_screen_size(w, h); }
+void mid_display_set_layer(void *metal_layer) { wb_display_set_layer(metal_layer); }
+void mid_display_screen_size(int *w, int *h) { wb_screen_size(w, h); }
 void mid_display_layout(double fx, double fy, double fw, double fh,
                         double rx, double ry, double rw, double rh) {
-    winios_set_compositor_frame(fx, fy, fw, fh);
-    winios_set_desktop_rect(rx, ry, rw, rh, 1);
+    wb_overlay_set_frame(fx, fy, fw, fh);
+    wb_overlay_set_desktop_rect(rx, ry, rw, rh, 1);
 }
 
 bool mid_wine_linked(void) { return true; }
-int mid_wine_running(void) { return wine_process_is_running(); }
+int mid_wine_running(void) { return wb_process_is_running(); }
 
 bool mid_wine_boot(const char *prefix, const char *exe, const char *args, char *err, size_t errlen) {
     if (g_booted) {
@@ -239,16 +232,16 @@ bool mid_wine_boot(const char *prefix, const char *exe, const char *args, char *
     else
         mid_log("[wine] JIT slice for Wine: RX=%p size=%zu MB", rx, left >> 20);
 
-    if (wineserver_start(prefix) != 0) {
+    if (wb_server_start(prefix) != 0) {
         snprintf(err, errlen, "wineserver failed to start");
         return false;
     }
-    for (int i = 0; i < 300 && !wineserver_is_ready(); i++) usleep(20000);
-    if (!wineserver_is_ready()) {
+    for (int i = 0; i < 300 && !wb_server_is_ready(); i++) usleep(20000);
+    if (!wb_server_is_ready()) {
         snprintf(err, errlen, "wineserver did not become ready in 6 s");
         return false;
     }
-    if (wine_process_start(prefix) != 0) {
+    if (wb_process_start(prefix) != 0) {
         snprintf(err, errlen, "Wine process failed to start");
         return false;
     }

@@ -38,9 +38,9 @@ struct SteamLaunchPlan {
 }
 
 /// Stage 4b: the account's owned library, from Steam's own CM connection
-/// (SwiftSteam's SteamSession + SteamLibraryFetcher, the path Madeira's
-/// SteamOwnedLibrary uses). Cached per account; refreshed when older than six
-/// hours or on request. Logs App ID counts only, never account data.
+/// (the Steam client's SteamSession + SteamLibraryFetcher, Steam/Client). Cached per
+/// account; refreshed when older than six hours or on request. Logs App ID counts only,
+/// never account data.
 @MainActor
 final class SteamLibrary: ObservableObject {
     static let shared = SteamLibrary()
@@ -208,11 +208,11 @@ final class SteamLibrary: ObservableObject {
                                launchIndex: choice.launchIndex ?? 0)
     }
 
-    /// Madeira Dock signs in as this account's Steam client; a second sign-in would replace it,
+    /// Valve's own Steam client signs in with this account; a second sign-in would replace it,
     /// so MYIOSDECK's own connection logs off first (it reconnects on the next library refresh).
-    func endSessionForDock() async {
+    func endSessionForSteamClient() async {
         await session.disconnectGracefully()
-        dlog("[steam-library] own Steam connection closed for Madeira Dock")
+        dlog("[steam-library] own Steam connection closed for Valve's Steam client")
     }
 
     func uninstall(_ appID: Int) {

@@ -35,6 +35,8 @@ targets:
         excludes:
           - "Native/bench.c"
           - "Native/heldout.c"
+          # Compiled only through Steam/Client/SteamZstdGlue.c, which wraps it.
+          - "Steam/Vendor/**"
       - path: App/Sources/Native/bench.c
         # Same math as the x86-64 guest (no FMA contraction) so checksums compare exactly.
         compilerFlags: ["-O2", "-ffp-contract=off"]

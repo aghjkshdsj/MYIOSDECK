@@ -1,208 +1,489 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 the MYIOSDECK author
+//
+// ControllerBridge: game controllers (GameController framework) to Windows input.
+// Written from specs/01-input.md, part A. Calls only the C functions in interfaces/wine_host.h
+// and the app names in interfaces/app-api.md (dlog, GameInput).
+//
+// Threading: every piece of mutable state below is touched only on `queue`, except `started`
+// and `observers`, which only `start()` (main actor) touches. Keyboard-mode output is handed to
+// the main queue in one block per sample, so cursor moves and button presses reach Windows in
+// the order the spec asks for (cursor first). Keys and buttons go through GameInput, which
+// knows when another source (hardware keyboard or mouse) holds the same one.
+
 import Foundation
 import GameController
 import UIKit
 
-/// Controllers (Bluetooth, Backbone, MFi) for Windows games: each GCController's
-/// extended gamepad is sampled every 4 ms and published to Wine's iOS driver.
-/// Player 1 goes where Settings › Controller API says (per session):
-/// - XInput (also "+ DirectInput", which only adds a DirectInput view in Wine);
-/// - HID: the virtual HID gamepad, leaving XInput as a HID pad on Windows does;
-/// - Keyboard: keys and mouse buttons, for games whose controller support fails
-///   (Madeira's PadKeyboardMouse defaults); the right stick moves the cursor (GameInput).
-/// Players 2-4 stay XInput. The XInput mapping is Madeira's (GamepadInput.swift).
-/// While the app is inactive, pads stay connected with everything released.
-final class ControllerBridge: @unchecked Sendable {
+final class ControllerBridge {
     static let shared = ControllerBridge()
 
+    /// Where player 1 goes.
     enum Mode: String { case xinput, hid, keyboard }
 
-    private let queue = DispatchQueue(label: "myiosdeck.controllers", qos: .userInteractive)
-    private var pads: [GCExtendedGamepad?] = [nil, nil, nil, nil]
-    private var owners: [GCController?] = [nil, nil, nil, nil]
-    private var active = true
-    private var firstPress = [false, false, false, false]
-    private var lastButtons: [UInt16] = [0, 0, 0, 0]
-    private var mode = Mode.xinput
-    private var heldKeys = Set<Int32>()      // keyboard mode: VKs currently down
-    private var heldMouse: UInt16 = 0        // keyboard mode: 1 left, 2 right
+    /// One controller sample in XInput units (XINPUT_GAMEPAD layout).
+    struct PadState: Equatable {
+        var buttons: UInt16 = 0
+        var lt: UInt8 = 0
+        var rt: UInt8 = 0
+        var lx: Int16 = 0
+        var ly: Int16 = 0
+        var rx: Int16 = 0
+        var ry: Int16 = 0
 
-    /// Called before a Wine session starts; the mode holds for that session.
-    func setMode(_ m: Mode) {
-        queue.async { [self] in
-            if mode == .hid, m != .hid { mid_hidpad_set(0, 0, 0, 0, 0, 0, 0, 0) }
-            if mode == .keyboard, m != .keyboard { applyKeyboard(keys: [], mouse: 0) }
-            mode = m
-            sample()
-        }
+        static let neutral = PadState()
     }
 
-    // Keyboard mode bindings: XINPUT_GAMEPAD_* bit -> Windows virtual key.
-    private static let keyMap: [(UInt16, Int32)] = [
-        (0x1000, 0x20), (0x2000, 0x11), (0x4000, 0x45), (0x8000, 0x52),  // A Space, B Ctrl, X E, Y R
-        (0x0100, 0x51), (0x0200, 0x46),                                  // LB Q, RB F
-        (0x0040, 0x10), (0x0080, 0x43),                                  // L3 Shift, R3 C
-        (0x0010, 0x1B), (0x0020, 0x0D),                                  // Menu Esc, Options Enter
-        (0x0001, 0x26), (0x0002, 0x28), (0x0004, 0x25), (0x0008, 0x27),  // D-pad arrows
+    /// What keyboard mode wants held for one sample.
+    struct KeyboardOutput: Equatable {
+        var keys: Set<Int> = []
+        var leftButton = false
+        var rightButton = false
+    }
+
+    /// XINPUT_GAMEPAD_* button bits.
+    enum XButton {
+        static let dpadUp: UInt16 = 0x0001
+        static let dpadDown: UInt16 = 0x0002
+        static let dpadLeft: UInt16 = 0x0004
+        static let dpadRight: UInt16 = 0x0008
+        static let start: UInt16 = 0x0010
+        static let back: UInt16 = 0x0020
+        static let leftThumb: UInt16 = 0x0040
+        static let rightThumb: UInt16 = 0x0080
+        static let leftShoulder: UInt16 = 0x0100
+        static let rightShoulder: UInt16 = 0x0200
+        static let guide: UInt16 = 0x0400
+        static let a: UInt16 = 0x1000
+        static let b: UInt16 = 0x2000
+        static let x: UInt16 = 0x4000
+        static let y: UInt16 = 0x8000
+    }
+
+    static let slotCount = 4
+    static let samplePeriod = 0.004           // seconds between samples
+    static let stickKeyThreshold: Int16 = 16384
+    static let triggerButtonThreshold: UInt8 = 128
+    static let cursorDeadZone = 0.15
+    static let cursorTopSpeed = 1400.0        // desktop pixels per second at full deflection
+
+    /// Keyboard mode: XInput button bit → Windows virtual key.
+    static let keyboardButtonKeys: [(bit: UInt16, vk: Int)] = [
+        (XButton.a, VK.space),
+        (XButton.b, VK.control),
+        (XButton.x, VK.keyE),
+        (XButton.y, VK.keyR),
+        (XButton.leftShoulder, VK.keyQ),
+        (XButton.rightShoulder, VK.keyF),
+        (XButton.leftThumb, VK.shift),
+        (XButton.rightThumb, VK.keyC),
+        (XButton.start, VK.escape),
+        (XButton.back, VK.returnKey),
+        (XButton.dpadUp, VK.up),
+        (XButton.dpadDown, VK.down),
+        (XButton.dpadLeft, VK.left),
+        (XButton.dpadRight, VK.right),
     ]
 
-    /// Releases and presses only what changed since the last sample.
-    private func applyKeyboard(keys: Set<Int32>, mouse: UInt16) {
-        if !keys.subtracting(heldKeys).isEmpty || mouse & ~heldMouse != 0 { mid_wow_trace_calls(3) }   // GameInput.traceInput
-        for vk in heldKeys.subtracting(keys) { mid_post_key(vk, 0) }
-        for vk in keys.subtracting(heldKeys) { mid_post_key(vk, 1) }
-        heldKeys = keys
-        let changed = heldMouse ^ mouse
-        if changed & 1 != 0 { mid_post_mouse_button(mouse & 1 != 0 ? 0x0002 : 0x0004) }   // left down/up
-        if changed & 2 != 0 { mid_post_mouse_button(mouse & 2 != 0 ? 0x0008 : 0x0010) }   // right down/up
-        heldMouse = mouse
+    // MARK: - State (bridge queue only)
+
+    private struct Slot {
+        let controller: GCController
+        var lastButtons: UInt16 = 0
+        var loggedFirstPress = false
     }
 
-    private func keyboard(_ b: UInt16, _ lt: UInt8, _ rt: UInt8, _ lx: Int16, _ ly: Int16, _ rx: Int16, _ ry: Int16) {
-        var keys = Set<Int32>()
-        for (mask, vk) in Self.keyMap where b & mask != 0 { keys.insert(vk) }
-        if ly > 16384 { keys.insert(0x57) }    // left stick: W
-        if ly < -16384 { keys.insert(0x53) }   // S
-        if lx < -16384 { keys.insert(0x41) }   // A
-        if lx > 16384 { keys.insert(0x44) }    // D
-        stickMouse(rx, ry)   // before the buttons: a click lands where the cursor went
-        applyKeyboard(keys: keys, mouse: (rt > 128 ? 1 : 0) | (lt > 128 ? 2 : 0))
-    }
-
-    // Keyboard mode: the right stick moves the cursor (Madeira's PadStickMouse), up to
-    // 1400 desktop pixels a second at full tilt on a quadratic curve past a 15% dead zone,
-    // so menus and launchers can be clicked with the triggers. Fractions carry over.
-    private var stickCarry = (x: 0.0, y: 0.0)
-    private func stickMouse(_ rx: Int16, _ ry: Int16) {
-        func speed(_ v: Int16) -> Double {
-            let f = max(-1, min(1, Double(v) / 32767)), dead = 0.15
-            guard abs(f) > dead else { return 0 }
-            let t = (abs(f) - dead) / (1 - dead)
-            return (f < 0 ? -1 : 1) * t * t * 1400
-        }
-        stickCarry.x += speed(rx) * 0.004
-        stickCarry.y -= speed(ry) * 0.004   // stick up (+y) moves the cursor up the screen
-        let dx = stickCarry.x.rounded(.towardZero), dy = stickCarry.y.rounded(.towardZero)
-        guard dx != 0 || dy != 0 else { return }
-        stickCarry.x -= dx; stickCarry.y -= dy
-        DispatchQueue.main.async {
-            MainActor.assumeIsolated { GameInput.shared.stickMoved(dx: CGFloat(dx), dy: CGFloat(dy)) }
-        }
-    }
+    private let queue = DispatchQueue(label: "myiosdeck.controller-bridge", qos: .userInteractive)
+    private var slots: [Slot?] = Array(repeating: nil, count: ControllerBridge.slotCount)
+    private var waiting: Set<ObjectIdentifier> = []   // connected, no slot, already logged
+    private var mode: Mode = .xinput
+    private var appActive = false
     private var timer: DispatchSourceTimer?
-    private var started = false
 
+    // Keyboard mode
+    private var held = KeyboardOutput()
+    private var cursorCarryX = 0.0
+    private var cursorCarryY = 0.0
+
+    // Main actor only
+    private var started = false
+    private var observers: [NSObjectProtocol] = []
+
+    private init() {}
+
+    // MARK: - Public API
+
+    /// Player 1's route for this session. Any thread.
+    func setMode(_ m: Mode) {
+        queue.async { [self] in
+            let old = mode
+            if old == .hid && m != .hid {
+                mid_hidpad_set(0, 0, 0, 0, 0, 0, 0, 0)
+            }
+            if old == .keyboard && m != .keyboard {
+                releaseKeyboardMode()
+            }
+            mode = m
+            sampleAll()
+        }
+    }
+
+    /// Idempotent. Watches controllers and the app's active state.
     @MainActor func start() {
         guard !started else { return }
         started = true
-        let center = NotificationCenter.default
-        for name in [Notification.Name.GCControllerDidConnect, .GCControllerDidDisconnect] {
-            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.refresh() }
+
+        let nc = NotificationCenter.default
+        observers.append(nc.addObserver(forName: .GCControllerDidConnect, object: nil, queue: .main) { [weak self] note in
+            guard let self else { return }
+            var connected = GCController.controllers()
+            if let controller = note.object as? GCController, !connected.contains(where: { $0 === controller }) {
+                connected.append(controller)
             }
+            self.queue.async { self.syncSlots(connected: connected, gone: nil) }
+        })
+        observers.append(nc.addObserver(forName: .GCControllerDidDisconnect, object: nil, queue: .main) { [weak self] note in
+            guard let self else { return }
+            let connected = GCController.controllers()
+            let gone = note.object as? GCController
+            self.queue.async { self.syncSlots(connected: connected, gone: gone) }
+        })
+        observers.append(nc.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            self.queue.async { self.setAppActive(true) }
+        })
+        observers.append(nc.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            self.queue.async { self.setAppActive(false) }
+        })
+
+        // Controllers already connected before we started, and the state we start in. This block
+        // is queued before any of the notifications above can be delivered.
+        let active = UIApplication.shared.applicationState == .active
+        let current = GCController.controllers()
+        queue.async { [self] in
+            appActive = active
+            syncSlots(connected: current, gone: nil)
         }
-        center.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
-            self?.setActive(false)
+    }
+
+    // MARK: - Pure conversions (tested in TESTS.md)
+
+    /// Trigger 0...1 → 0...255, rounded and clamped; non-finite → 0.
+    static func triggerValue(_ v: Float) -> UInt8 {
+        guard v.isFinite else { return 0 }
+        let scaled = (Double(v) * 255).rounded()
+        return UInt8(min(max(scaled, 0), 255))
+    }
+
+    /// Stick axis -1...1 → full signed 16-bit range (negative × 32768, positive × 32767),
+    /// rounded and clamped; non-finite → 0. No dead zone.
+    static func axisValue(_ v: Float) -> Int16 {
+        guard v.isFinite else { return 0 }
+        let d = Double(v)
+        let scaled = (d < 0 ? d * 32768 : d * 32767).rounded()
+        return Int16(min(max(scaled, -32768), 32767))
+    }
+
+    /// Keyboard-mode cursor curve for one right-stick axis: fraction of full scale, zero inside
+    /// the 15% dead zone, the rest rescaled to 0...1 and squared, sign kept. Result -1...1.
+    static func cursorCurve(_ axis: Int16) -> Double {
+        let v = Double(axis)
+        let fraction = v < 0 ? v / 32768 : v / 32767
+        let magnitude = abs(fraction)
+        guard magnitude > cursorDeadZone else { return 0 }
+        let r = min((magnitude - cursorDeadZone) / (1 - cursorDeadZone), 1)
+        return fraction < 0 ? -(r * r) : r * r
+    }
+
+    /// Cursor motion for one sample, in desktop pixels (screen y grows downward, so stick up
+    /// gives a negative dy).
+    static func cursorStep(rx: Int16, ry: Int16) -> (dx: Double, dy: Double) {
+        let perSample = cursorTopSpeed * samplePeriod
+        return (cursorCurve(rx) * perSample, -cursorCurve(ry) * perSample)
+    }
+
+    /// Keys and mouse buttons keyboard mode holds for this controller state.
+    static func keyboardOutput(for s: PadState) -> KeyboardOutput {
+        var out = KeyboardOutput()
+        for entry in keyboardButtonKeys where s.buttons & entry.bit != 0 {
+            out.keys.insert(entry.vk)
         }
-        center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refresh() }
-            self?.setActive(true)
+        if s.lx > stickKeyThreshold { out.keys.insert(VK.keyD) }
+        if s.lx < -stickKeyThreshold { out.keys.insert(VK.keyA) }
+        if s.ly > stickKeyThreshold { out.keys.insert(VK.keyW) }
+        if s.ly < -stickKeyThreshold { out.keys.insert(VK.keyS) }
+        out.leftButton = s.rt > triggerButtonThreshold
+        out.rightButton = s.lt > triggerButtonThreshold
+        return out
+    }
+
+    // MARK: - Slots
+
+    private static func name(of controller: GCController) -> String {
+        controller.vendorName ?? "unknown"
+    }
+
+    /// Runs on every connect or disconnect notification (and once at start). `connected` is
+    /// GameController's list at that moment; `gone` is the controller that just disconnected.
+    /// Frees `gone`'s slot, then every connected extended gamepad without a slot takes the
+    /// lowest free one, in the order GameController lists them. One that finds none waits,
+    /// logged once, and gets a slot on a later notification once one is free.
+    private func syncSlots(connected: [GCController], gone: GCController?) {
+        if let gone, let index = slots.firstIndex(where: { $0?.controller === gone }) {
+            slots[index] = nil
+            dlog("[xinput] slot=\(index) disconnected")
         }
+
+        let candidates = connected.filter { $0 !== gone && $0.extendedGamepad != nil }
+        for controller in candidates where !slots.contains(where: { $0?.controller === controller }) {
+            let id = ObjectIdentifier(controller)
+            guard let index = slots.firstIndex(where: { $0 == nil }) else {
+                if waiting.insert(id).inserted {
+                    dlog("[xinput] no free slot for \(Self.name(of: controller))")
+                }
+                continue
+            }
+            waiting.remove(id)
+            slots[index] = Slot(controller: controller)
+            dlog("[xinput] slot=\(index) connected: \(Self.name(of: controller))")
+        }
+        // Forget waiters that went away, so they log again if they come back and wait.
+        let present = Set(candidates.map { ObjectIdentifier($0) })
+        waiting = waiting.intersection(present)
+
         refresh()
     }
 
-    @MainActor private func refresh() {
-        let live = GCController.controllers().compactMap { c -> (GCController, GCExtendedGamepad)? in
-            guard let p = c.extendedGamepad else { return nil }
-            return (c, p)
-        }
-        queue.async { [self] in
-            for i in owners.indices {
-                guard let old = owners[i], !live.contains(where: { $0.0 === old }) else { continue }
-                owners[i] = nil; pads[i] = nil
-                dlog("[xinput] slot=\(i) disconnected")
-            }
-            for (c, p) in live {
-                guard !owners.contains(where: { $0 === c }), let i = owners.firstIndex(where: { $0 == nil }) else { continue }
-                owners[i] = c; pads[i] = p
-                dlog("[xinput] slot=\(i) connected: \(c.vendorName ?? "controller")")
-            }
-            updateTimer()
-            sample()
-        }
+    private func setAppActive(_ active: Bool) {
+        appActive = active
+        refresh()
     }
 
-    private func setActive(_ value: Bool) {
-        queue.async { [self] in
-            active = value
-            updateTimer()
-            sample()
-        }
+    /// Publish every slot now, then start or stop the sample timer to match.
+    private func refresh() {
+        sampleAll()
+        updateTimer()
     }
 
     private func updateTimer() {
-        let needed = active && pads.contains(where: { $0 != nil })
-        if !needed { timer?.cancel(); timer = nil; return }
-        guard timer == nil else { return }
-        let t = DispatchSource.makeTimerSource(queue: queue)
-        t.schedule(deadline: .now(), repeating: .milliseconds(4), leeway: .milliseconds(1))
-        t.setEventHandler { [weak self] in self?.sample() }
-        timer = t
-        t.resume()
-    }
-
-    // XInput leaves dead zones to the game: keep the full signed range.
-    private static func axis(_ v: Float) -> Int16 {
-        guard v.isFinite else { return 0 }
-        let c = max(-1, min(1, v))
-        return Int16((c * (c < 0 ? 32768 : 32767)).rounded())
-    }
-    private static func trigger(_ v: Float) -> UInt8 {
-        guard v.isFinite else { return 0 }
-        return UInt8((max(0, min(1, v)) * 255).rounded())
-    }
-
-    private func sample() {
-        for i in pads.indices {
-            let route: Mode = i == 0 ? mode : .xinput
-            let hid = route == .hid
-            // One publisher per slot: XInput, the HID gamepad, or keys (player 1).
-            func publish(_ connected: Int32, _ b: UInt16, _ lt: UInt8, _ rt: UInt8,
-                         _ lx: Int16, _ ly: Int16, _ rx: Int16, _ ry: Int16) {
-                switch route {
-                case .xinput:
-                    mid_pad_set(Int32(i), connected, b, lt, rt, lx, ly, rx, ry)
-                case .hid:
-                    mid_pad_set(Int32(i), 0, 0, 0, 0, 0, 0, 0, 0)
-                    mid_hidpad_set(connected, b, lt, rt, lx, ly, rx, ry)
-                case .keyboard:
-                    mid_pad_set(Int32(i), 0, 0, 0, 0, 0, 0, 0, 0)
-                    keyboard(b, lt, rt, lx, ly, rx, ry)
-                }
-            }
-            guard let pad = pads[i] else { publish(0, 0, 0, 0, 0, 0, 0, 0); continue }
-            guard active else { publish(1, 0, 0, 0, 0, 0, 0, 0); continue }
-            let map: [(GCControllerButtonInput?, UInt16)] = [
-                (pad.dpad.up, 0x0001), (pad.dpad.down, 0x0002), (pad.dpad.left, 0x0004), (pad.dpad.right, 0x0008),
-                (pad.buttonMenu, 0x0010), (pad.buttonOptions, 0x0020),
-                (pad.leftThumbstickButton, 0x0040), (pad.rightThumbstickButton, 0x0080),
-                (pad.leftShoulder, 0x0100), (pad.rightShoulder, 0x0200), (pad.buttonHome, 0x0400),
-                (pad.buttonA, 0x1000), (pad.buttonB, 0x2000), (pad.buttonX, 0x4000), (pad.buttonY, 0x8000),
-            ]
-            var buttons: UInt16 = 0
-            for (b, mask) in map where b?.isPressed == true { buttons |= mask }
-            // A new press: a 32-bit program's calls for the next 3 s go to the log (GameInput.traceInput),
-            // so what its XInput / DirectInput code does with the pad can be read there.
-            if buttons != 0, lastButtons[i] == 0 { mid_wow_trace_calls(3) }
-            lastButtons[i] = buttons
-            if buttons != 0, !firstPress[i] {
-                firstPress[i] = true
-                dlog("[xinput] slot=\(i) first press buttons=0x\(String(buttons, radix: 16)) published to \(hid ? "HID gamepad" : route == .keyboard ? "keyboard" : "XInput")")
-            }
-            publish(1, buttons,
-                    Self.trigger(pad.leftTrigger.value), Self.trigger(pad.rightTrigger.value),
-                    Self.axis(pad.leftThumbstick.xAxis.value), Self.axis(pad.leftThumbstick.yAxis.value),
-                    Self.axis(pad.rightThumbstick.xAxis.value), Self.axis(pad.rightThumbstick.yAxis.value))
+        let wanted = appActive && slots.contains(where: { $0 != nil })
+        if wanted, timer == nil {
+            let t = DispatchSource.makeTimerSource(queue: queue)
+            t.schedule(deadline: .now() + .milliseconds(4), repeating: .milliseconds(4), leeway: .milliseconds(1))
+            t.setEventHandler { [weak self] in self?.sampleAll() }
+            t.resume()
+            timer = t
+        } else if !wanted, let t = timer {
+            t.cancel()
+            timer = nil
         }
     }
+
+    // MARK: - Sampling
+
+    private func sampleAll() {
+        for index in 0..<Self.slotCount {
+            sample(slot: index)
+        }
+    }
+
+    private func sample(slot index: Int) {
+        guard let slot = slots[index] else {
+            publish(slot: index, connected: false, .neutral)
+            return
+        }
+        // While inactive, a filled slot stays plugged in with nothing pressed.
+        let state = appActive ? Self.read(slot.controller) : .neutral
+
+        if state.buttons != 0 {
+            if slot.lastButtons == 0 {
+                mid_wow_trace_calls(3)
+            }
+            if !slot.loggedFirstPress {
+                slots[index]?.loggedFirstPress = true
+                let hex = String(state.buttons, radix: 16)
+                dlog("[xinput] slot=\(index) first press buttons=0x\(hex) published to \(destinationName(slot: index))")
+            }
+        }
+        slots[index]?.lastButtons = state.buttons
+
+        publish(slot: index, connected: true, state)
+    }
+
+    private func destinationName(slot index: Int) -> String {
+        guard index == 0 else { return "XInput" }
+        switch mode {
+        case .xinput: return "XInput"
+        case .hid: return "HID gamepad"
+        case .keyboard: return "keyboard"
+        }
+    }
+
+    private func publish(slot index: Int, connected: Bool, _ s: PadState) {
+        let c: Int32 = connected ? 1 : 0
+        if index > 0 || mode == .xinput {
+            mid_pad_set(Int32(index), c, s.buttons, s.lt, s.rt, s.lx, s.ly, s.rx, s.ry)
+            return
+        }
+        // Player 1 is routed elsewhere: the XInput slot reads as unplugged.
+        mid_pad_set(0, 0, 0, 0, 0, 0, 0, 0, 0)
+        switch mode {
+        case .hid:
+            mid_hidpad_set(c, s.buttons, s.lt, s.rt, s.lx, s.ly, s.rx, s.ry)
+        case .keyboard:
+            applyKeyboardMode(connected ? s : .neutral)
+        case .xinput:
+            break
+        }
+    }
+
+    private static func read(_ controller: GCController) -> PadState {
+        guard let pad = controller.extendedGamepad else { return .neutral }
+        var buttons: UInt16 = 0
+        func mark(_ pressed: Bool, _ bit: UInt16) {
+            if pressed { buttons |= bit }
+        }
+        mark(pad.dpad.up.isPressed, XButton.dpadUp)
+        mark(pad.dpad.down.isPressed, XButton.dpadDown)
+        mark(pad.dpad.left.isPressed, XButton.dpadLeft)
+        mark(pad.dpad.right.isPressed, XButton.dpadRight)
+        mark(pad.buttonA.isPressed, XButton.a)
+        mark(pad.buttonB.isPressed, XButton.b)
+        mark(pad.buttonX.isPressed, XButton.x)
+        mark(pad.buttonY.isPressed, XButton.y)
+        mark(pad.leftShoulder.isPressed, XButton.leftShoulder)
+        mark(pad.rightShoulder.isPressed, XButton.rightShoulder)
+        mark(pad.leftThumbstickButton?.isPressed ?? false, XButton.leftThumb)
+        mark(pad.rightThumbstickButton?.isPressed ?? false, XButton.rightThumb)
+        mark(pad.buttonMenu.isPressed, XButton.start)
+        mark(pad.buttonOptions?.isPressed ?? false, XButton.back)
+        mark(pad.buttonHome?.isPressed ?? false, XButton.guide)
+
+        return PadState(
+            buttons: buttons,
+            lt: triggerValue(pad.leftTrigger.value),
+            rt: triggerValue(pad.rightTrigger.value),
+            lx: axisValue(pad.leftThumbstick.xAxis.value),
+            ly: axisValue(pad.leftThumbstick.yAxis.value),
+            rx: axisValue(pad.rightThumbstick.xAxis.value),
+            ry: axisValue(pad.rightThumbstick.yAxis.value)
+        )
+    }
+
+    // MARK: - Keyboard mode (player 1)
+
+    private enum KeyboardOp {
+        case moveCursor(dx: Int, dy: Int)
+        case key(vk: Int, down: Bool)
+        case mouseButton(right: Bool, down: Bool)
+        case trace
+    }
+
+    /// GameInput.releaseAll has let go of everything keyboard mode held. Forget it here too,
+    /// so a button still down is pressed again on the next sample. Any thread.
+    func forgetKeyboardModeHolds() {
+        queue.async { [self] in
+            held = KeyboardOutput()
+            cursorCarryX = 0
+            cursorCarryY = 0
+        }
+    }
+
+    private func applyKeyboardMode(_ s: PadState) {
+        var ops: [KeyboardOp] = []
+
+        // Cursor first, so a trigger click in this same sample lands where the cursor went.
+        let step = Self.cursorStep(rx: s.rx, ry: s.ry)
+        cursorCarryX += step.dx
+        cursorCarryY += step.dy
+        let wholeX = cursorCarryX.rounded(.towardZero)
+        let wholeY = cursorCarryY.rounded(.towardZero)
+        cursorCarryX -= wholeX
+        cursorCarryY -= wholeY
+        if wholeX != 0 || wholeY != 0 {
+            ops.append(.moveCursor(dx: Int(wholeX), dy: Int(wholeY)))
+        }
+
+        ops += transition(to: Self.keyboardOutput(for: s))
+        perform(ops)
+    }
+
+    /// Release everything keyboard mode pressed and forget the cursor remainder.
+    private func releaseKeyboardMode() {
+        cursorCarryX = 0
+        cursorCarryY = 0
+        perform(transition(to: KeyboardOutput()))
+    }
+
+    /// Releases for what is no longer wanted, then presses for what is newly wanted.
+    private func transition(to want: KeyboardOutput) -> [KeyboardOp] {
+        var ops: [KeyboardOp] = []
+
+        for vk in held.keys.subtracting(want.keys).sorted() {
+            ops.append(.key(vk: vk, down: false))
+        }
+        if held.leftButton && !want.leftButton { ops.append(.mouseButton(right: false, down: false)) }
+        if held.rightButton && !want.rightButton { ops.append(.mouseButton(right: true, down: false)) }
+
+        let newKeys = want.keys.subtracting(held.keys).sorted()
+        let newLeft = want.leftButton && !held.leftButton
+        let newRight = want.rightButton && !held.rightButton
+        if !newKeys.isEmpty || newLeft || newRight {
+            ops.append(.trace)
+        }
+        for vk in newKeys {
+            ops.append(.key(vk: vk, down: true))
+        }
+        if newLeft { ops.append(.mouseButton(right: false, down: true)) }
+        if newRight { ops.append(.mouseButton(right: true, down: true)) }
+
+        held = want
+        return ops
+    }
+
+    private func perform(_ ops: [KeyboardOp]) {
+        guard !ops.isEmpty else { return }
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                for op in ops {
+                    switch op {
+                    case let .moveCursor(dx, dy):
+                        GameInput.shared.stickMoved(dx: CGFloat(dx), dy: CGFloat(dy))
+                    // Through GameInput, which tracks every source holding a key or button
+                    // (clarification 27).
+                    case let .key(vk, down):
+                        GameInput.shared.keyboardModeKey(vk, down: down)
+                    case let .mouseButton(right, down):
+                        GameInput.shared.keyboardModeButton(right: right, down: down)
+                    case .trace:
+                        mid_wow_trace_calls(3)
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Windows constants used here (Microsoft "Virtual-Key Codes")
+
+private enum VK {
+    static let returnKey = 0x0D
+    static let shift = 0x10
+    static let control = 0x11
+    static let escape = 0x1B
+    static let space = 0x20
+    static let left = 0x25
+    static let up = 0x26
+    static let right = 0x27
+    static let down = 0x28
+    static let keyA = 0x41
+    static let keyC = 0x43
+    static let keyD = 0x44
+    static let keyE = 0x45
+    static let keyF = 0x46
+    static let keyQ = 0x51
+    static let keyR = 0x52
+    static let keyS = 0x53
+    static let keyW = 0x57
 }
